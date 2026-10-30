@@ -1,0 +1,4 @@
+# one domain per line, lowercased; '#' comments. Matched against the
+# registrable part of the queried host.
+# example: myhomeassistant.example.com is covered by:
+# example.com

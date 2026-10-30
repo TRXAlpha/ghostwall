@@ -1,0 +1,81 @@
+# Starter allowlist: widely used infrastructure/vendor domains that the DGA
+# model scores as "random-looking" but are not. One registrable domain per line,
+# lowercase, '#' comments. A subdomain is covered by its registrable part, so
+# "cdn.fbsbx.com" is allowed by "fbsbx.com".
+#
+# This only suppresses DGA-style alerts for these names; AdGuard still filters
+# them. Add your own with the dashboard ("Trust a domain") or /fw allow <domain>.
+
+# Google
+google.com
+gstatic.com
+googleapis.com
+googleusercontent.com
+gvt1.com
+gvt2.com
+ggpht.com
+googlevideo.com
+youtube.com
+ytimg.com
+2mdn.net
+
+# Meta
+facebook.com
+fbcdn.net
+fbsbx.com
+instagram.com
+whatsapp.com
+whatsapp.net
+
+# Microsoft
+microsoft.com
+windows.com
+windowsupdate.com
+msftconnecttest.com
+office.com
+live.com
+bing.com
+azureedge.net
+
+# Apple
+apple.com
+icloud.com
+mzstatic.com
+
+# CDNs / cloud edges
+akamai.net
+akamaiedge.net
+akamaihd.net
+cloudfront.net
+cloudflare.com
+amazonaws.com
+amazon.com
+fastly.net
+
+# Dev / tooling
+github.com
+githubusercontent.com
+mozilla.org
+mozilla.com
+mozgcp.net
+firefox.com
+tailscale.com
+
+# Common device vendors (phones, consoles, printers, media)
+hihonor.com
+hihonorcloud.com
+honor.com
+eeyeful.com
+playstation.net
+playstation.com
+sonyentertainmentnetwork.com
+bambulab.com
+steampowered.com
+steamcontent.com
+steamstatic.com
+spotify.com
+scdn.co
+netflix.com
+nflxvideo.net
+discord.com
+discordapp.com

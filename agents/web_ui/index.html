@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ghostwall</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#262b36; --text:#e6e8ee; --dim:#8a93a6;
+          --ok:#3ecf8e; --warn:#f5a524; --bad:#ef4444; --accent:#7c9cff; }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f5f6f8; --panel:#fff; --line:#e3e6ec; --text:#14171f; --dim:#5b6374; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font: 14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+         background:var(--bg); color:var(--text); }
+  header { display:flex; align-items:center; justify-content:space-between; gap:12px;
+           padding:16px 20px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  h1 { font-size:18px; margin:0; }
+  h2 { font-size:14px; margin:0 0 10px; color:var(--dim); font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+  main { padding:20px; display:grid; gap:16px; max-width:1100px; margin:0 auto; }
+  .cards { display:grid; grid-template-columns: repeat(auto-fit, minmax(160px,1fr)); gap:12px; }
+  .card, .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .big { font-size:20px; font-weight:600; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:600; }
+  .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); } .dim { color:var(--dim); }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--dim); font-weight:600; font-size:12px; text-transform:uppercase; }
+  td.mono, .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size:12px; word-break:break-all; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:7px; padding:6px 12px;
+           font-weight:600; cursor:pointer; font-size:13px; }
+  button.ghost { background:transparent; color:var(--text); border:1px solid var(--line); }
+  button.danger { background:var(--bad); }
+  button:disabled { opacity:.5; cursor:default; }
+  input[type=text] { background:var(--bg); color:var(--text); border:1px solid var(--line);
+                     border-radius:7px; padding:7px 10px; font-size:13px; min-width:0; flex:1; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .toast { position:fixed; bottom:16px; right:16px; background:var(--panel); border:1px solid var(--line);
+           padding:10px 14px; border-radius:8px; max-width:360px; display:none; }
+  .sev-high, .sev-critical { background:rgba(239,68,68,.15); color:var(--bad); }
+  .sev-warn { background:rgba(245,165,36,.15); color:var(--warn); }
+  .sev-info { background:rgba(124,156,255,.15); color:var(--accent); }
+  .act-block { background:rgba(239,68,68,.15); color:var(--bad); }
+  .act-recommend { background:rgba(245,165,36,.15); color:var(--warn); }
+  .act-allow { background:rgba(62,207,142,.15); color:var(--ok); }
+  .scroll { overflow-x:auto; }
+  @media (max-width:640px) { th:nth-child(3), td:nth-child(3) { display:none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Ghostwall <span class="dim" style="font-weight:400">· DNS resolver</span></h1>
+  <div class="row"><span id="conn" class="pill dim">connecting…</span>
+    <button class="ghost" onclick="refresh()">Refresh</button></div>
+</header>
+
+<main>
+  <section class="cards">
+    <div class="card"><h2>Resolver</h2><div class="big" id="state">—</div></div>
+    <div class="card"><h2>Mode</h2><div class="big" id="mode">—</div>
+      <div class="row" style="margin-top:8px"><button id="btnLearn" class="ghost" onclick="toggleLearning()">Toggle</button></div></div>
+    <div class="card"><h2>Lockdown</h2><div class="big" id="lock">—</div>
+      <div class="row" style="margin-top:8px"><button id="btnLock" class="ghost danger" onclick="toggleLockdown()">Toggle</button></div></div>
+    <div class="card"><h2>Events (recent)</h2><div class="big" id="evcount">—</div>
+      <div class="dim" id="evblocks"></div></div>
+  </section>
+
+  <section class="panel">
+    <h2>Devices</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Name</th><th>IP</th><th>MAC</th><th>Isolated</th><th></th></tr></thead>
+      <tbody id="devices"><tr><td colspan="5" class="dim">loading…</td></tr></tbody>
+    </table></div>
+  </section>
+
+  <section class="panel">
+    <h2>Trust a domain</h2>
+    <p class="dim" style="margin:0 0 10px">Allowlisted domains are never flagged or blocked.</p>
+    <div class="row"><input type="text" id="domain" placeholder="e.g. fbsbx.com" autocomplete="off">
+      <button onclick="allowDomain()">Allow</button></div>
+  </section>
+
+  <section class="panel">
+    <h2>Recent decisions</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>Time (UTC)</th><th>Device</th><th>Domain</th><th>Action</th><th>Score</th><th>Rule</th></tr></thead>
+      <tbody id="events"><tr><td colspan="6" class="dim">loading…</td></tr></tbody>
+    </table></div>
+  </section>
+</main>
+
+<div id="toast" class="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let state = { learning: null, lockdown: null };
+
+function toast(msg, bad) {
+  const t = $("toast"); t.textContent = msg; t.style.display = "block";
+  t.style.borderColor = bad ? "var(--bad)" : "var(--line)";
+  clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", 3500);
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.ok === false) throw new Error(j.error || ("HTTP " + r.status));
+  return j;
+}
+
+async function act(action, params) {
+  try {
+    await api("/api/action", { method: "POST", headers: {"Content-Type":"application/json"},
+                               body: JSON.stringify({ action, params: params || {} }) });
+    toast("Done: " + action.replace(/_/g, " "));
+    await refresh();
+  } catch (e) { toast("Failed: " + e.message, true); }
+}
+
+function toggleLearning() { act("learning", { enabled: !state.learning }); }
+function toggleLockdown()  { act("lockdown", {}); }
+function allowDomain() {
+  const d = $("domain").value.trim();
+  if (!d) return toast("Enter a domain first", true);
+  act("allow", { domain: d }).then(() => $("domain").value = "");
+}
+
+function renderStatus(st) {
+  state = { learning: st.learning, lockdown: st.lockdown };
+  $("state").innerHTML = '<span class="ok">Running</span>';
+  $("mode").innerHTML = st.shadow ? '<span class="ok">Shadow</span> <span class="dim" style="font-size:12px">(not in DNS path)</span>'
+    : st.learning ? '<span class="warn">Learning</span>' : '<span class="bad">Enforcing</span>';
+  $("btnLearn").textContent = st.learning ? "Switch to enforce" : "Back to learning";
+  $("lock").innerHTML = st.lockdown ? '<span class="bad">ON</span>' : '<span class="ok">off</span>';
+  $("btnLock").textContent = st.lockdown ? "Release lockdown" : "Lock LAN down";
+  const rows = (st.devices || []).map(d => `
+    <tr><td><b>${esc(d.name)}</b></td><td class="mono">${esc(d.ip)}</td><td class="mono">${esc(d.mac || "—")}</td>
+    <td>${d.isolated ? '<span class="bad">yes</span>' : '<span class="dim">no</span>'}</td>
+    <td><div class="row">${d.isolated
+        ? `<button class="ghost" onclick="act('release',{name:'${esc(d.name)}'})">Release</button>`
+        : `<button class="ghost danger" onclick="act('isolate',{name:'${esc(d.name)}'})">Isolate</button>`}</div></td></tr>`).join("");
+  $("devices").innerHTML = rows || '<tr><td colspan="5" class="dim">no devices configured</td></tr>';
+}
+
+function renderEvents(evs) {
+  $("evcount").textContent = evs.length;
+  const blocks = evs.filter(e => e.action === "block").length;
+  $("evblocks").textContent = blocks + " blocked · " + evs.filter(e => e.action === "recommend").length + " flagged";
+  const rows = evs.map(e => {
+    const score = e.scores && e.scores.dga != null ? e.scores.dga.toFixed(2) : "—";
+    return `<tr><td class="mono">${esc((e.time||"").replace("T"," ").replace("Z",""))}</td>
+      <td>${esc(e.device)}</td><td class="mono">${esc(e.domain)}</td>
+      <td><span class="pill act-${esc(e.action)}">${esc(e.action)}</span></td>
+      <td class="mono">${score}</td><td><span class="pill sev-${esc(e.severity)}">${esc(e.rule)}</span></td></tr>`;
+  }).join("");
+  $("events").innerHTML = rows || '<tr><td colspan="6" class="dim">no decisions yet</td></tr>';
+}
+
+async function refresh() {
+  try {
+    const [s, e] = await Promise.all([api("/api/status"), api("/api/events?limit=50")]);
+    renderStatus(s.resolver); renderEvents(e.events);
+    $("conn").textContent = "live"; $("conn").className = "pill ok";
+  } catch (err) {
+    $("conn").textContent = "offline"; $("conn").className = "pill bad";
+    $("state").innerHTML = '<span class="bad">Unreachable</span>';
+    toast("Resolver unreachable: " + err.message, true);
+  }
+}
+
+refresh();
+setInterval(refresh, 10000);
+</script>
+</body>
+</html>

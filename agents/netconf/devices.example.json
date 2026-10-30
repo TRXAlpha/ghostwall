@@ -1,0 +1,33 @@
+{
+  "_comment": "EXAMPLE device map. Copy to devices.json and fill in your REAL MACs/IPs (devices.json is git-ignored). The MACs and IPs below are made up. Active static leases go in 'devices'; unknown-MAC devices go in '_pending' and render as commented-out dhcp-host TODO lines.",
+  "devices": [
+    {
+      "name": "dell",
+      "mac": "aa:bb:cc:dd:ee:01",
+      "ip": "192.168.1.50",
+      "profile": "normal"
+    },
+    {
+      "name": "bambu-a1mini",
+      "mac": "aa:bb:cc:dd:ee:02",
+      "ip": "192.168.1.51",
+      "profile": "strict"
+    }
+  ],
+  "_pending": [
+    {
+      "name": "ps4",
+      "mac": null,
+      "ip": "192.168.1.52",
+      "profile": "strict",
+      "todo": "fill in MAC"
+    },
+    {
+      "name": "phone",
+      "mac": null,
+      "ip": "192.168.1.53",
+      "profile": "normal",
+      "todo": "fill in MAC"
+    }
+  ]
+}

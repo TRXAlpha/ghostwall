@@ -1,0 +1,26 @@
+{
+ "mode": "baseline",
+ "params": {
+  "objective": "binary",
+  "boosting": "gbdt",
+  "num_iterations": 500,
+  "learning_rate": 0.1,
+  "num_leaves": 64,
+  "min_data_in_leaf": 100,
+  "bagging_fraction": 0.9,
+  "bagging_freq": 1,
+  "feature_fraction": 0.9,
+  "feature_fraction_bynode": 0.9,
+  "lambda_l2": 1.0,
+  "is_unbalance": true,
+  "seed": 0,
+  "num_threads": 0,
+  "verbosity": -1,
+  "metric": [
+   "auc",
+   "binary_logloss"
+  ]
+ },
+ "best_iteration": 0,
+ "minutes": 43.65207587480545
+}

@@ -1,0 +1,20 @@
+# Unit is installed by the deployer; paths assume /opt/dns_scorer.
+[Unit]
+Description=DNS DGA scorer (incremental pass over AdGuard Home querylog)
+
+[Service]
+Type=oneshot
+User=pi
+WorkingDirectory=/opt/dns_scorer
+ExecStart=/opt/dns_scorer/venv/bin/python /opt/dns_scorer/scorer.py \
+    --log /opt/adguardhome/data/querylog.json \
+    --state /opt/dns_scorer/state.json \
+    --alerts /opt/dns_scorer/alerts.jsonl \
+    --model /opt/dns_scorer/trm_dga.onnx \
+    --allowlist /opt/dns_scorer/allowlist.txt \
+    --threshold 0.5
+# Pi 4 resource limits
+Environment=OMP_NUM_THREADS=1
+Nice=10
+MemoryMax=60M
+CPUQuota=10%

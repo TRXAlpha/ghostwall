@@ -1,0 +1,28 @@
+[Unit]
+Description=ghostwall per-device rolling packet capture (capture_mgr)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+# WorkingDirectory and ExecStart paths: adjust to where this repo lives on the Pi.
+WorkingDirectory=/opt/ghostwall/capture
+ExecStart=/usr/bin/python3 /opt/ghostwall/capture/capture_mgr.py serve --devices /opt/ghostwall/capture/devices.json --ring-dir /run/ghostwall/cap
+Restart=on-failure
+RestartSec=5
+# The ring must be on tmpfs; the manager re-checks and refuses to start otherwise.
+ExecStartPre=/bin/mkdir -p /run/ghostwall/cap
+ExecStartPre=/bin/mount -t tmpfs -o size=256M,mode=0750 tmpfs /run/ghostwall/cap
+ExecStop=/bin/kill -INT $MAINPID
+TimeoutStopSec=15
+# tcpdump needs raw capture permissions; restrict everything else.
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/run/ghostwall/cap /var/lib/ghostwall/incidents
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

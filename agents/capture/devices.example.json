@@ -1,0 +1,6 @@
+[
+  {"name": "phone", "ip": "192.168.1.50", "mac": "aa:bb:cc:dd:ee:01", "profile": "strict"},
+  {"name": "laptop", "ip": "192.168.1.51", "mac": "aa:bb:cc:dd:ee:02", "profile": "normal"},
+  {"name": "nas", "ip": "192.168.1.52", "mac": "aa:bb:cc:dd:ee:03", "profile": "strict"},
+  {"name": "hub", "ip": "192.168.1.53", "mac": "aa:bb:cc:dd:ee:04", "profile": "normal"}
+]

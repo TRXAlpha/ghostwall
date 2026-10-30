@@ -1,0 +1,16 @@
+[Unit]
+Description=Ghostwall threat feed update
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ghostwall
+WorkingDirectory=/opt/ghostwall/agents/ghost_dns
+# Keeps the old feed if the download fails or looks wrong (see update_feed.py).
+ExecStart=/opt/ghostwall/.venv/bin/python update_feed.py --out /var/lib/ghostwall/threat_feed.txt
+StateDirectory=ghostwall
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true

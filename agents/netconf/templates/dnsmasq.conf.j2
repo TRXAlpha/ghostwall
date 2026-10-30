@@ -1,0 +1,38 @@
+# dnsmasq - DHCP only (no DNS). Served by ghostwall on the Pi.
+# Generated from templates/dnsmasq.conf.j2 — edit templates, then rerun gen.py.
+
+# Disable the built-in DNS server entirely: we only want DHCP.
+port=0
+
+# --- DHCP range (parameterised) ---
+# Dynamic pool 192.168.1.100 - 192.168.1.199, chosen to sit above the
+# router's old .2-.99 range so no stale leases collide.
+dhcp-range={{ dhcp_start }},{{ dhcp_end }},{{ default_lease_time }}
+dhcp-option=option:router,{{ pi_ip }}
+dhcp-option=option:dns-server,{{ pi_ip }}
+dhcp-option=option:domain-name,lan
+
+# Default lease 12h, offer expiry 5m.
+dhcp-lease-max=150
+
+# --- Static leases (from devices.json) ---
+{{ static_leases }}# END static leases
+
+# --- Logging ---
+# Standard lease file (dnsmasq keeps its own binary-format lease db here).
+dhcp-leasefile=/var/lib/misc/dnsmasq.leases
+# Log DHCP transactions (DISCOVER/OFFER/... per client) to the log-facility
+# file, so ghostwall can watch lease activity. (dnsmasq has no "log-leases"
+# option — that was the "bad option" on the Pi; log-dhcp is the real one.)
+log-dhcp
+log-facility=/var/log/dnsmasq-ghostwall.log
+log-async=25
+
+# --- Safety / correctness ---
+# Do not forward DHCP requests we did not originate on this interface.
+bind-interfaces
+interface=eth0
+# Ignore clients that ask from addresses outside our LAN.
+dhcp-authoritative
+# Quiet about missing TFTP etc.
+no-resolv

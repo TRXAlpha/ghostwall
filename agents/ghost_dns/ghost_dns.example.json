@@ -1,0 +1,26 @@
+{
+  "_comment": "Recommended: shadow mode. AdGuard keeps port 53; ghost-dns scores its query log, so Ghostwall can never break DNS. To serve DNS inline instead, set shadow=false, restore dns_host/dns_port and point upstream at AdGuard on 5300 -- only after a week of clean shadow results.",
+  "dns_host": "0.0.0.0",
+  "dns_port": 53,
+  "upstream": "127.0.0.1",
+  "upstream_port": 5300,
+  "block_response": "sinkhole",
+  "_sinkhole_note": "0.0.0.0 = null route (client can't connect). Set to the Pi's LAN IP instead if you want blocked domains to hit a page on the Pi.",
+  "sinkhole_ip4": "0.0.0.0",
+  "control_host": "127.0.0.1",
+  "control_port": 5380,
+  "learning": true,
+  "enforce": "null",
+  "pi_ip": "192.168.1.20",
+  "novelty_days": 7,
+  "devices_json": "/opt/ghostwall/agents/netconf/devices.json",
+  "capture_url": "http://127.0.0.1:5381",
+  "capture_enabled": false,
+  "freeze_severity": "high",
+  "shadow": true,
+  "querylog": "/opt/AdGuardHome/data/querylog.json",
+  "threat_feed_path": "/var/lib/ghostwall/threat_feed.txt",
+  "upstream_fallbacks": [
+    "9.9.9.9"
+  ]
+}

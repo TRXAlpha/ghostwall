@@ -1,0 +1,23 @@
+[Unit]
+Description=Ghostwall web dashboard
+After=network-online.target tailscaled.service ghostwall-dns.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ghostwall
+WorkingDirectory=/opt/ghostwall/agents/web_ui
+# The dashboard has no login: bind it to 127.0.0.1 or a Tailscale IP, never the LAN.
+Environment=GHOSTWALL_WEB_BIND=127.0.0.1
+EnvironmentFile=-/etc/ghostwall/ghostwall.env
+ExecStart=/opt/ghostwall/.venv/bin/python app.py --bind ${GHOSTWALL_WEB_BIND} --port 8088
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/ghostwall
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

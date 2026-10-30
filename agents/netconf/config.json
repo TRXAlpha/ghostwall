@@ -1,0 +1,8 @@
+{
+  "pi_ip": "192.168.1.20",
+  "lan_cidr": "192.168.1.0/24",
+  "dhcp_start": "192.168.1.100",
+  "dhcp_end": "192.168.1.199",
+  "default_lease_time": "12h",
+  "lease_log_file": "/var/log/ghostwall-leases.log"
+}

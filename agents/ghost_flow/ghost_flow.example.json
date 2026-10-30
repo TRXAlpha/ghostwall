@@ -1,0 +1,23 @@
+{
+  "_comment": "Copy to ghost_flow.json and review. autoblock stays off; even with enforce=nft and learning=false, ghost-flow only recommends unless you also pass --autoblock. Shares events.jsonl and resolved_ips.jsonl with ghost-dns.",
+  "resolved_ips_path": "/opt/ghostwall/agents/ghost_dns/resolved_ips.jsonl",
+  "events_path": "/opt/ghostwall/agents/ghost_dns/events.jsonl",
+  "devices_json": "/opt/ghostwall/agents/netconf/devices.json",
+
+  "learning": true,
+  "enforce": "null",
+  "block_on_rawip": false,
+  "nfqueue_num": 100,
+
+  "resolved_ttl_seconds": 3600,
+  "rawip_exceptions": [],
+
+  "beacon_min_samples": 5,
+  "beacon_window_seconds": 3600,
+  "beacon_max_cv": 0.15,
+  "beacon_min_interval": 5.0,
+
+  "capture_url": "http://127.0.0.1:5381",
+  "capture_enabled": true,
+  "freeze_severity": "high"
+}

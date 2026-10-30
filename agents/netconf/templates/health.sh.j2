@@ -1,0 +1,75 @@
+#!/bin/bash
+# health.sh — check every ghostwall piece on the Pi. Exits non-zero on first
+# failure with a message. Run:  sudo ./health.sh
+set -u
+PI_IP="{{ pi_ip }}"
+LAN_CIDR="{{ lan_cidr }}"
+FAIL=0
+
+ok()   { echo "[ok]   $1"; }
+bad()  { echo "[FAIL] $1"; FAIL=1; }
+
+# 1) Kernel forwarding
+[ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null)" = "1" ] \
+    && ok "ip_forward=1" || bad "net.ipv4.ip_forward is not 1 (run: sudo sysctl --system)"
+
+# 2) sysctl file present
+[ -f /etc/sysctl.d/99-ghostwall.conf ] \
+    && ok "sysctl file present" || bad "/etc/sysctl.d/99-ghostwall.conf missing"
+
+# 3) redirects off (asymmetric routing requirement)
+for k in all default eth0; do
+    [ "$(sysctl -n net.ipv4.conf.$k.send_redirects 2>/dev/null)" = "0" ] \
+        && ok "send_redirects($k)=0" || bad "send_redirects($k) != 0"
+done
+
+# 4) ghostwall nft table loaded
+nft list table inet ghostwall >/dev/null 2>&1 \
+    && ok "nft table ghostwall present" || bad "nft table inet ghostwall missing (run: nft -f ghostwall.nft)"
+
+# 5) key rules present
+nft list table inet ghostwall 2>/dev/null | grep -q 'flowtable' \
+    && ok "flowtable configured" || bad "flowtable missing"
+nft list chain inet ghostwall forward 2>/dev/null | grep -q '853' \
+    && ok "DoT (853) drop rule present" || bad "DoT 853 drop rule missing"
+nft list chain inet ghostwall forward 2>/dev/null | grep -q 'redirect' \
+    && ok "DNS redirect rule present" || bad "DNS redirect rule missing"
+
+# 6) dnsmasq config valid and running
+if command -v dnsmasq >/dev/null 2>&1; then
+    if dnsmasq --test -C /etc/dnsmasq.d/ghostwall.conf >/dev/null 2>&1; then
+        ok "dnsmasq config parses"
+    else
+        bad "dnsmasq --test failed for /etc/dnsmasq.d/ghostwall.conf"
+    fi
+    pgrep -x dnsmasq >/dev/null && ok "dnsmasq running" || bad "dnsmasq not running"
+else
+    bad "dnsmasq not installed"
+fi
+
+# 7) dnsmasq is actually listening on 67 (DHCP) but NOT 53 (port=0)
+if command -v ss >/dev/null 2>&1; then
+    ss -lun | grep -q ':67 ' && ok "DHCP port 67 listening" || bad "nothing listening on UDP 67"
+    ss -lun | grep -q ':53 ' && ok "DNS port 53 listening (AdGuard)" || echo "[note] nothing on UDP 53 (AdGuard not running?)"
+fi
+
+# 8) AdGuard / qBittorrent ports reachable locally
+for p in 3000 8080 22; do
+    ss -ltn | grep -q ":$p " && ok "tcp $p listening" || bad "tcp $p not listening"
+done
+
+# 9) Pi has its own IP and route
+ip -4 addr show eth0 | grep -q "$PI_IP" && ok "Pi has $PI_IP" || bad "Pi does not have $PI_IP on eth0"
+ip route | grep -q default && ok "default route present" || bad "no default route"
+
+# 10) lease log file writable
+LOG=/var/log/ghostwall-leases.log
+touch "$LOG" 2>/dev/null && ok "lease log writable: $LOG" || bad "cannot write $LOG"
+
+if [ "$FAIL" = "0" ]; then
+    echo "ALL CHECKS PASSED"
+    exit 0
+else
+    echo "SOME CHECKS FAILED — see [FAIL] lines above"
+    exit 1
+fi

@@ -1,0 +1,26 @@
+[Unit]
+Description=ghost-flow -- Ghostwall connection inspector (raw-IP / JA4 / beacon)
+After=network-online.target ghostwall-dns.service
+Wants=network-online.target
+Requires=ghostwall-dns.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/ghostwall/agents/ghost_flow
+# Binds nftables queue num 100 (the slot reserved in ghostwall.nft). Enable the
+# queue rule only once this service is running:
+#   nft add rule inet ghostwall forward iifname "eth0" ct state new \
+#       ct original proto-dst != 53 queue num 100 bypass
+# The `bypass` flag means traffic flows normally if this daemon is not bound.
+ExecStart=/opt/ghostwall/.venv/bin/python app.py --config /opt/ghostwall/agents/ghost_flow/ghost_flow.json
+Restart=on-failure
+RestartSec=3
+AmbientCapabilities=CAP_NET_ADMIN
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

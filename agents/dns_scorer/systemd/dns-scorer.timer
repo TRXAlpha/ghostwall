@@ -1,0 +1,10 @@
+[Unit]
+Description=Run DNS DGA scorer every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=dns-scorer.service
+
+[Install]
+WantedBy=timers.target

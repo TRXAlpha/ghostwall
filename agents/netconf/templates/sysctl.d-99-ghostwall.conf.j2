@@ -1,0 +1,47 @@
+# /etc/sysctl.d/99-ghostwall.conf
+# Asymmetric-routing kernel settings for the ghostwall Pi gateway.
+# Apply with:  sudo sysctl --system
+# Generated from templates/sysctl.d-99-ghostwall.conf.j2
+
+# 1) Forward packets between interfaces (eth0 <-> eth0 via the gateway role).
+#    Without this the Pi is just a host, not a gateway, and LAN traffic
+#    directed at the Pi never gets relayed to the router.
+# NOTE on ip_forward: we set it to 1, but the Pi already has it at 1
+# (Tailscale exit node needs it). The line is kept so our file is
+# self-contained; sysctl applies the same value, no behaviour change.
+net.ipv4.ip_forward = 1
+
+# 2) Do NOT send ICMP redirects. Normally a Linux gateway sees traffic in on
+#    eth0 and out the *same* eth0 toward the router and sends a "use the
+#    router directly" redirect to the client. In our asymmetric setup the
+#    client SHOULD keep using the Pi (we want to inspect its traffic), so
+#    redirects would break the intended topology.
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+net.ipv4.conf.eth0.send_redirects = 0
+
+# 3) Loose reverse-path filtering (rp_filter=2). Strict mode (1) drops any
+#    packet whose source address wouldn't route back out the same interface
+#    it arrived on. Because return traffic bypasses the Pi (router talks to
+#    clients directly), we deliberately only ever see one direction of a
+#    flow; strict RPF would discard legitimate packets here. Loose mode just
+#    checks the source is routable *somewhere*, which is what asymmetric
+#    routing needs.
+net.ipv4.conf.all.rp_filter = 2
+net.ipv4.conf.default.rp_filter = 2
+net.ipv4.conf.eth0.rp_filter = 2
+
+# 4) conntrack: allow "loose" TCP tracking so a mid-flow packet arriving out
+#    of order / after a missed SYN (normal when we only see one direction)
+#    isn't treated as INVALID and dropped by nftables.
+net.netfilter.nf_conntrack_tcp_loose = 1
+
+# 5) Keep the Pi's own IPv6 working (and do NOT touch IPv6 forwarding):
+#    the Tailscale exit node requires net.ipv6.conf.all.forwarding=1 (set by
+#    the pre-existing /etc/sysctl.d/99-tailscale.conf). Any
+#    "net.ipv6.conf.*.forwarding" line here would break it, so there is
+#    deliberately none. accept_ra must be 2 (accept RAs even when
+#    forwarding is on — kernel would otherwise ignore them).
+net.ipv6.conf.all.accept_ra = 2
+net.ipv6.conf.default.accept_ra = 2
+net.ipv6.conf.eth0.accept_ra = 2

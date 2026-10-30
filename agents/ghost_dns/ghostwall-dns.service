@@ -1,0 +1,26 @@
+[Unit]
+Description=ghost-dns -- Ghostwall DNS resolver + control API (the decision core)
+After=network-online.target
+Wants=network-online.target
+# AdGuard Home is the upstream; start after it if present.
+After=AdGuardHome.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/ghostwall/agents/ghost_dns
+# ghost_dns.json picks shadow or inline mode (go_shadow.sh writes a shadow config).
+# See docs/OPERATIONS.md before turning learning off or setting enforce=nft.
+ExecStart=/opt/ghostwall/.venv/bin/python app.py --config /opt/ghostwall/agents/ghost_dns/ghost_dns.json
+Restart=always
+RestartSec=3
+# Needs CAP_NET_BIND_SERVICE for port 53 and CAP_NET_ADMIN for nft.
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_ADMIN
+NoNewPrivileges=true
+ProtectSystem=full
+# read-only (not true): shadow mode reads AdGuard's query log under /home
+ProtectHome=read-only
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

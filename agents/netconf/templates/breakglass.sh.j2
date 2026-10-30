@@ -1,0 +1,64 @@
+#!/bin/bash
+# breakglass.sh — emergency "get the network back to stock" for ghostwall.
+# Run on the Pi:  sudo ./breakglass.sh
+# Does: remove the ghostwall nft table, disable plain IPv4 forwarding restore,
+#       leave dnsmasq/systemd alone (nothing else restarted).
+set -u
+
+echo "=== ghostwall BREAK-GLASS ==="
+
+# 1) Remove our nftables table only (Docker/Tailscale tables untouched).
+if nft list table inet ghostwall >/dev/null 2>&1; then
+    nft delete table inet ghostwall && echo "[ok] deleted table inet ghostwall"
+else
+    echo "[ok] table inet ghostwall not present, nothing to delete"
+fi
+
+# 2) Restore sysctls to the values recorded BEFORE ghostwall was applied.
+#    The apply step writes /var/lib/ghostwall/sysctl-before.conf (see README
+#    "Apply order" step 1) with lines like:
+#        net.ipv4.conf.all.rp_filter = 2
+#    Fallbacks if the file is missing: rp_filter=2 (loose — the pre-existing
+#    value on this Pi, NOT strict 1) and send_redirects=1.
+BEFORE=/var/lib/ghostwall/sysctl-before.conf
+[ -f "$BEFORE" ] || echo "[warn] $BEFORE missing - using fallback defaults"
+restore() {
+    local key="$1" fallback="$2" val
+    val=$(grep -E "^${key}[[:space:]]*=" "$BEFORE" 2>/dev/null | tail -1 | sed 's/[^=]*=[[:space:]]*//')
+    [ -z "$val" ] && val="$fallback"
+    sysctl -w "${key}=${val}"
+}
+for k in net.ipv4.conf.all.send_redirects net.ipv4.conf.default.send_redirects net.ipv4.conf.eth0.send_redirects; do
+    restore "$k" 1
+done
+for k in net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter net.ipv4.conf.eth0.rp_filter; do
+    restore "$k" 2
+done
+echo "[ok] sysctl restored (before-file values or fallbacks: rp_filter=2, send_redirects=1)"
+
+# NOTE: this script intentionally does NOT touch dnsmasq, systemd units,
+# AdGuard, Tailscale, or any IPv6 forwarding setting (the Tailscale exit
+# node depends on net.ipv6.conf.all.forwarding=1). Re-run sysctl --system
+# later to re-apply our file,
+# or delete /etc/sysctl.d/99-ghostwall.conf to make it permanent.
+
+cat <<'EOF'
+
+=== MANUAL ROUTER STEPS to re-enable DHCP on the router (e.g. 192.168.1.1) ===
+Log in to the router web UI (usually http://192.168.1.1, admin password on
+the router label), then:
+  1. LAN / DHCP Server -> set "DHCP Server" to Enabled.
+     Keep the original pool (e.g. 192.168.1.2 - 192.168.1.99) OR change
+     it to a range that does NOT overlap 192.168.1.20 (the Pi) or any
+     static leases in /etc/dnsmasq.d/ghostwall.conf.
+  2. LAN / IPv6 (RA / Router Advertisement): re-enable "Router
+     Advertisement" / SLAAC if it was disabled.
+  3. Save/Apply. Clients will re-lease from the router within their current
+     lease time (up to 12h); to force it, toggle Wi-Fi off/on or
+     `sudo dhclient -r && sudo dhclient` on a client.
+  4. On the Pi, stop the ghost DHCP server so the two don't fight:
+        sudo systemctl stop dnsmasq   (or the ghostwall dnsmasq unit)
+        sudo systemctl disable dnsmasq
+
+EOF
+echo "=== break-glass complete ==="

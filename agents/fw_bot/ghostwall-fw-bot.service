@@ -1,0 +1,24 @@
+[Unit]
+Description=Ghostwall Telegram alerts and /fw commands (fw_bot)
+After=network-online.target ghostwall-dns.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ghostwall
+WorkingDirectory=/opt/ghostwall/agents/fw_bot
+# FW_BOT_TELEGRAM_TOKEN and FW_BOT_CALLBACK_SECRET (see fw_bot.env.example).
+EnvironmentFile=/etc/ghostwall/fw_bot.env
+# --commands also polls Telegram for /fw commands and alert buttons. Remove it if
+# another process already polls this bot token (two pollers on one token conflict).
+ExecStart=/opt/ghostwall/.venv/bin/python fw_bot.py --owner-file /etc/ghostwall/owner.json --labels /var/lib/ghostwall/labels.jsonl --digest /var/lib/ghostwall/digest.jsonl --follow /opt/ghostwall/agents/ghost_dns/events.jsonl --commands
+StateDirectory=ghostwall
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

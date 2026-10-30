@@ -1,0 +1,74 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Virtualenvs ----
+.venv/
+venv/
+env/
+
+# ---- Datasets & training artifacts (huge; not part of the product) ----
+data/
+runs/
+*.parquet
+*.npz
+
+# ---- Logs & generated dumps ----
+*.log
+*.out
+
+# ---- Runtime state written by the agents (not source) ----
+agents/*/state.json
+agents/*/events.jsonl
+agents/*/resolved_ips.jsonl
+agents/*/flow_events.jsonl
+agents/*/queries.log
+agents/*/alerts.jsonl
+agents/*/*.tmp
+incidents/
+# per-agent live config copied from the *.example.json templates
+agents/ghost_dns/ghost_dns.json
+agents/ghost_flow/ghost_flow.json
+agents/*/capture_conf.json
+
+# Real device map (private — MACs/IPs). Ship devices.example.json instead;
+# copy it to devices.json and fill in real values. out/ is generated from it.
+agents/netconf/devices.json
+agents/netconf/out/
+agents/capture/devices.json
+
+# ---- Secrets / per-host (NEVER commit) ----
+# NOTE: keep these patterns specific — a broad *token*/*secret* also matches
+# source like tokenizer.py / test_tokenizer.py, which must stay tracked.
+.env
+*.env
+owner.json
+*.key
+*.pem
+*.secret
+*.token
+*_secret.json
+*_token.json
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# generated threat feed (built by update_feed.py)
+agents/ghost_dns/threat_feed.txt
+
+# Owner-specific add-ons kept out of the public repo: a personal service hub page and
+# patchers for a separate personal Telegram bot.
+agents/hub/
+agents/fw_bot/integrate_brief.py
+agents/fw_bot/integrate_ghost_bot.py

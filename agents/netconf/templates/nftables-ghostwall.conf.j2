@@ -1,0 +1,169 @@
+#!/usr/sbin/nft -f
+# ghostwall nftables ruleset — table "ghostwall" only.
+# This file NEVER flushes other tables: Docker's and Tailscale's tables
+# coexist untouched. Generated from templates/nftables-ghostwall.conf.j2.
+# Validate (dry run) before applying:  nft -c -f ghostwall.nft
+# Apply:                               sudo nft -f ghostwall.nft
+
+destroy table inet ghostwall  # idempotent reload of OUR table only
+
+table inet ghostwall {
+
+    # ---------- flowtable: hardware/fast-path offload for ESTABLISHED flows ----------
+    flowtable f {
+        hook ingress priority filter
+        devices = { eth0 }
+    }
+
+    # ---------- named sets ----------
+    # Blackholed destination IPs (drop anything the LAN sends to these).
+    # timeout flag: entries can carry a per-element expiry (e.g. feeder adds
+    # a malicious IP with a 24h timeout and it self-cleans).
+    # Starter list is EMPTY: populate via
+    #   nft add element inet ghostwall blocked_ip { 1.2.3.4 timeout 24h }
+    # (nftables does not accept an empty `elements` block, so the line is
+    # omitted entirely when there are no elements.)
+    set blocked_ip {
+        type ipv4_addr
+        flags timeout
+    }
+
+    # Devices in "strict" / lockdown: ALL their forwarded traffic is dropped
+    # except DNS to the Pi and Tailscale exit.
+    set isolated_dev {
+        type ipv4_addr
+    }
+
+    # Public DoH (DNS-over-HTTPS) resolver endpoints. STARTER LIST —
+    # INCOMPLETE by design. Well-known providers below; full coverage needs
+    # the NFQUEUE inspector and/or periodic feed updates.
+    # IPv4 and IPv6 are separate sets (an ipv4_addr set cannot hold IPv6
+    # addresses — that was the `nft -c` type error on the Pi).
+    set doh_ip4 {
+        type ipv4_addr
+        flags interval
+        elements = {
+            8.8.8.8,        # Google DNS (also used for DoH: dns.google)
+            8.8.4.4,        # Google DNS
+            1.1.1.1,        # Cloudflare
+            1.0.0.1,        # Cloudflare
+            9.9.9.9,        # Quad9
+            149.112.112.112,
+            208.67.222.222, # OpenDNS
+            208.67.220.220,
+            185.228.168.9,  # CleanBrowsing
+            185.228.168.10,
+            94.140.14.14,   # AdGuard DNS (public)
+            94.140.15.15,
+            76.76.2.0/24    # Control D (partial)
+            # TODO: NextDNS anycast (dynamic), Mullvad DoH, Quad9 secure variant, etc.
+        }
+    }
+
+    set doh_ip6 {
+        type ipv6_addr
+        flags interval
+        elements = {
+            2001:4860:4860::8888,  # Google DNS
+            2001:4860:4860::8844,  # Google DNS
+            2606:4700:4700::1111,  # Cloudflare
+            2606:4700:4700::1001,  # Cloudflare
+            2620:fe::fe,           # Quad9
+            2620:fe::9             # Quad9
+        }
+    }
+
+    # ---------- input chain ----------
+    chain input {
+        type filter hook input priority filter; policy accept;
+
+        iifname "lo" accept
+
+        # SSH: LAN and tailscale0 only
+        iifname "eth0" ip saddr {{ lan_cidr }} tcp dport 22 ct state new accept
+        iifname "tailscale0" tcp dport 22 accept
+
+        # DNS to us (the Pi is the LAN's resolver): LAN only
+        iifname "eth0" ip saddr {{ lan_cidr }} udp dport 53 accept
+        iifname "eth0" ip saddr {{ lan_cidr }} tcp dport 53 accept
+        iifname "tailscale0" udp dport 53 accept
+        iifname "tailscale0" tcp dport 53 accept
+
+        # DHCP from LAN clients
+        iifname "eth0" udp dport 67 accept
+
+        # AdGuard Home UI
+        iifname "eth0" ip saddr {{ lan_cidr }} tcp dport 3000 accept
+        iifname "tailscale0" tcp dport 3000 accept
+
+        # qBittorrent Web UI: LAN and tailnet
+        iifname "eth0" ip saddr {{ lan_cidr }} tcp dport 8080 accept
+        iifname "tailscale0" tcp dport 8080 accept
+
+        # ICMP (ping, path-mtu, etc.)
+        ip protocol icmp accept
+        meta l4proto ipv6-icmp accept
+
+        ct state established,related accept
+
+        # default accept: keep the box reachable (break-glass friendly).
+        # Tighten later once the ghost agent is proven.
+    }
+
+    # ---------- forward chain ----------
+    chain forward {
+        type filter hook forward priority filter; policy accept;
+
+        # --- flow offload for established flows (fast path) ---
+        ct state established,related flow add @f
+
+        # --- isolation: strict-profile devices ---
+        # They may only do DNS to the Pi and reach the tailnet.
+        ip daddr @isolated_dev ip daddr != {{ pi_ip }} drop
+        iifname "eth0" ip saddr @isolated_dev ip daddr != {{ pi_ip }} ip daddr != 100.64.0.0/10 drop
+
+        # --- blocked destinations (any device) ---
+        ip daddr @blocked_ip drop
+        ip daddr @doh_ip4 udp dport 443 drop
+        ip daddr @doh_ip4 tcp dport 443 drop
+        ip6 daddr @doh_ip6 udp dport 443 drop
+        ip6 daddr @doh_ip6 tcp dport 443 drop
+
+        # --- block DoT (DNS over TLS) on all forwarded traffic ---
+        tcp dport 853 drop
+        udp dport 853 drop
+
+        # --- force LAN DNS to the Pi ---
+        # Redirect any LAN client's port 53 to the Pi (except the Pi itself).
+        iifname "eth0" ip saddr != {{ pi_ip }} udp dport 53 redirect to :53
+        iifname "eth0" ip saddr != {{ pi_ip }} tcp dport 53 redirect to :53
+        # (also block the *forwarded* DNS that escaped the redirect, so a
+        # hardcoded-DoT client can't bypass — we already drop 853 above)
+
+        # --- LOCKDOWN SWITCH ---
+        # To enter lockdown:  nft add rule inet ghostwall forward position 0 \
+        #   iifname != "tailscale0" ip daddr != {{ pi_ip }} ip saddr != {{ pi_ip }} drop
+        # To exit:            nft -a list chain inet ghostwall forward   (find handle) then
+        #                     nft delete rule inet ghostwall forward handle <N>
+        # Everything dropped except: tailnet traffic, and anything to/from the Pi itself.
+        # The rules below stay commented out so lockdown is opt-in:
+        # iifname != "tailscale0" ip daddr != {{ pi_ip }} ip saddr != {{ pi_ip }} drop
+
+        # --- NFQUEUE hook slot for first-packet AI inspection ---
+        # Reserved for the "ai_firewall" userspace inspector (ghostwall v2).
+        # Enable later with:
+        #   nft add rule inet ghostwall forward \
+        #       iifname "eth0" ct state new \
+        #       ct original proto-dst != 53 \
+        #       queue num 100 bypass
+        # The `bypass` (queue ... bypass) flag means: if no userspace listener
+        # is bound to queue 100, packets just continue through the normal
+        # rules — firewall behaviour is IDENTICAL with or without the AI
+        # daemon running. We deliberately leave this disabled until the
+        # inspector service exists.
+        # queue num 100 bypass
+
+        # Everything else: forward (the router does NAT; we do NOT masquerade
+        # LAN traffic — the router's own NAT handles internet egress).
+    }
+}
