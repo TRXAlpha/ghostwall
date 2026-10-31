@@ -1,5 +1,6 @@
 # Ghostwall
 
+[![tests](https://github.com/TRXAlpha/ghostwall/actions/workflows/tests.yml/badge.svg)](https://github.com/TRXAlpha/ghostwall/actions/workflows/tests.yml)
 [![release](https://img.shields.io/github/v/release/TRXAlpha/ghostwall?include_prereleases&sort=semver)](https://github.com/TRXAlpha/ghostwall/releases)
 [![license](https://img.shields.io/github/license/TRXAlpha/ghostwall)](LICENSE)
 
@@ -189,8 +190,8 @@ scoring falls back to the numpy model alone.
   afterwards. The domain model still misses about 4 in 10 DGA domains.
 - **Tested on one home network** (Pi 4, AdGuard Home in Docker). The x86_64 install,
   Pi-hole support and the Docker image are new in v0.2 beta and verified on Ubuntu
-  24.04 (x86_64) and a Pi 4, not yet on many real setups. Expect to allowlist a few
-  domains in the first week, and please open an issue with what you see.
+  24.04 (x86_64), a Pi 4 and in CI, not yet on many real setups. Expect to allowlist a
+  few domains in the first week, and please open an issue with what you see.
 - **Inline mode and enforcement are unproven on a real network.** The first inline
   deployment broke a workstation's DNS; the resolver was hardened afterwards (TCP,
   IPv6, upstream fallback, fail-open), but run shadow mode for at least a week first.
@@ -204,7 +205,10 @@ scoring falls back to the numpy model alone.
 
 ## Tests
 
-Stdlib `unittest`, no network needed (`numpy` and `onnxruntime` for the scoring tests):
+Stdlib `unittest`, no network needed (`numpy` and `onnxruntime` for the scoring tests).
+[CI](https://github.com/TRXAlpha/ghostwall/actions/workflows/tests.yml) runs them on every
+push on x86_64 and arm64 with Python 3.10 and 3.13, and builds and smoke-tests the Docker
+image on both. To run them yourself:
 
 ```bash
 for d in agents/ghost_dns/tests agents/ghost_flow/tests agents/fw_bot/tests agents/capture/tests agents/web_ui/tests; do

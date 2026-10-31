@@ -1,0 +1,60 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: unit (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -r requirements.txt
+      - name: tests
+        run: |
+          for d in agents/ghost_dns/tests agents/ghost_flow/tests agents/fw_bot/tests agents/capture/tests agents/web_ui/tests; do
+            python -m unittest discover -s "$d" || exit 1
+          done
+          python agents/netconf/test_gen.py
+      - name: shell scripts parse
+        run: for f in install.sh uninstall.sh agents/ghost_dns/go_shadow.sh docker/entrypoint.sh; do bash -n "$f"; done
+
+  docker:
+    name: docker image (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t ghostwall:ci .
+      - name: smoke test (follows a fake AdGuard log, scores a query, dashboard needs the password)
+        run: |
+          mkdir -p work/data data
+          : > work/data/querylog.json
+          docker run -d --name gw -p 8088:8088 -e GHOSTWALL_WEB_PASSWORD=ci-pass \
+            -v "$PWD/work:/adguard/work:ro" -v "$PWD/data:/data" ghostwall:ci
+          queries() { docker exec gw python -c "import json,urllib.request; print(json.load(urllib.request.urlopen('http://127.0.0.1:5380/status'))['stats']['queries'])"; }
+          for i in $(seq 60); do queries >/dev/null 2>&1 && break; sleep 1; done
+          echo '{"T":"2026-10-31T12:00:00Z","QH":"kjqwehdzxklqwpe.biz","QT":"A","IP":"192.168.1.9"}' >> work/data/querylog.json
+          for i in $(seq 30); do [ "$(queries)" = 1 ] && break; sleep 1; done
+          docker exec gw python -c "import json,urllib.request; s=json.load(urllib.request.urlopen('http://127.0.0.1:5380/status')); print(s); assert s['shadow'] and s['stats']['queries'] == 1"
+          grep kjqwehdzxklqwpe.biz data/events.jsonl
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8088/)" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' -u ghostwall:ci-pass http://127.0.0.1:8088/api/events)" = 200
+      - if: failure()
+        run: docker logs gw
