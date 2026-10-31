@@ -92,15 +92,19 @@ def main(argv=None):
         print("[ghost-dns] --once: built OK, exiting", flush=True)
         return 0
 
+    # Shadow mode: pin the follower's starting point (the log's current end) before the
+    # control API answers, so every query written after /status responds gets scored.
+    follower = None
+    if resolver.shadow:
+        from shadow import QueryLogFollower
+        follower = QueryLogFollower(resolver, cfg["querylog"], fmt=cfg.get("querylog_format", "auto"))
+        print(f"[ghost-dns] query log format: {follower.fmt}", flush=True)
+
     control = ControlServer(cfg, gstate, enforcer, devices, resolver)
     t = threading.Thread(target=control.serve_forever, daemon=True)
     t.start()
-    follower = None
     try:
-        if resolver.shadow:
-            from shadow import QueryLogFollower
-            follower = QueryLogFollower(resolver, cfg["querylog"], fmt=cfg.get("querylog_format", "auto"))
-            print(f"[ghost-dns] query log format: {follower.fmt}", flush=True)
+        if follower:
             follower.run()
         else:
             resolver.serve_forever()
