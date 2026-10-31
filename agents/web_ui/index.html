@@ -5,170 +5,290 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Ghostwall</title>
 <style>
-  :root { --bg:#0f1115; --panel:#171a21; --line:#262b36; --text:#e6e8ee; --dim:#8a93a6;
-          --ok:#3ecf8e; --warn:#f5a524; --bad:#ef4444; --accent:#7c9cff; }
-  @media (prefers-color-scheme: light) {
-    :root { --bg:#f5f6f8; --panel:#fff; --line:#e3e6ec; --text:#14171f; --dim:#5b6374; }
+  :root {
+    --bg:#0c0d0e; --raise:#141516; --line:#232527; --line2:#2e3134;
+    --text:#d9dcdf; --dim:#7d848b; --faint:#4a4f54;
+    --amber:#e8a33d; --red:#e5534b; --green:#57ab5a;
+    --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    --sans: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   }
-  * { box-sizing: border-box; }
-  body { margin:0; font: 14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-         background:var(--bg); color:var(--text); }
-  header { display:flex; align-items:center; justify-content:space-between; gap:12px;
-           padding:16px 20px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
-  h1 { font-size:18px; margin:0; }
-  h2 { font-size:14px; margin:0 0 10px; color:var(--dim); font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
-  main { padding:20px; display:grid; gap:16px; max-width:1100px; margin:0 auto; }
-  .cards { display:grid; grid-template-columns: repeat(auto-fit, minmax(160px,1fr)); gap:12px; }
-  .card, .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; }
-  .big { font-size:20px; font-weight:600; }
-  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:600; }
-  .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); } .dim { color:var(--dim); }
-  table { width:100%; border-collapse:collapse; }
-  th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
-  th { color:var(--dim); font-weight:600; font-size:12px; text-transform:uppercase; }
-  td.mono, .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size:12px; word-break:break-all; }
-  button { background:var(--accent); color:#fff; border:0; border-radius:7px; padding:6px 12px;
-           font-weight:600; cursor:pointer; font-size:13px; }
-  button.ghost { background:transparent; color:var(--text); border:1px solid var(--line); }
-  button.danger { background:var(--bad); }
-  button:disabled { opacity:.5; cursor:default; }
-  input[type=text] { background:var(--bg); color:var(--text); border:1px solid var(--line);
-                     border-radius:7px; padding:7px 10px; font-size:13px; min-width:0; flex:1; }
-  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  .toast { position:fixed; bottom:16px; right:16px; background:var(--panel); border:1px solid var(--line);
-           padding:10px 14px; border-radius:8px; max-width:360px; display:none; }
-  .sev-high, .sev-critical { background:rgba(239,68,68,.15); color:var(--bad); }
-  .sev-warn { background:rgba(245,165,36,.15); color:var(--warn); }
-  .sev-info { background:rgba(124,156,255,.15); color:var(--accent); }
-  .act-block { background:rgba(239,68,68,.15); color:var(--bad); }
-  .act-recommend { background:rgba(245,165,36,.15); color:var(--warn); }
-  .act-allow { background:rgba(62,207,142,.15); color:var(--ok); }
-  .scroll { overflow-x:auto; }
-  @media (max-width:640px) { th:nth-child(3), td:nth-child(3) { display:none; } }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f6f5f2; --raise:#fff; --line:#e4e2dd; --line2:#d6d3cc;
+            --text:#1c1d1f; --dim:#6a6e73; --faint:#a9acaf; --amber:#b9770e; --red:#c93c35; --green:#3d8a40; }
+  }
+  * { box-sizing:border-box; }
+  html, body { margin:0; background:var(--bg); color:var(--text); }
+  body { font:14px/1.5 var(--sans); -webkit-font-smoothing:antialiased; }
+  .mono { font-family:var(--mono); }
+  .dim { color:var(--dim); }
+  .wrap { max-width:1180px; margin:0 auto; padding:0 24px; }
+
+  /* top bar */
+  .bar { border-bottom:1px solid var(--line); }
+  .bar .wrap { display:flex; align-items:center; gap:20px; height:52px; }
+  .brand { font-family:var(--mono); font-weight:600; letter-spacing:.02em; }
+  .brand b { color:var(--amber); font-weight:600; }
+  .live { margin-left:auto; display:flex; align-items:center; gap:8px; font:12px var(--mono); color:var(--dim); }
+  .dot { width:7px; height:7px; border-radius:50%; background:var(--faint); }
+  .dot.on { background:var(--green); box-shadow:0 0 0 3px color-mix(in srgb, var(--green) 20%, transparent); }
+  .dot.off { background:var(--red); }
+
+  /* status line */
+  .status { display:grid; grid-template-columns:repeat(5, minmax(0,1fr)); border-bottom:1px solid var(--line); }
+  .stat { padding:18px 24px 16px 0; }
+  .stat + .stat { padding-left:24px; border-left:1px solid var(--line); }
+  .stat .k { font:11px var(--mono); text-transform:uppercase; letter-spacing:.08em; color:var(--dim); }
+  .stat .v { font:500 22px/1.3 var(--mono); margin-top:6px; font-variant-numeric:tabular-nums; }
+  .stat .s { font-size:12px; color:var(--dim); margin-top:2px; }
+  .amber { color:var(--amber); } .red { color:var(--red); } .green { color:var(--green); }
+
+  /* activity strip */
+  .strip { padding:20px 0 8px; }
+  .strip-head { display:flex; justify-content:space-between; font:11px var(--mono); color:var(--dim);
+                text-transform:uppercase; letter-spacing:.08em; margin-bottom:10px; }
+  .bars { display:grid; grid-template-columns:repeat(24, 1fr); gap:3px; height:44px; align-items:end; }
+  .bars i { display:block; background:var(--line2); min-height:2px; border-radius:1px; }
+  .bars i.hit { background:var(--amber); }
+  .bars i.hot { background:var(--red); }
+  .axis { display:grid; grid-template-columns:repeat(4, 1fr); font:10px var(--mono); color:var(--faint); margin-top:6px; }
+  .axis span:last-child { text-align:right; }
+
+  /* layout */
+  .cols { display:grid; grid-template-columns:minmax(0,1fr) 340px; gap:40px; padding:24px 0 48px; }
+  h2 { font:600 11px var(--mono); text-transform:uppercase; letter-spacing:.08em; color:var(--dim);
+       margin:0 0 4px; display:flex; justify-content:space-between; align-items:baseline; }
+  h2 .count { color:var(--faint); }
+
+  /* alert feed */
+  .feed { list-style:none; margin:0; padding:0; }
+  .alert { display:grid; grid-template-columns:14px minmax(0,1fr) auto; gap:4px 12px;
+           padding:14px 0; border-bottom:1px solid var(--line); }
+  .alert .sev { width:3px; height:100%; border-radius:2px; background:var(--amber); margin-left:2px; }
+  .alert.high .sev, .alert.critical .sev { background:var(--red); }
+  .alert.info .sev { background:var(--faint); }
+  .alert .dom { font:500 14px var(--mono); word-break:break-all; }
+  .alert .meta { grid-column:2; font-size:12.5px; color:var(--dim); }
+  .alert .meta b { color:var(--text); font-weight:500; }
+  .alert .why { grid-column:2; font:12px var(--mono); color:var(--faint); overflow-wrap:anywhere; }
+  .alert .meta, .alert .dom { min-width:0; overflow-wrap:anywhere; }
+  .cols > *, .status > * { min-width:0; }
+  .alert .side { grid-row:1 / span 3; grid-column:3; text-align:right; display:flex; flex-direction:column;
+                 align-items:flex-end; gap:8px; }
+  .when { font:12px var(--mono); color:var(--dim); white-space:nowrap; }
+  .tag { font:11px var(--mono); padding:1px 6px; border:1px solid var(--line2); border-radius:3px; color:var(--dim); }
+  .tag.block { color:var(--red); border-color:color-mix(in srgb, var(--red) 45%, transparent); }
+  .empty { padding:28px 0; color:var(--dim); border-bottom:1px solid var(--line); }
+
+  /* side */
+  .side-sec + .side-sec { margin-top:36px; }
+  .dev { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:2px 10px; padding:10px 0; border-bottom:1px solid var(--line); }
+  .dev .n { font-weight:500; }
+  .dev .a { font:12px var(--mono); color:var(--dim); }
+  .dev .c { grid-column:2; grid-row:1 / span 2; align-self:center; }
+  .dev.iso .n { color:var(--red); }
+
+  button { font:500 12px var(--sans); color:var(--text); background:transparent; border:1px solid var(--line2);
+           border-radius:4px; padding:4px 10px; cursor:pointer; }
+  button:hover { border-color:var(--dim); }
+  button.warn:hover { border-color:var(--red); color:var(--red); }
+  button.primary { background:var(--text); color:var(--bg); border-color:var(--text); }
+  button:disabled { opacity:.4; cursor:default; }
+  .ctl { display:flex; justify-content:space-between; align-items:center; padding:10px 0; border-bottom:1px solid var(--line); gap:12px; }
+  .ctl .l { font-size:13px; } .ctl .l small { display:block; color:var(--dim); font-size:12px; }
+  form.allow { display:flex; gap:6px; margin-top:10px; }
+  input { flex:1; min-width:0; font:13px var(--mono); color:var(--text); background:var(--raise);
+          border:1px solid var(--line2); border-radius:4px; padding:6px 8px; }
+  input:focus, button:focus-visible { outline:2px solid var(--amber); outline-offset:1px; }
+
+  .toast { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); font:12px var(--mono);
+           background:var(--text); color:var(--bg); padding:8px 14px; border-radius:4px; opacity:0;
+           transition:opacity .15s; pointer-events:none; }
+  .toast.show { opacity:1; } .toast.bad { background:var(--red); color:#fff; }
+
+  @media (max-width:900px) {
+    .cols { grid-template-columns:1fr; }
+    .status { grid-template-columns:repeat(2, 1fr); }
+    .stat, .stat + .stat { padding:14px 16px 12px 0; border-left:0; }
+    .stat:nth-child(even) { padding-left:16px; border-left:1px solid var(--line); }
+    .stat:last-child { grid-column:1 / -1; }
+  }
+  @media (max-width:520px) { .wrap { padding:0 16px; } .alert .side .tag { display:none; } }
 </style>
 </head>
 <body>
-<header>
-  <h1>Ghostwall <span class="dim" style="font-weight:400">· DNS resolver</span></h1>
-  <div class="row"><span id="conn" class="pill dim">connecting…</span>
-    <button class="ghost" onclick="refresh()">Refresh</button></div>
-</header>
+<div class="bar"><div class="wrap">
+  <div class="brand">ghost<b>wall</b></div>
+  <div class="live"><span class="dot" id="dot"></span><span id="conn">connecting</span></div>
+</div></div>
 
-<main>
-  <section class="cards">
-    <div class="card"><h2>Resolver</h2><div class="big" id="state">—</div></div>
-    <div class="card"><h2>Mode</h2><div class="big" id="mode">—</div>
-      <div class="row" style="margin-top:8px"><button id="btnLearn" class="ghost" onclick="toggleLearning()">Toggle</button></div></div>
-    <div class="card"><h2>Lockdown</h2><div class="big" id="lock">—</div>
-      <div class="row" style="margin-top:8px"><button id="btnLock" class="ghost danger" onclick="toggleLockdown()">Toggle</button></div></div>
-    <div class="card"><h2>Events (recent)</h2><div class="big" id="evcount">—</div>
-      <div class="dim" id="evblocks"></div></div>
+<div class="wrap">
+  <section class="status">
+    <div class="stat"><div class="k">Mode</div><div class="v" id="mode">—</div><div class="s" id="modeSub">&nbsp;</div></div>
+    <div class="stat"><div class="k">Queries scored</div><div class="v" id="queries">—</div><div class="s">since service start</div></div>
+    <div class="stat"><div class="k">Alerts · 24 h</div><div class="v" id="alerts24">—</div><div class="s" id="alertsSub">&nbsp;</div></div>
+    <div class="stat"><div class="k">Devices</div><div class="v" id="devCount">—</div><div class="s" id="devSub">&nbsp;</div></div>
+    <div class="stat"><div class="k">Lockdown</div><div class="v" id="lock">—</div><div class="s">LAN traffic</div></div>
   </section>
 
-  <section class="panel">
-    <h2>Devices</h2>
-    <div class="scroll"><table>
-      <thead><tr><th>Name</th><th>IP</th><th>MAC</th><th>Isolated</th><th></th></tr></thead>
-      <tbody id="devices"><tr><td colspan="5" class="dim">loading…</td></tr></tbody>
-    </table></div>
+  <section class="strip">
+    <div class="strip-head"><span>Alerts per hour</span><span id="stripMax"></span></div>
+    <div class="bars" id="bars"></div>
+    <div class="axis"><span>−24 h</span><span>−18 h</span><span>−12 h</span><span>now</span></div>
   </section>
 
-  <section class="panel">
-    <h2>Trust a domain</h2>
-    <p class="dim" style="margin:0 0 10px">Allowlisted domains are never flagged or blocked.</p>
-    <div class="row"><input type="text" id="domain" placeholder="e.g. fbsbx.com" autocomplete="off">
-      <button onclick="allowDomain()">Allow</button></div>
-  </section>
+  <div class="cols">
+    <section>
+      <h2>Alerts <span class="count" id="feedCount"></span></h2>
+      <ul class="feed" id="feed"><li class="empty">Loading…</li></ul>
+    </section>
 
-  <section class="panel">
-    <h2>Recent decisions</h2>
-    <div class="scroll"><table>
-      <thead><tr><th>Time (UTC)</th><th>Device</th><th>Domain</th><th>Action</th><th>Score</th><th>Rule</th></tr></thead>
-      <tbody id="events"><tr><td colspan="6" class="dim">loading…</td></tr></tbody>
-    </table></div>
-  </section>
-</main>
+    <aside>
+      <div class="side-sec">
+        <h2>Devices</h2>
+        <div id="devices"><div class="empty">Loading…</div></div>
+      </div>
+      <div class="side-sec">
+        <h2>Controls</h2>
+        <div class="ctl"><div class="l">Learning<small id="learnSub">alerts only, never blocks</small></div>
+          <button id="btnLearn" data-act="learning">—</button></div>
+        <div class="ctl"><div class="l">LAN lockdown<small>only the Pi and tailnet stay reachable</small></div>
+          <button id="btnLock" class="warn" data-act="lockdown">—</button></div>
+        <form class="allow" id="allowForm">
+          <input id="domain" placeholder="trust a domain, e.g. fbsbx.com" autocomplete="off" spellcheck="false">
+          <button class="primary" type="submit">Trust</button>
+        </form>
+      </div>
+    </aside>
+  </div>
+</div>
 
-<div id="toast" class="toast"></div>
+<div class="toast" id="toast"></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-let state = { learning: null, lockdown: null };
+const RULES = {
+  threat_feed: "on a phishing/malware list", dga_burst: "burst of random-looking domains",
+  dga_high: "very random-looking new domain", dga_suspect: "random-looking new domain",
+  dga_corroborated: "random name on a risky TLD", doh_bypass: "may be bypassing your DNS filter (DoH)",
+  dns_tunnel: "possible data over DNS (tunnel)", dns_beacon: "looked up on a fixed timer",
+  blocklist: "on your blocklist", raw_ip: "connected to a raw IP", beacon: "connects on a fixed timer",
+};
+let cur = { learning: null, lockdown: null };
 
 function toast(msg, bad) {
-  const t = $("toast"); t.textContent = msg; t.style.display = "block";
-  t.style.borderColor = bad ? "var(--bad)" : "var(--line)";
-  clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", 3500);
+  const t = $("toast"); t.textContent = msg; t.className = "toast show" + (bad ? " bad" : "");
+  clearTimeout(t._h); t._h = setTimeout(() => t.className = "toast", 2800);
 }
-
 async function api(path, opts) {
   const r = await fetch(path, opts);
   const j = await r.json().catch(() => ({}));
   if (!r.ok || j.ok === false) throw new Error(j.error || ("HTTP " + r.status));
   return j;
 }
-
-async function act(action, params) {
+async function act(action, params, label) {
   try {
-    await api("/api/action", { method: "POST", headers: {"Content-Type":"application/json"},
+    await api("/api/action", { method:"POST", headers:{"Content-Type":"application/json"},
                                body: JSON.stringify({ action, params: params || {} }) });
-    toast("Done: " + action.replace(/_/g, " "));
-    await refresh();
+    toast(label || action); await refresh();
   } catch (e) { toast("Failed: " + e.message, true); }
 }
-
-function toggleLearning() { act("learning", { enabled: !state.learning }); }
-function toggleLockdown()  { act("lockdown", {}); }
-function allowDomain() {
-  const d = $("domain").value.trim();
-  if (!d) return toast("Enter a domain first", true);
-  act("allow", { domain: d }).then(() => $("domain").value = "");
+function ago(iso) {
+  const s = (Date.now() - Date.parse(iso)) / 1000;
+  if (!isFinite(s)) return "";
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  return Math.floor(s / 86400) + "d ago";
 }
+const fmt = (n) => n == null ? "—" : Number(n).toLocaleString("en-US");
 
 function renderStatus(st) {
-  state = { learning: st.learning, lockdown: st.lockdown };
-  $("state").innerHTML = '<span class="ok">Running</span>';
-  $("mode").innerHTML = st.shadow ? '<span class="ok">Shadow</span> <span class="dim" style="font-size:12px">(not in DNS path)</span>'
-    : st.learning ? '<span class="warn">Learning</span>' : '<span class="bad">Enforcing</span>';
-  $("btnLearn").textContent = st.learning ? "Switch to enforce" : "Back to learning";
-  $("lock").innerHTML = st.lockdown ? '<span class="bad">ON</span>' : '<span class="ok">off</span>';
-  $("btnLock").textContent = st.lockdown ? "Release lockdown" : "Lock LAN down";
-  const rows = (st.devices || []).map(d => `
-    <tr><td><b>${esc(d.name)}</b></td><td class="mono">${esc(d.ip)}</td><td class="mono">${esc(d.mac || "—")}</td>
-    <td>${d.isolated ? '<span class="bad">yes</span>' : '<span class="dim">no</span>'}</td>
-    <td><div class="row">${d.isolated
-        ? `<button class="ghost" onclick="act('release',{name:'${esc(d.name)}'})">Release</button>`
-        : `<button class="ghost danger" onclick="act('isolate',{name:'${esc(d.name)}'})">Isolate</button>`}</div></td></tr>`).join("");
-  $("devices").innerHTML = rows || '<tr><td colspan="5" class="dim">no devices configured</td></tr>';
+  cur = { learning: st.learning, lockdown: st.lockdown };
+  if (st.shadow) { $("mode").innerHTML = '<span class="green">shadow</span>'; $("modeSub").textContent = "reading AdGuard's log"; }
+  else if (st.learning) { $("mode").innerHTML = '<span class="amber">inline</span>'; $("modeSub").textContent = "answering DNS, alert only"; }
+  else { $("mode").innerHTML = '<span class="red">enforcing</span>'; $("modeSub").textContent = "answering DNS, blocking"; }
+  const stats = st.stats || {};
+  $("queries").textContent = fmt(stats.queries);
+  const devs = st.devices || [];
+  $("devCount").textContent = devs.length;
+  const iso = devs.filter(d => d.isolated).length;
+  $("devSub").innerHTML = iso ? `<span class="red">${iso} isolated</span>` : "none isolated";
+  $("lock").innerHTML = st.lockdown ? '<span class="red">on</span>' : 'off';
+  $("btnLearn").textContent = st.learning ? "Turn off" : "Turn on";
+  $("learnSub").textContent = st.learning ? "on: alerts only, never blocks" : "off: high-confidence names are blocked";
+  $("btnLock").textContent = st.lockdown ? "Release" : "Lock down";
+  $("devices").innerHTML = devs.map(d => `
+    <div class="dev${d.isolated ? " iso" : ""}">
+      <div class="n">${esc(d.name)}</div>
+      <div class="c">${d.isolated
+        ? `<button data-act="release" data-name="${esc(d.name)}">Release</button>`
+        : `<button class="warn" data-act="isolate" data-name="${esc(d.name)}">Isolate</button>`}</div>
+      <div class="a">${esc(d.ip)}</div>
+    </div>`).join("") || '<div class="empty">No devices named yet. Add them in devices.json.</div>';
 }
 
 function renderEvents(evs) {
-  $("evcount").textContent = evs.length;
-  const blocks = evs.filter(e => e.action === "block").length;
-  $("evblocks").textContent = blocks + " blocked · " + evs.filter(e => e.action === "recommend").length + " flagged";
-  const rows = evs.map(e => {
-    const score = e.scores && e.scores.dga != null ? e.scores.dga.toFixed(2) : "—";
-    return `<tr><td class="mono">${esc((e.time||"").replace("T"," ").replace("Z",""))}</td>
-      <td>${esc(e.device)}</td><td class="mono">${esc(e.domain)}</td>
-      <td><span class="pill act-${esc(e.action)}">${esc(e.action)}</span></td>
-      <td class="mono">${score}</td><td><span class="pill sev-${esc(e.severity)}">${esc(e.rule)}</span></td></tr>`;
-  }).join("");
-  $("events").innerHTML = rows || '<tr><td colspan="6" class="dim">no decisions yet</td></tr>';
+  const now = Date.now();
+  const alerts = evs.filter(e => e.action !== "allow");
+  const day = alerts.filter(e => now - Date.parse(e.time) < 86400e3);
+  $("alerts24").innerHTML = day.length ? `<span class="amber">${day.length}</span>` : "0";
+  const high = day.filter(e => e.severity === "high" || e.severity === "critical").length;
+  $("alertsSub").textContent = high ? `${high} high severity` : "nothing high severity";
+
+  const hours = new Array(24).fill(0);
+  for (const e of day) { const h = Math.floor((now - Date.parse(e.time)) / 3600e3); if (h >= 0 && h < 24) hours[23 - h]++; }
+  const max = Math.max(1, ...hours);
+  $("bars").innerHTML = hours.map(n => `<i class="${n >= 3 ? "hot" : n ? "hit" : ""}" style="height:${n ? 12 + 88 * n / max : 4}%" title="${n} alert${n === 1 ? "" : "s"}"></i>`).join("");
+  $("stripMax").textContent = "peak " + Math.max(...hours);
+
+  // collapse repeats of the same device + domain + rule into one row (newest first)
+  const groups = new Map();
+  for (const e of alerts) {
+    const k = e.device + "|" + e.domain + "|" + e.rule;
+    if (groups.has(k)) groups.get(k).n++; else groups.set(k, { ...e, n: 1 });
+  }
+  const rows = [...groups.values()];
+  $("feedCount").textContent = rows.length ? rows.length + " recent" : "";
+  $("feed").innerHTML = rows.map(e => {
+    const score = e.scores && e.scores.dga != null ? ` · score ${e.scores.dga.toFixed(2)}` : "";
+    const why = (e.reasons || []).slice(0, 3).join(" · ");
+    return `<li class="alert ${esc(e.severity || "warn")}">
+      <span class="sev"></span>
+      <div class="dom">${esc(e.domain)}</div>
+      <div class="side"><span class="when" title="${esc(e.time)}">${ago(e.time)}</span>
+        <span class="tag ${e.action === "block" ? "block" : ""}">${e.action === "block" ? "blocked" : "flagged"}</span>
+        <button data-act="allow" data-domain="${esc(e.domain)}">Trust</button></div>
+      <div class="meta"><b>${esc(e.device)}</b>: ${esc(RULES[e.rule] || e.rule)}${score}${e.n > 1 ? ` · ×${e.n}` : ""}</div>
+      ${why ? `<div class="why">${esc(why)}</div>` : ""}
+    </li>`;
+  }).join("") || '<li class="empty">No alerts. Every query scored so far looked normal.</li>';
 }
+
+document.addEventListener("click", (ev) => {
+  const b = ev.target.closest("button[data-act]"); if (!b) return;
+  const a = b.dataset.act;
+  if (a === "learning") act("learning", { enabled: !cur.learning }, cur.learning ? "Learning off" : "Learning on");
+  else if (a === "lockdown") act("lockdown", {}, cur.lockdown ? "Lockdown released" : "Lockdown on");
+  else if (a === "isolate" || a === "release") act(a, { name: b.dataset.name }, `${b.dataset.name}: ${a}d`);
+  else if (a === "allow") act("allow", { domain: b.dataset.domain }, "Trusted " + b.dataset.domain);
+});
+$("allowForm").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  const d = $("domain").value.trim();
+  if (!d) return toast("Enter a domain first", true);
+  act("allow", { domain: d }, "Trusted " + d).then(() => $("domain").value = "");
+});
 
 async function refresh() {
   try {
-    const [s, e] = await Promise.all([api("/api/status"), api("/api/events?limit=50")]);
+    const [s, e] = await Promise.all([api("/api/status"), api("/api/events?limit=200")]);
     renderStatus(s.resolver); renderEvents(e.events);
-    $("conn").textContent = "live"; $("conn").className = "pill ok";
+    $("dot").className = "dot on"; $("conn").textContent = "live";
   } catch (err) {
-    $("conn").textContent = "offline"; $("conn").className = "pill bad";
-    $("state").innerHTML = '<span class="bad">Unreachable</span>';
-    toast("Resolver unreachable: " + err.message, true);
+    $("dot").className = "dot off"; $("conn").textContent = "resolver unreachable";
   }
 }
-
 refresh();
 setInterval(refresh, 10000);
 </script>

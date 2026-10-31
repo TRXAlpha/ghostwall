@@ -13,6 +13,24 @@ leaves your network.
 > and unit-tested, but have **not** been proven on a real network yet. See
 > [Limits](#limits).
 
+![Ghostwall dashboard](docs/img/dashboard.png)
+
+<sub>Dashboard with demo data (`python agents/web_ui/demo.py`). Light theme follows your OS:
+[screenshot](docs/img/dashboard-light.png).</sub>
+
+## Why not just AdGuard Home or Pi-hole?
+
+Keep them. Ghostwall runs on top and covers what a blocklist can't:
+
+| | AdGuard Home / Pi-hole | + Ghostwall |
+|---|---|---|
+| Known-bad domains (lists) | yes | yes (threat feed) |
+| Random-looking domains nobody has listed yet (DGA) | no | yes |
+| DNS tunnelling, timer-like beacons | no | yes |
+| A device skipping your filter via DNS-over-HTTPS | no | flagged |
+| Per-device "this looks infected" alerts | no | dashboard + Telegram |
+| Can break your DNS | it is your DNS | no (shadow mode only reads the log) |
+
 ## What it catches
 
 | Rule | Meaning | Severity |
@@ -24,6 +42,14 @@ leaves your network.
 | `doh_bypass` | a device looked up a DNS-over-HTTPS provider, so it may be skipping your filter | warn |
 | `dns_tunnel` | many long random subdomains of one domain (data smuggled over DNS) | high |
 | `dns_beacon` | a random-looking name queried on a fixed timer | warn |
+
+An alert, as written to `events.jsonl` and sent to Telegram:
+
+```json
+{"time":"2026-10-30T15:11:26Z","device":"phone","domain":"cloudflare-dns.com","rule":"doh_bypass",
+ "action":"recommend","severity":"warn",
+ "reasons":["resolved DoH/DoT provider cloudflare-dns.com","this device may be bypassing your DNS filter"]}
+```
 
 Internal names (`*.local`, `*.ts.net`, single labels, `_service` records) are never
 scored, and repeat alerts for the same device and domain are collapsed to one per day.
@@ -79,6 +105,9 @@ python agents/ghost_dns/app.py --dns-port 5553 --control-port 5380 --upstream 1.
 dig @127.0.0.1 -p 5553 google.com          # forwarded
 dig @127.0.0.1 -p 5553 kjqwehdzxklqw.biz   # flagged (recommend, learning mode)
 ```
+
+Just the dashboard, with sample data (stdlib only): `python agents/web_ui/demo.py`, then
+open http://127.0.0.1:8088.
 
 ## How it works
 
@@ -142,4 +171,4 @@ scanner/, third_party/  PE-file malware scanner research (not used by the firewa
 
 ## License
 
-[MIT](LICENSE). `third_party/thrember` is Apache 2.0 (see its own license).
+[MIT](LICENSE) © Morogan Christian. `third_party/thrember` is Apache 2.0 (see its own license).
