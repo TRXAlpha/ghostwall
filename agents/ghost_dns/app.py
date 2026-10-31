@@ -61,8 +61,9 @@ def main(argv=None):
     ap.add_argument("--no-learning", dest="learning", action="store_false")
     ap.add_argument("--once", action="store_true", help="build and exit (no sockets)")
     ap.add_argument("--shadow", action="store_true", default=None,
-                    help="do NOT serve DNS; score AdGuard's query log instead (safe: stays out of the DNS path)")
-    ap.add_argument("--querylog", help="AdGuard querylog.json to follow in shadow mode")
+                    help="do NOT serve DNS; score the DNS server's query log instead (safe: stays out of the DNS path)")
+    ap.add_argument("--querylog", help="AdGuard querylog.json or Pi-hole pihole.log to follow in shadow mode")
+    ap.add_argument("--querylog-format", choices=["auto", "adguard", "pihole"])
     args = ap.parse_args(argv)
 
     overrides = {
@@ -71,6 +72,7 @@ def main(argv=None):
         "upstream": args.upstream, "upstream_port": args.upstream_port,
         "enforce": args.enforce, "learning": args.learning,
         "shadow": args.shadow, "querylog": args.querylog,
+        "querylog_format": args.querylog_format,
     }
     cfg = config_mod.load_config(args.config, overrides)
 
@@ -97,7 +99,8 @@ def main(argv=None):
     try:
         if resolver.shadow:
             from shadow import QueryLogFollower
-            follower = QueryLogFollower(resolver, cfg["querylog"])
+            follower = QueryLogFollower(resolver, cfg["querylog"], fmt=cfg.get("querylog_format", "auto"))
+            print(f"[ghost-dns] query log format: {follower.fmt}", flush=True)
             follower.run()
         else:
             resolver.serve_forever()

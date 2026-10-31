@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Replay REAL AdGuard query history through the full detection pipeline.
+"""Replay REAL AdGuard or Pi-hole query history through the full detection pipeline.
 
     python replay_querylog.py --querylog /opt/AdGuardHome/data/querylog.json
+    python replay_querylog.py --querylog /var/log/pihole/pihole.log   # also .gz rotations
 
 Runs in shadow mode with throw-away state and a private events file: it changes
 nothing, alerts nobody, and shows what Ghostwall WOULD have flagged on your real
@@ -10,11 +11,13 @@ traffic, using the query timestamps as the clock (so beacon/burst timing is real
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import os
 import re
 import sys
 import tempfile
+import time
 from collections import Counter, defaultdict
 from datetime import datetime
 
@@ -26,10 +29,11 @@ from enforce import Enforcer, NullBackend
 from events import EventLog
 from resolver import Resolver
 from scoring import Scorer
-from shadow import parse_line
+from shadow import detect_format, parse_adguard_line, parse_pihole_line
 from state import GhostState
 
 _FRAC = re.compile(r"(\.\d{6})\d+")
+_SYSLOG_TS = re.compile(r"^([A-Z][a-z]{2})\s+(\d{1,2}) (\d\d:\d\d:\d\d)")
 
 
 class MemoScorer:
@@ -52,9 +56,26 @@ def parse_time(s: str) -> float | None:
         return None
 
 
+def parse_syslog_time(line: str) -> float | None:
+    """Pi-hole lines start `Oct 31 12:00:00` (no year): assume the most recent such date."""
+    m = _SYSLOG_TS.match(line)
+    if not m:
+        return None
+    now = time.time()
+    year = datetime.now().year
+    try:
+        ts = datetime.strptime(f"{year} {m[1]} {m[2]} {m[3]}", "%Y %b %d %H:%M:%S").timestamp()
+    except ValueError:
+        return None
+    if ts > now + 86400:  # a December line read in January
+        ts = datetime.strptime(f"{year - 1} {m[1]} {m[2]} {m[3]}", "%Y %b %d %H:%M:%S").timestamp()
+    return ts
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--querylog", required=True)
+    ap.add_argument("--querylog", required=True, help="AdGuard querylog.json or Pi-hole pihole.log[.N.gz]")
+    ap.add_argument("--format", choices=["auto", "adguard", "pihole"], default="auto")
     ap.add_argument("--devices", default=None)
     ap.add_argument("--max-lines", type=int, default=0, help="0 = all")
     ap.add_argument("--allowlist", default=os.path.join(HERE, "allowlist.txt"))
@@ -76,19 +97,23 @@ def main() -> int:
     clock = {"t": 0.0}
     r.clock = lambda: clock["t"]
 
+    fmt = detect_format(a.querylog) if a.format == "auto" else a.format
+    opener = gzip.open if a.querylog.endswith(".gz") else open
     n = bad = 0
     first = last = None
-    with open(a.querylog, encoding="utf-8", errors="replace") as f:
+    with opener(a.querylog, "rt", encoding="utf-8", errors="replace") as f:
         for line in f:
             if a.max_lines and n >= a.max_lines:
                 break
-            try:
-                j = json.loads(line)
-            except ValueError:
-                bad += 1
-                continue
-            parsed = parse_line(line)
-            ts = parse_time(j.get("T", ""))
+            if fmt == "pihole":
+                parsed = parse_pihole_line(line)
+                ts = parse_syslog_time(line) if parsed else None
+            else:
+                parsed = parse_adguard_line(line)
+                if not parsed:
+                    bad += 1
+                    continue
+                ts = parse_time(json.loads(line).get("T", ""))
             if not parsed or ts is None:
                 continue
             clock["t"] = ts

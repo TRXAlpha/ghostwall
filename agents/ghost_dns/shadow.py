@@ -1,29 +1,37 @@
-"""Shadow mode: score the queries AdGuard Home already answered.
+"""Shadow mode: score the queries AdGuard Home or Pi-hole already answered.
 
-The firewall stays OUT of the DNS path. AdGuard keeps port 53, so if anything
-in Ghostwall crashes or misbehaves, DNS is untouched. This follower tails
-AdGuard's querylog.json (one JSON object per line) and feeds each query to the
-same Resolver.decide() policy, so events, the dashboard, Telegram alerts and
-the morning brief all work exactly as before.
+The firewall stays OUT of the DNS path. The DNS server keeps port 53, so if
+anything in Ghostwall crashes or misbehaves, DNS is untouched. This follower
+tails the DNS server's query log and feeds each query to the same
+Resolver.decide() policy, so events, the dashboard and Telegram alerts work
+exactly as in inline mode.
 
-Detection lags by AdGuard's log flush interval (seconds) and nothing can be
-blocked, which is the point: this is the safe way to prove the models and the
-allowlist before ever going inline.
+Two log formats:
+  - AdGuard Home querylog.json: one JSON object per line. AdGuard buffers
+    `querylog.size_memory` entries (1000 by default) before writing, so
+    go_shadow.sh lowers that; otherwise alerts can lag by hours.
+  - Pi-hole pihole.log (dnsmasq/FTL): one text line per event, written at once.
+
+Nothing can be blocked, which is the point: this is the safe way to prove the
+models and the allowlist before ever going inline.
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 import time
 
 
-def parse_line(line: str):
+def parse_adguard_line(line: str):
     """AdGuard querylog line -> (client_ip, host, qtype) or None."""
     try:
         j = json.loads(line)
     except ValueError:
+        return None
+    if not isinstance(j, dict):
         return None
     host = j.get("QH")
     ip = j.get("IP")
@@ -32,12 +40,49 @@ def parse_line(line: str):
     return str(ip), str(host).rstrip(".").lower(), str(j.get("QT") or "A")
 
 
-class QueryLogFollower:
-    """Tail a querylog file. Starts at the current end (no history replay)."""
+parse_line = parse_adguard_line  # older name, used by replay_querylog and tests
 
-    def __init__(self, resolver, path: str, poll_seconds: float = 2.0):
+# `Oct 31 12:00:00 dnsmasq[123]: query[A] example.com from 192.168.1.10`, and the
+# log-queries=extra form with a serial and client/port before `query`.
+_PIHOLE_QUERY = re.compile(r"\bquery\[(?P<qt>[A-Za-z0-9]+)\]\s+(?P<host>\S+)\s+from\s+(?P<ip>[0-9A-Fa-f:.]+)")
+
+
+def parse_pihole_line(line: str):
+    """Pi-hole log line -> (client_ip, host, qtype) or None (replies, forwards, blocks)."""
+    m = _PIHOLE_QUERY.search(line)
+    if not m:
+        return None
+    return m["ip"], m["host"].rstrip(".").lower(), m["qt"].upper()
+
+
+PARSERS = {"adguard": parse_adguard_line, "pihole": parse_pihole_line}
+
+
+def detect_format(path: str) -> str:
+    """'adguard' or 'pihole', from the first line of the log, else from its name."""
+    try:
+        with open(path, "rb") as f:
+            for raw in f.read(8192).splitlines():
+                line = raw.decode("utf-8", "replace").strip()
+                if line.startswith("{"):
+                    return "adguard"
+                if "dnsmasq" in line or "query[" in line:
+                    return "pihole"
+    except OSError:
+        pass
+    return "adguard" if path.endswith(".json") or "pihole" not in path.lower() else "pihole"
+
+
+class QueryLogFollower:
+    """Tail a query log. Starts at the current end (no history replay)."""
+
+    def __init__(self, resolver, path: str, poll_seconds: float = 2.0, fmt: str = "auto"):
         self.resolver = resolver
         self.path = path
+        self.fmt = detect_format(path) if fmt in (None, "", "auto") else fmt
+        if self.fmt not in PARSERS:
+            raise ValueError(f"querylog_format must be adguard, pihole or auto, not {fmt!r}")
+        self.parse = PARSERS[self.fmt]
         self.poll = poll_seconds
         self.offset = os.path.getsize(path) if os.path.exists(path) else 0
         self._head = self._read_head()
@@ -89,7 +134,7 @@ class QueryLogFollower:
                 if not raw.endswith(b"\n"):
                     break  # partial line: wait for the rest
                 self.offset += len(raw)
-                parsed = parse_line(raw.decode("utf-8", "replace").strip())
+                parsed = self.parse(raw.decode("utf-8", "replace").strip())
                 if not parsed:
                     continue
                 ip, host, qtype = parsed

@@ -21,10 +21,11 @@ DEFAULTS = {
     "upstream": "127.0.0.1",   # on the Pi this is AdGuard Home (e.g. 127.0.0.1:5300)
     "upstream_port": 53,
     "dns_timeout": 2.0,
-    # Shadow mode: don't serve DNS at all; score AdGuard's query log instead.
-    # AdGuard keeps port 53, so Ghostwall can never break your DNS.
+    # Shadow mode: don't serve DNS at all; score AdGuard's or Pi-hole's query log
+    # instead. The DNS server keeps port 53, so Ghostwall can never break your DNS.
     "shadow": False,
     "querylog": "/opt/AdGuardHome/data/querylog.json",
+    "querylog_format": "auto",      # "adguard" (querylog.json), "pihole" (pihole.log) or "auto"
     "dns_host6": "::",              # IPv6 listener (UDP+TCP); set null to disable
     "tcp_timeout": 5,
     # If the primary upstream (AdGuard) is down, answer from these instead of

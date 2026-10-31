@@ -1,0 +1,27 @@
+name: Bug or false positive
+description: Something broke, or Ghostwall flagged a domain it shouldn't have
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What happened
+      options: [Install or update failed, A false positive, Missed something it should catch, Dashboard or Telegram problem, Other]
+    validations: {required: true}
+  - type: input
+    id: setup
+    attributes:
+      label: Your setup
+      description: DNS server and how it is installed, OS, CPU. Example "AdGuard Home in Docker, Raspberry Pi OS 12, Pi 4" or "Pi-hole native, Ubuntu 24.04 VM, x86_64"
+    validations: {required: true}
+  - type: input
+    id: version
+    attributes:
+      label: Ghostwall version or commit
+      description: "`git -C <your clone> log -1 --oneline`, or the release tag"
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: What you did and what you saw. For a false positive, paste the alert line from events.jsonl (rename devices if you like). For an install problem, paste the installer output and `journalctl -u ghostwall-dns -n 30`.
+      render: text
+    validations: {required: true}

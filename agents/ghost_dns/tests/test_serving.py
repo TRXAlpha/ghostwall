@@ -19,7 +19,7 @@ from devices import DeviceMap
 from enforce import Enforcer, NullBackend
 from events import EventLog
 from resolver import Resolver
-from shadow import QueryLogFollower, parse_line
+from shadow import QueryLogFollower, detect_format, parse_line, parse_pihole_line
 from state import GhostState
 
 ANSWER_IP = "1.2.3.4"
@@ -316,6 +316,43 @@ class ShadowTests(Base):
         open(self.log, "w").close()                       # rotated
         self._write({"IP": "127.0.0.1", "QH": "q.example", "QT": "A"})
         self.assertEqual(f.poll_once(), 1)
+
+    def test_parse_pihole_line(self):
+        self.assertEqual(parse_pihole_line("Oct 31 12:00:00 dnsmasq[812]: query[AAAA] Example.COM from 192.168.1.10"),
+                         ("192.168.1.10", "example.com", "AAAA"))
+        # log-queries=extra: serial and client/port before the query
+        self.assertEqual(parse_pihole_line("Oct 31 12:00:00 dnsmasq[812]: 7 fd00::5/41234 query[A] x.example from fd00::5"),
+                         ("fd00::5", "x.example", "A"))
+        for other in ("Oct 31 12:00:00 dnsmasq[812]: forwarded x.example to 1.1.1.1",
+                      "Oct 31 12:00:00 dnsmasq[812]: reply x.example is 93.184.216.34",
+                      "Oct 31 12:00:00 dnsmasq[812]: gravity blocked ads.example is 0.0.0.0", ""):
+            self.assertIsNone(parse_pihole_line(other))
+
+    def test_detect_format(self):
+        self.assertEqual(detect_format(self.log), "adguard")             # empty .json
+        ph = os.path.join(self.dir, "pihole.log")
+        self.assertEqual(detect_format(ph), "pihole")                    # absent, by name
+        with open(ph, "w") as f:
+            f.write("Oct 31 12:00:00 dnsmasq[812]: query[A] a.example from 10.0.0.2\n")
+        other = os.path.join(self.dir, "dns.txt")
+        os.replace(ph, other)
+        self.assertEqual(detect_format(other), "pihole")                 # by content
+        self.assertEqual(detect_format(os.path.join(self.dir, "nothing.txt")), "adguard")
+
+    def test_follows_pihole_log(self):
+        ph = os.path.join(self.dir, "pihole.log")
+        open(ph, "w").close()
+        self.r.scorer = FakeScorer(0.7)
+        f = QueryLogFollower(self.r, ph)
+        self.assertEqual(f.fmt, "pihole")
+        with open(ph, "a") as fh:
+            fh.write("Oct 31 12:00:00 dnsmasq[812]: query[A] new.example from 127.0.0.1\n"
+                     "Oct 31 12:00:00 dnsmasq[812]: forwarded new.example to 1.1.1.1\n"
+                     "Oct 31 12:00:00 dnsmasq[812]: reply new.example is 93.184.216.34\n")
+        self.assertEqual(f.poll_once(), 1)
+        self.assertEqual([e["domain"] for e in self.read_events()], ["new.example"])
+        with self.assertRaises(ValueError):
+            QueryLogFollower(self.r, ph, fmt="bind9")
 
     def test_missing_log_warns_once(self):
         f = QueryLogFollower(self.r, os.path.join(self.dir, "absent.json"))

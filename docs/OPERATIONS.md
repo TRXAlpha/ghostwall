@@ -10,7 +10,7 @@ All paths assume the installer's layout (`/opt/ghostwall`).
 
 | Path | What |
 |---|---|
-| `/etc/ghostwall/ghostwall.env` | AdGuard paths and restart command, dashboard bind address |
+| `/etc/ghostwall/ghostwall.env` | which DNS server and where its log is, dashboard address and password |
 | `/etc/ghostwall/fw_bot.env`, `/etc/ghostwall/owner.json` | Telegram token, button-signing secret, your chat id |
 | `/opt/ghostwall/agents/ghost_dns/ghost_dns.json` | ghost-dns config (written by `go_shadow.sh`) |
 | `/opt/ghostwall/agents/ghost_dns/events.jsonl` | every alert, one JSON object per line |
@@ -27,12 +27,26 @@ All paths assume the installer's layout (`/opt/ghostwall`).
 
 ## Install
 
-See the [README](../README.md#install-shadow-mode). If AdGuard Home is not a standard
-install in `/opt/AdGuardHome`, set `ADGUARD_YAML`, `ADGUARD_QUERYLOG` and
-`ADGUARD_RESTART` in `ghostwall.env` first (Docker example inside the file). AdGuard's
-query log must be enabled (Settings → General settings → Query logs). AdGuard writes
-the log in batches (every 1,000 queries by default, `querylog.size_memory`), so
-alerts can lag on a quiet network.
+See the [README](../README.md#install). The installer finds AdGuard Home (native,
+snap or Docker) or Pi-hole (native, or Docker with `/var/log/pihole` mounted) and writes
+what it found to `/etc/ghostwall/ghostwall.env`. If it guesses wrong, edit that file
+and re-run, or choose up front:
+
+```bash
+sudo DNS_SOURCE=adguard ADGUARD_YAML=/srv/adguard/conf/AdGuardHome.yaml \
+     ADGUARD_QUERYLOG=/srv/adguard/work/data/querylog.json \
+     ADGUARD_RESTART="docker restart adguard" ./install.sh
+sudo DNS_SOURCE=pihole PIHOLE_LOG=/srv/pihole/log/pihole.log ./install.sh
+```
+
+**AdGuard Home:** the query log must be on (Settings → General settings → Query logs).
+AdGuard keeps `querylog.size_memory` queries in memory before writing them (1,000 by
+default), which delayed alerts by hours on a home network. The installer lowers it to
+10 (`ADGUARD_FLUSH_EVERY` in `ghostwall.env`; `0` leaves it alone), keeps a backup of
+`AdGuardHome.yaml` next to it, and restarts AdGuard once (a few seconds without DNS).
+
+**Pi-hole:** Ghostwall reads `/var/log/pihole/pihole.log`, which Pi-hole writes as
+queries happen, so there is no delay and nothing in Pi-hole is changed.
 
 To update later: `git pull && sudo ./install.sh`.
 
@@ -89,11 +103,18 @@ HMAC-signed.
 `/fw` messages from your bot to `dispatch.Dispatcher`: `Dispatcher.text(text)` returns
 the reply and `Dispatcher.callback(query)` handles alert buttons.
 
-## Reaching the dashboard over Tailscale
+## Dashboard access
 
-Set `GHOSTWALL_WEB_BIND` in `ghostwall.env` to the Pi's Tailscale IP
-(`tailscale ip -4`) and `sudo systemctl restart ghostwall-web`. The dashboard has no
-login, so never bind it to a LAN or public address.
+The installer binds the dashboard to all addresses (`GHOSTWALL_WEB_BIND=0.0.0.0`) with
+a generated password (`GHOSTWALL_WEB_PASSWORD`, user `ghostwall`); both are in
+`/etc/ghostwall/ghostwall.env`. Change either, then `sudo systemctl restart ghostwall-web`.
+
+- **Only from your tailnet:** set `GHOSTWALL_WEB_BIND` to the box's Tailscale IP
+  (`tailscale ip -4`).
+- **Only from the box itself:** `127.0.0.1`, then `ssh -L 8088:127.0.0.1:8088 <box>`.
+  Loopback is the only bind that may run without a password.
+- It is plain HTTP: fine on a home LAN or tailnet, never expose it to the internet.
+  Actions are accepted only as JSON from the dashboard's own origin.
 
 ## Going inline (Ghostwall answers DNS)
 
@@ -169,9 +190,10 @@ whole network; read it fully first, and keep the router's admin page open.
 
 | Symptom | Check |
 |---|---|
-| No events at all | `curl -s 127.0.0.1:5380/status`: `stats.queries` should rise over time. If not, `journalctl -u ghostwall-dns -n 30`; a `querylog not found` warning means `ADGUARD_QUERYLOG` is wrong or the query log is off. On a quiet network, wait for AdGuard's next batch write. No events with rising `queries` just means nothing suspicious. |
+| No events at all | `curl -s 127.0.0.1:5380/status`: `stats.queries` should rise over time. If not, `journalctl -u ghostwall-dns -n 30`; a `querylog not found` warning means the log path in `ghostwall.env` is wrong or the query log is off. AdGuard: `size_memory` under `querylog:` in `AdGuardHome.yaml` should be small (re-run the installer). No events with rising `queries` just means nothing suspicious. |
 | Too many alerts | allowlist, raise `recommend_threshold`, replay to compare |
-| Dashboard won't load | `systemctl status ghostwall-web`; check `GHOSTWALL_WEB_BIND` |
+| Dashboard won't load | `systemctl status ghostwall-web`; check `GHOSTWALL_WEB_BIND`; any bind but loopback needs `GHOSTWALL_WEB_PASSWORD`. Ubuntu with ufw: `sudo ufw allow 8088/tcp` |
+| Forgot the dashboard password | `sudo grep PASSWORD /etc/ghostwall/ghostwall.env` |
 | Telegram silent | `journalctl -u ghostwall-fw-bot -n 50`; token, chat id, file permissions |
 | Telegram `409 Conflict` | another process polls the same token; see "Already running a bot" |
 | No DNS (inline) | `sudo bash .../go_shadow.sh` puts AdGuard back on :53 |
@@ -184,13 +206,8 @@ whole network; read it fully first, and keep the router's admin page open.
 - **Undo gateway mode:** `sudo ghostwall-breakglass` (removes the `ghostwall` table,
   restores sysctl, prints the router steps), then
   `sudo systemctl disable --now dnsmasq` and re-enable DHCP and IPv6 RA on the router.
-- **Uninstall:**
-
-  ```bash
-  sudo systemctl disable --now ghostwall-dns ghostwall-web ghostwall-fw-bot ghostwall-feed.timer
-  sudo rm /etc/systemd/system/ghostwall-*.service /etc/systemd/system/ghostwall-feed.timer
-  sudo systemctl daemon-reload
-  sudo rm -rf /opt/ghostwall /etc/ghostwall /var/lib/ghostwall && sudo userdel ghostwall
-  ```
-
-  In shadow mode nothing else was changed; AdGuard is untouched.
+- **Uninstall:** `sudo /opt/ghostwall/uninstall.sh` (keeps `/etc/ghostwall`), or add
+  `--purge` to remove settings, the threat feed and the `ghostwall` user too. If inline
+  mode was on, it hands port 53 back to AdGuard first. The only change to your DNS
+  server is AdGuard's smaller query-log buffer, which is harmless to keep; the original
+  `AdGuardHome.yaml` is saved next to it as `AdGuardHome.yaml.bak-ghostwall-*`.

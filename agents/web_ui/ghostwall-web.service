@@ -7,7 +7,8 @@ Wants=network-online.target
 Type=simple
 User=ghostwall
 WorkingDirectory=/opt/ghostwall/agents/web_ui
-# The dashboard has no login: bind it to 127.0.0.1 or a Tailscale IP, never the LAN.
+# Bind address and password come from ghostwall.env. Any address other than loopback
+# needs GHOSTWALL_WEB_PASSWORD (the app refuses to start without one).
 Environment=GHOSTWALL_WEB_BIND=127.0.0.1
 EnvironmentFile=-/etc/ghostwall/ghostwall.env
 ExecStart=/opt/ghostwall/.venv/bin/python app.py --bind ${GHOSTWALL_WEB_BIND} --port 8088

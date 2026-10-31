@@ -2,7 +2,7 @@
 
 Must stay byte-for-byte compatible with:
   - trm/data.py          (the TRM training tokenizer: last 64 bytes, pad=0, unk=1)
-  - agents/dns_scorer/scorer.py (the Pi inference copy)
+  - research/dns_scorer/scorer.py (the first, standalone Pi inference copy)
 
 Both the ONNX TRM model and the numpy logistic-regression scorer consume these
 exact token ids, so do not change the vocab or the mapping without re-exporting

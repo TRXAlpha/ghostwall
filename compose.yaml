@@ -1,0 +1,42 @@
+# Ghostwall + AdGuard Home on any Docker host: a VM, a NAS, a mini PC or a Pi.
+#
+#   docker compose up -d --build
+#
+# 1. Open http://<host>:3000 and finish AdGuard's setup (keep its query log on).
+# 2. Restart AdGuard once so it picks up Ghostwall's faster log setting:
+#      docker compose restart adguardhome
+# 3. Point your router's DNS (or one test device) at <host>.
+# 4. Dashboard: http://<host>:8088, user ghostwall, password from:
+#      docker compose logs ghostwall | grep password
+#
+# Already run AdGuard Home or Pi-hole in Docker? Use only the ghostwall service and
+# mount your existing folders instead (README.md, "Docker").
+services:
+  adguardhome:
+    image: adguard/adguardhome:latest
+    container_name: adguardhome
+    restart: unless-stopped
+    ports:
+      - "${DNS_PORT:-53}:53/tcp"
+      - "${DNS_PORT:-53}:53/udp"
+      - "3000:3000/tcp"   # setup wizard (and the admin UI if you keep port 3000)
+      - "8080:80/tcp"     # the admin UI if you choose port 80 in the wizard
+    volumes:
+      - ./adguard/work:/opt/adguardhome/work
+      - ./adguard/conf:/opt/adguardhome/conf
+
+  ghostwall:
+    build: .
+    image: ghostwall:local
+    container_name: ghostwall
+    restart: unless-stopped
+    depends_on: [adguardhome]
+    ports:
+      - "8088:8088"
+    environment:
+      GHOSTWALL_QUERYLOG: /adguard/work/data/querylog.json
+      # GHOSTWALL_WEB_PASSWORD: choose-one   # default: generated and printed in the logs
+    volumes:
+      - ./adguard/work:/adguard/work:ro
+      - ./adguard/conf:/adguard/conf       # writable only to lower AdGuard's log buffer
+      - ./ghostwall-data:/data

@@ -1,0 +1,14 @@
+# Only what the image needs (see Dockerfile).
+*
+!requirements.txt
+!ghostwall/models
+!agents/ghost_dns
+!agents/web_ui
+!docker
+**/__pycache__
+**/state.json
+**/events.jsonl
+**/resolved_ips.jsonl
+**/queries.log
+**/threat_feed.txt
+**/ghost_dns.json

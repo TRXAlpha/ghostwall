@@ -1,11 +1,14 @@
+# Project metadata only. Ghostwall is installed with install.sh or Docker, not pip.
 [project]
-name = "ai-firewall-trm"
-version = "0.1.0"
-description = "Lightweight AI firewall pipeline with TRM/CTM-friendly adapters."
+name = "ghostwall"
+version = "0.2.0b1"
+description = "Local-first AI DNS firewall: spots infected devices from AdGuard Home or Pi-hole query logs."
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Morogan Christian" }]
 requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "onnxruntime>=1.16"]
 
-[tool.setuptools]
-package-dir = {"" = "src"}
-
-[tool.setuptools.packages.find]
-where = ["src"]
+[project.urls]
+Homepage = "https://github.com/TRXAlpha/ghostwall"
+Issues = "https://github.com/TRXAlpha/ghostwall/issues"

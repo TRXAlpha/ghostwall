@@ -13,7 +13,8 @@ Detect, and optionally stop, the network side of a compromised home device:
 - **DNS filter bypass**: a device using DNS-over-HTTPS to skip the LAN resolver.
 - **Known-bad destinations**: phishing and malware domains on public lists.
 
-Constraints: runs on a Raspberry Pi CPU in well under 1 GB of RAM; no traffic or
+Constraints: runs on a Raspberry Pi CPU (or any small x86_64/arm64 box or VM) in well
+under 1 GB of RAM; no traffic or
 telemetry leaves the network; every decision is explained; and it must never be able
 to silently break the network. That last one drives most of the design.
 
@@ -21,8 +22,8 @@ to silently break the network. That last one drives most of the design.
 
 | | Shadow mode (recommended) | Inline mode |
 |---|---|---|
-| Who answers DNS | AdGuard Home on :53 | ghost-dns on :53, AdGuard behind it on :5300 |
-| What ghost-dns sees | AdGuard's `querylog.json`, tailed | every query, live |
+| Who answers DNS | AdGuard Home or Pi-hole on :53 | ghost-dns on :53, AdGuard behind it on :5300 |
+| What ghost-dns sees | AdGuard's `querylog.json` or Pi-hole's `pihole.log`, tailed | every query, live |
 | Can it block | no | yes, once learning is off |
 | If ghost-dns crashes | nothing happens to DNS | DNS stops for every device |
 
@@ -190,5 +191,8 @@ Both are tested on crafted and recorded traffic only.
   `ghostwall-breakglass` removes the nftables table and restores sysctl.
 - Inputs that reach the kernel or the filesystem are validated: IPs before `nft`,
   event ids before capture writes, callback buttons by HMAC with a constant-time check.
-- The control API, capture API and dashboard have no authentication by design and
-  must stay on loopback or a private tailnet.
+- The control API and capture API have no authentication by design and listen on
+  loopback only. The dashboard needs a password (HTTP Basic, constant-time compare) on
+  any address but loopback and refuses to start without one; it accepts actions only
+  as JSON from its own origin, and without a password it answers only IP or
+  `localhost` Host headers, which stops DNS rebinding.

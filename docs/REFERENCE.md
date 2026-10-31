@@ -61,8 +61,9 @@ The most useful keys:
 
 | Key | Default | Meaning |
 |---|---|---|
-| `shadow` | `false` (installer: `true`) | score AdGuard's query log instead of serving DNS |
-| `querylog` | `/opt/AdGuardHome/data/querylog.json` | the log followed in shadow mode |
+| `shadow` | `false` (installer: `true`) | score the DNS server's query log instead of serving DNS |
+| `querylog` | `/opt/AdGuardHome/data/querylog.json` | the log followed in shadow mode: AdGuard's `querylog.json` or Pi-hole's `pihole.log` |
+| `querylog_format` | `"auto"` | `"adguard"`, `"pihole"`, or `"auto"` (from the file's first line, else its name) |
 | `learning` | `true` | alerts only; nothing is blocked |
 | `enforce` | `"null"` | `"nft"` lets isolate and lockdown change nftables |
 | `dns_host`, `dns_port` | `127.0.0.1`, `53` | inline listener (IPv4); `dns_host6` `"::"` for IPv6, `null` to disable |
