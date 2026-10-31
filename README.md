@@ -106,9 +106,9 @@ docker compose up -d --build
 4. Dashboard: `http://<host>:8088`, user `ghostwall`, password from
    `docker compose logs ghostwall | grep password`.
 
-Port 53 already taken on Ubuntu? That is `systemd-resolved`; AdGuard's
-[docs](https://github.com/AdguardTeam/AdGuardHome/wiki/Docker#resolved-daemon) show how
-to free it. Already running AdGuard Home or Pi-hole in Docker? Use only the `ghostwall`
+Port 53 already taken on Ubuntu? That is `systemd-resolved`; the "resolved" section of
+AdGuard's [Docker docs](https://github.com/AdguardTeam/AdGuardHome/wiki/Docker) shows
+how to free it. Already running AdGuard Home or Pi-hole in Docker? Use only the `ghostwall`
 service and mount your folders instead (Pi-hole: its container must mount
 `/var/log/pihole` from the host too, e.g. `./pihole/log:/var/log/pihole`):
 
