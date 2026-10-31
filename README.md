@@ -108,7 +108,9 @@ docker compose up -d --build
 
 Port 53 already taken on Ubuntu? That is `systemd-resolved`; the "resolved" section of
 AdGuard's [Docker docs](https://github.com/AdguardTeam/AdGuardHome/wiki/Docker) shows
-how to free it. Already running AdGuard Home or Pi-hole in Docker? Use only the `ghostwall`
+how to free it. If every alert names the same `172.x.x.x` device, AdGuard isn't seeing
+your clients' real addresses (lookups from the Docker host itself always look like
+that); give the `adguardhome` service `network_mode: host` and remove its `ports:`. Already running AdGuard Home or Pi-hole in Docker? Use only the `ghostwall`
 service and mount your folders instead (Pi-hole: its container must mount
 `/var/log/pihole` from the host too, e.g. `./pihole/log:/var/log/pihole`):
 

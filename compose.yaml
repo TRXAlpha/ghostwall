@@ -14,7 +14,6 @@
 services:
   adguardhome:
     image: adguard/adguardhome:latest
-    container_name: adguardhome
     restart: unless-stopped
     ports:
       - "${DNS_PORT:-53}:53/tcp"
@@ -28,7 +27,6 @@ services:
   ghostwall:
     build: .
     image: ghostwall:local
-    container_name: ghostwall
     restart: unless-stopped
     depends_on: [adguardhome]
     ports:
