@@ -63,10 +63,13 @@ An alert, as written to `events.jsonl` and sent to Telegram:
 Internal names (`*.local`, `*.ts.net`, single labels, `_service` records) are never
 scored, and repeat alerts for the same device and domain are collapsed to one per day.
 
-**How well.** On held-out 2024–2025 data, the models catch about 61% of algorithmically
-generated (DGA) domains when 1% of normal domains are flagged, and 47% at 0.2%. On a
-home network that alone would be noisy, so a plain score only alerts for names new to
-your network, and the bursts, tunnels, beacons, phishing list and DoH rules do the rest.
+**How well.** Trained on 2017–2019 and tested on 2024–2025, the models catch about 61%
+of algorithmically generated (DGA) domains when 1% of normal domains are flagged, and
+47% at 0.2%. Counting only normal names that never appeared in training, which are
+closer to what Ghostwall alerts on, the alert threshold flags about 2% of them and the
+block threshold 0.4%. That alone would be noisy, so a plain score only alerts for names
+new to your network, and the bursts, tunnels, beacons, phishing list and DoH rules do
+the rest.
 Replaying 12.9 days of the author's network (115,549 queries) gave 17 alerts: 4 test
 lookups the author made, 3 devices using DNS-over-HTTPS, 9 random-looking ad-redirect
 and pop-up style domains on the author's computers and phone, and 1 false positive (a
@@ -111,7 +114,11 @@ docker compose up -d --build
 2. `docker compose restart adguardhome` once, so it picks up the faster log setting.
 3. Point your router's DNS (or one test device) at the host.
 4. Dashboard: `http://<host>:8088`, user `ghostwall`, password from
-   `docker compose logs ghostwall | grep password`.
+   `docker compose exec ghostwall cat /data/web_password`.
+
+The Ghostwall container keeps one capability (`DAC_OVERRIDE`, to read AdGuard's log), a
+read-only filesystem and `no-new-privileges`; copy those lines from `compose.yaml` if
+you write your own service.
 
 Port 53 already taken on Ubuntu? That is `systemd-resolved`; the "resolved" section of
 AdGuard's [Docker docs](https://github.com/AdguardTeam/AdGuardHome/wiki/Docker) shows
@@ -187,14 +194,14 @@ devices ──DNS──▶ AdGuard Home or Pi-hole ──▶ internet
 `ghost-dns` is the decision core. It scores the registrable part of each name with two
 models and averages them: a ~108k-parameter recursive neural net (ONNX) and a hashed
 character n-gram logistic regression (pure numpy). The neural net is the better of the
-two at low false-positive rates (62% vs 55% caught at 1%); the average ranks best
-overall. Then it runs the behavioural detectors. In inline mode the same core answers
+two at low false-positive rates (62% vs 55% caught at 1%; 58% vs 51% on names unseen
+in training); the average ranks best overall. Then it runs the behavioural detectors. In inline mode the same core answers
 DNS itself, with AdGuard as its upstream, and can sinkhole.
 Full design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). API, event format and
 config keys: [docs/REFERENCE.md](docs/REFERENCE.md).
 
 Without onnxruntime (no build for your platform, e.g. 32-bit ARM), scoring falls back
-to the n-gram model alone, which catches about 6 points fewer DGA names at the same
+to the n-gram model alone, which catches about 5 points fewer DGA names at the same
 false-positive rate.
 
 ## Limits
@@ -245,7 +252,7 @@ agents/fw_bot/      Telegram alerts and /fw commands
 agents/ghost_flow/  connection inspector (gateway mode)
 agents/capture/     per-device pcap ring + freeze on alert (gateway mode)
 agents/netconf/     generator for the Pi-as-gateway configs (dnsmasq, nftables, sysctl)
-agents/dga_eval/    model evaluation scripts and results
+agents/dga_eval/    evaluation of the shipped models (eval_shipped.py -> results_shipped.md)
 ghostwall/          shipped models + the numpy LR trainer
 trm/                neural-net training code
 ```

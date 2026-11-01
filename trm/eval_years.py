@@ -10,8 +10,9 @@ def tpr_at_fpr(p, y, f):
     thr = np.quantile(p[y == 0], 1 - f); return float((p[y == 1] >= thr).mean())
 
 def main(run, n_per=300_000, years=range(20, 26)):
-    ck = torch.load(f"runs/{run}/best.pt", map_location="cuda")
-    m = TRM(**ck["cfg"]).cuda(); m.load_state_dict(ck["state"]); m.eval()
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    ck = torch.load(f"runs/{run}/best.pt", map_location=dev)
+    m = TRM(**ck["cfg"]).to(dev); m.load_state_dict(ck["state"]); m.eval()
     rng = np.random.default_rng(1); rows = []; allp = []; ally = []
     for y in years:
         T, L, Y = [], [], []
@@ -20,7 +21,7 @@ def main(run, n_per=300_000, years=range(20, 26)):
             i = np.sort(rng.choice(len(lab), min(n_per, len(lab)), replace=False))
             T.append(np.asarray(tok[i])); L.append(ln[i]); Y.append(lab[i])
         T, L, Y = map(np.concatenate, (T, L, Y))
-        p = evaluate(m, T, L, Y)
+        p = evaluate(m, T, L, Y, dev=dev)
         r = metrics(p, Y); r.update(year=2000 + y, auc=float(roc_auc_score(Y, p)),
                                     tpr_1=tpr_at_fpr(p, Y, 0.01), tpr_01=tpr_at_fpr(p, Y, 0.001))
         rows.append(r); allp.append(p); ally.append(Y)

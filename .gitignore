@@ -73,5 +73,5 @@ agents/hub/
 agents/fw_bot/integrate_brief.py
 agents/fw_bot/integrate_ghost_bot.py
 
-# pickled eval models: rebuilt by agents/dga_eval/train_baselines.py, never shipped
-agents/dga_eval/models/*.joblib
+# pickled models from experiments: never shipped
+*.joblib

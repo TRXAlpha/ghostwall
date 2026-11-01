@@ -42,11 +42,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t ghostwall:ci .
-      - name: smoke test (follows a fake AdGuard log, scores a query, dashboard needs the password)
+      - name: smoke test (locked down as in compose.yaml; follows a fake AdGuard log, scores a query, dashboard needs the password)
         run: |
           mkdir -p work/data data
           : > work/data/querylog.json
-          docker run -d --name gw -p 8088:8088 -e GHOSTWALL_WEB_PASSWORD=ci-pass \
+          docker run -d --name gw -p 8088:8088 \
+            --read-only --tmpfs /tmp --cap-drop ALL --cap-add DAC_OVERRIDE --security-opt no-new-privileges \
             -v "$PWD/work:/adguard/work:ro" -v "$PWD/data:/data" ghostwall:ci
           queries() { docker exec gw python -c "import json,urllib.request; print(json.load(urllib.request.urlopen('http://127.0.0.1:5380/status'))['stats']['queries'])"; }
           for i in $(seq 60); do queries >/dev/null 2>&1 && break; sleep 1; done
@@ -55,6 +56,8 @@ jobs:
           docker exec gw python -c "import json,urllib.request; s=json.load(urllib.request.urlopen('http://127.0.0.1:5380/status')); print(s); assert s['shadow'] and s['stats']['queries'] == 1"
           grep kjqwehdzxklqwpe.biz data/events.jsonl
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8088/)" = 401
-          test "$(curl -s -o /dev/null -w '%{http_code}' -u ghostwall:ci-pass http://127.0.0.1:8088/api/events)" = 200
+          PASS=$(sudo cat data/web_password)
+          test "$(curl -s -o /dev/null -w '%{http_code}' -u "ghostwall:$PASS" http://127.0.0.1:8088/api/events)" = 200
+          if docker logs gw 2>&1 | grep -qF "$PASS"; then echo "password leaked into the logs"; exit 1; fi
       - if: failure()
         run: docker logs gw

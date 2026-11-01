@@ -75,7 +75,7 @@ overrides any of them. The most useful keys:
 | `upstream_fallbacks` | `["9.9.9.9"]` | used when the upstream is down; `[]` to disable |
 | `block_response` | `"sinkhole"` | or `"nxdomain"`; sinkhole answers `sinkhole_ip4` / `sinkhole_ip6` |
 | `recommend_threshold` | `0.96` | single-name alert score (~1% false positives) |
-| `block_threshold` | `0.995` | single-name block score (~0.2% false positives) |
+| `block_threshold` | `0.995` | single-name block score (~0.2% false positives; ~0.4% on names never seen in training) |
 | `corroborated_threshold` | `0.80` | alert score when the TLD is rarely legitimate |
 | `suspect_only_new` | `true` | plain score alerts only for names new to this network |
 | `novelty_days` | `7` | how long a name counts as new |

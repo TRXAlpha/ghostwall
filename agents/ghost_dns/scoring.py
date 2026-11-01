@@ -64,14 +64,17 @@ class TRMModel:
         self.input_name = self.sess.get_inputs()[0].name
 
     def score(self, labels: list[str]) -> np.ndarray:
-        toks = strip_dot(encode(labels))
+        return self.score_tokens(strip_dot(encode(labels)))
+
+    def score_tokens(self, toks: np.ndarray) -> np.ndarray:
+        """Dot-stripped int64 token rows -> p_dga (used by agents/dga_eval)."""
         return self.sess.run(None, {self.input_name: toks})[0].astype(float)
 
 
 class LRModel:
     """Pure-numpy hashed char 1-3-gram logistic regression (no sklearn/scipy).
 
-    Reproduces agents/dga_eval/train_baselines.ngram_matrix @ coef + intercept
+    Reproduces ghostwall/train_lr.ngram_matrix @ coef + intercept
     exactly, so it matches lr_coef.npy / lr_meta.json trained for the Pi.
     """
 
@@ -84,10 +87,12 @@ class LRModel:
         self.ngram_max = int(meta.get("ngram_max", 3))
 
     def score(self, labels: list[str]) -> np.ndarray:
-        toks = strip_dot(encode(labels))
+        return self.score_tokens(strip_dot(encode(labels)))
+
+    def score_tokens(self, toks: np.ndarray) -> np.ndarray:
+        """Dot-stripped int64 token rows -> p_dga (used by agents/dga_eval)."""
         lengths = (toks != 0).sum(axis=1)
-        n = len(labels)
-        z = np.full(n, self.intercept, dtype=np.float64)
+        z = np.full(len(toks), self.intercept, dtype=np.float64)
         width = toks.shape[1]
         for ng in range(1, self.ngram_max + 1):
             for j in range(width - ng + 1):

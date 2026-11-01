@@ -18,12 +18,18 @@ YAML=${GHOSTWALL_ADGUARD_YAML:-/adguard/conf/AdGuardHome.yaml}
 FLUSH=${ADGUARD_FLUSH_EVERY:-10}
 mkdir -p "$D"
 
+# The password is never printed: container logs are kept, shipped and pasted into issues.
 if [ -z "${GHOSTWALL_WEB_PASSWORD:-}" ]; then
-  [ -s "$D/web_password" ] || python -c 'import secrets; print(secrets.token_urlsafe(12))' > "$D/web_password"
+  if [ ! -s "$D/web_password" ]; then
+    (umask 077; python -c 'import secrets; print(secrets.token_urlsafe(12))' > "$D/web_password")
+  fi
   GHOSTWALL_WEB_PASSWORD=$(cat "$D/web_password")
   export GHOSTWALL_WEB_PASSWORD
+  echo "[ghostwall] dashboard on port 8088, user ghostwall, password in $D/web_password" \
+       "(docker compose exec ghostwall cat $D/web_password)"
+else
+  echo "[ghostwall] dashboard on port 8088, user ghostwall, password from GHOSTWALL_WEB_PASSWORD"
 fi
-echo "[ghostwall] dashboard on port 8088, user ghostwall, password: $GHOSTWALL_WEB_PASSWORD"
 
 # Config lives in /data so edits (thresholds, learning) survive image updates; the
 # container-specific keys are rewritten on every start.

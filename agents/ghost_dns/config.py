@@ -53,6 +53,8 @@ DEFAULTS = {
     #   >=0.90 -> flags ~2.0% of normal domains (would block 1 in 50 normal domains)
     #   >=0.96 -> ~1% false positives, ~61% of DGA caught
     #   >=0.995-> ~0.2% false positives, ~47% of DGA caught
+    # On normal names never seen in training the false positives about double (~2%,
+    # ~0.4%). agents/dga_eval/eval_shipped.py reproduces all of these.
     # A single score cannot do better, so the rest of the detection comes from the
     # behavioural/evidence detectors in detectors.py.
     "recommend_threshold": 0.96,

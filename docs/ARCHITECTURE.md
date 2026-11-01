@@ -131,30 +131,40 @@ Trained on 2017–2019 benign and DGA domains (the DRIFT eSLD dataset,
 2020–2025, to measure how well a model survives time rather than how well it fits one
 year. AUC falls from ~0.985 (2020) to ~0.963 (2025) for either model alone.
 
-On 50,000 benign plus 50,000 DGA domains from each of 2024 and 2025:
+On 50,000 benign plus 50,000 DGA domains from each of 2024 and 2025. About 45% of the
+benign test names (and 7% of the DGA ones) also occur in the training years, because
+popular sites don't change; "unseen" counts only the names whose scored label never
+appears in training. Those are closer to what Ghostwall alerts on, since a plain score
+only alerts for names new to your network.
 
-| Model | AUC | Caught at 1% false positives | at 0.1% |
+| Model | AUC (all / unseen) | Caught at 1% false positives (all / unseen) | at 0.1% (all / unseen) |
 |---|---|---|---|
-| n-gram LR alone (numpy fallback) | 0.963–0.965 | 54–55% | 32–35% |
-| TRM alone | 0.963–0.965 | 62% | 40–42% |
-| **mean of both (shipped)** | **0.969–0.971** | **59–61%** | **40–41%** |
+| n-gram LR alone (numpy fallback) | 0.96 / 0.96 | 54–55% / 50–52% | 32–35% / 27% |
+| TRM alone | 0.96 / 0.96 | 62% / 58–59% | 40–42% / 37–40% |
+| **mean of both (shipped)** | **0.97 / 0.97** | **59–61% / 55–57%** | **40–41% / 37–39%** |
 
 The TRM is the stronger single model at low false-positive rates; the mean ranks best
 overall, which matters for the burst and corroborated rules that use lower cut-offs.
-Thresholds on the shipped mean:
+Thresholds on the shipped mean (2024 and 2025 agree to within a point):
 
-| Score ≥ | Normal domains flagged | DGA domains caught |
+| Score ≥ | Normal domains flagged (all / unseen) | DGA domains caught |
 |---|---|---|
-| 0.60 | ~6.5% | ~88% |
-| 0.80 (burst, corroborated) | ~3.3% | ~77% |
-| 0.90 | ~2.0% | ~69% |
-| **0.96** (alert) | ~1% | ~61% |
-| **0.995** (block) | ~0.2% | ~47% |
+| 0.60 | ~6.5% / ~9% | ~88% |
+| 0.80 (burst, corroborated) | ~3.3% / ~5.3% | ~77% |
+| 0.90 | ~2.0% / ~3.5% | ~69% |
+| **0.96** (alert) | ~1% / ~2% | ~61% |
+| **0.995** (block) | ~0.2% / ~0.4% | ~47% |
 
-A single score cannot do better, so most of the detection value comes from the
-evidence and behaviour rules above: the threat feed, bursts, tunnelling, beacons and
-novelty. Evaluation code and results are in `agents/dga_eval/`; the LR trainer is
-`ghostwall/train_lr.py`; the TRM training code is in `trm/`.
+So on names it has never seen, one normal name in about 50 crosses the alert threshold
+and one in about 250 the block threshold. A single score cannot do better, so most of
+the detection value comes from the evidence and behaviour rules above: the threat feed,
+bursts, tunnelling, beacons and novelty.
+
+Reproduce: `agents/dga_eval/eval_shipped.py` writes
+[results_shipped.md](../agents/dga_eval/results_shipped.md) using the detector's own
+scoring code. The LR trainer is `ghostwall/train_lr.py` and the TRM training code is in
+`trm/`. Both need the DRIFT parquet files in `data/drift/`. The dataset is not
+redistributed here; see the paper for how to obtain it.
 
 ### Measured on a real network
 

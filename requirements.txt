@@ -12,6 +12,6 @@ onnxruntime>=1.16,<2     # CPU inference for the TRM DGA model
 # the dev box, where the inspector is driven by source.replay / read_pcap):
 #   NetfilterQueue>=1.1   ; sys_platform == "linux"
 #
-# Training code under trm/ and agents/dga_eval/ has heavier deps (torch,
-# scikit-learn, lightgbm, pyarrow) that the runtime does NOT need; install
-# those separately only if you retrain the models.
+# Retraining (trm/, ghostwall/train_lr.py) needs torch, scikit-learn, scipy and
+# pyarrow plus the DRIFT dataset (docs/ARCHITECTURE.md, "Models"); re-running
+# agents/dga_eval/eval_shipped.py needs the dataset and pyarrow. The runtime needs none of it.
