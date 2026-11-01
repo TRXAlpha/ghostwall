@@ -4,11 +4,36 @@ Loopback only, no auth (same trust model as the capture freeze API). Shares the
 one GhostState / Enforcer / DeviceMap with the resolver, so a change here takes
 effect on the resolver's next query. Every handler returns {"ok": true, ...} or
 a non-2xx {"ok": false, "error": ...}.
+
+No auth does not mean any caller: a web page in a browser on the same machine can
+reach loopback too. So a request must name a loopback Host (a DNS-rebinding page
+names its own domain), and a POST must be JSON (a cross-site form or a no-cors
+fetch cannot send that content type without a CORS preflight, which is never
+answered here).
 """
 from __future__ import annotations
 
+import ipaddress
 import json
+import urllib.parse
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+ENFORCEMENT_OFF = ('enforcement is off: isolation and lockdown need "enforce": "nft" and '
+                   'gateway mode (docs/OPERATIONS.md)')
+
+
+def loopback_host(host_header: str | None) -> bool:
+    """True for a missing Host or one naming loopback: 127.0.0.1:5380, [::1], localhost."""
+    if not host_header:
+        return True
+    host = urllib.parse.urlsplit("//" + host_header).hostname or ""
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 class ControlHandler(BaseHTTPRequestHandler):
@@ -30,6 +55,9 @@ class ControlHandler(BaseHTTPRequestHandler):
             n = 0
         if n <= 0:
             return {}
+        if n > 65536:  # every real request is a few bytes
+            self.close_connection = True
+            return {"__too_big__": True}
         raw = self.rfile.read(n)
         try:
             data = json.loads(raw or b"{}")
@@ -42,13 +70,24 @@ class ControlHandler(BaseHTTPRequestHandler):
 
     # -- dispatch ---------------------------------------------------------
     def do_GET(self):
-        if self.path == "/status":
+        if not loopback_host(self.headers.get("Host")):
+            self._send(403, {"ok": False, "error": "use 127.0.0.1"})
+        elif self.path == "/status":
             self._send(200, self._status())
         else:
             self._send(404, {"ok": False, "error": "not found"})
 
     def do_POST(self):
-        body = self._body()
+        body = self._body()  # read first: replying over unread bytes can reset the connection
+        if body.get("__too_big__"):
+            self._send(413, {"ok": False, "error": "request too large"})
+            return
+        if not loopback_host(self.headers.get("Host")):
+            self._send(403, {"ok": False, "error": "use 127.0.0.1"})
+            return
+        if (self.headers.get("Content-Type") or "").split(";")[0].strip().lower() != "application/json":
+            self._send(415, {"ok": False, "error": "send JSON (Content-Type: application/json)"})
+            return
         if body.get("__bad_json__"):
             self._send(400, {"ok": False, "error": "bad JSON"})
             return
@@ -67,7 +106,7 @@ class ControlHandler(BaseHTTPRequestHandler):
             self._send(404, {"ok": False, "error": "not found"})
             return
         try:
-            code, obj = fn() if self.path not in ("/status", "/lockdown") else (200, fn())
+            code, obj = fn() if self.path != "/status" else (200, fn())
         except _ApiError as e:
             self._send(e.code, {"ok": False, "error": e.message})
             return
@@ -80,20 +119,33 @@ class ControlHandler(BaseHTTPRequestHandler):
     def _status(self) -> dict:
         g = self.state["gstate"]
         dmap = self.state["devices"]
+        res = self.state.get("resolver")
+        seen = getattr(res, "last_seen", {})
         blocked = sorted(g.blocklist)
         devices = []
         for d in dmap.all():
             devices.append({
                 "name": d.name, "ip": d.ip, "mac": d.mac,
                 "isolated": g.is_isolated(d.name),
+                "last_seen": seen.get(d.ip),
                 "blocked_domains": blocked,
             })
-        res = self.state.get("resolver")
-        return {"ok": True, "devices": devices,
-                "lockdown": g.lockdown, "learning": g.learning,
-                "shadow": bool(getattr(res, "shadow", False)),
-                # counters since start; "queries" rising proves queries are being scored
-                "stats": dict(getattr(res, "stats", None) or {})}
+        out = {"ok": True, "devices": devices,
+               "lockdown": g.lockdown, "learning": g.learning,
+               "shadow": bool(getattr(res, "shadow", False)),
+               "source": getattr(res, "source", None),
+               "enforce": self.state["enforcer"].backend.name,
+               # counters since start; "queries" rising proves queries are being scored
+               "stats": dict(getattr(res, "stats", None) or {})}
+        scorer = getattr(res, "scorer", None)
+        if scorer is not None:
+            out["models"] = getattr(scorer, "backend", None)
+        feed = getattr(getattr(res, "det", None), "threat_feed", None)
+        if feed is not None:
+            n, mtime = feed.info()
+            out["feed"] = {"domains": n, "updated": datetime.fromtimestamp(mtime, timezone.utc)
+                           .strftime("%Y-%m-%dT%H:%M:%SZ") if mtime else None}
+        return out
 
     def _device(self, body):
         name = str(body.get("name", "")).strip()
@@ -101,17 +153,27 @@ class ControlHandler(BaseHTTPRequestHandler):
         if d is None:
             raise _ApiError(404, "unknown device")
         g = self.state["gstate"]
+        seen = getattr(self.state.get("resolver"), "last_seen", {})
         return 200, {"ok": True, "name": d.name, "ip": d.ip, "mac": d.mac,
                      "isolated": g.is_isolated(d.name),
+                     "last_seen": seen.get(d.ip),
                      "blocked_domains": sorted(g.blocklist)}
+
+    def _require_enforcement(self) -> None:
+        # The null backend would only record the wish; saying "isolated" for that is
+        # worse than refusing, because it looks like the device was cut off.
+        if self.state["enforcer"].backend.name == "null":
+            raise _ApiError(409, ENFORCEMENT_OFF)
 
     def _isolate(self, body):
         d = self._require_device(body)
+        self._require_enforcement()
         self.state["enforcer"].isolate(d.ip)
         self.state["gstate"].isolate(d.name)
         return 200, {"ok": True, "name": d.name, "isolated": True}
 
     def _release(self, body):
+        # Allowed without enforcement too, so state left by an older version can be cleared.
         d = self._require_device(body)
         self.state["enforcer"].release(d.ip)
         self.state["gstate"].release(d.name)
@@ -124,15 +186,21 @@ class ControlHandler(BaseHTTPRequestHandler):
         self.state["gstate"].allow(domain)
         return 200, {"ok": True, "domain": domain, "allowed": True}
 
-    def _lockdown(self) -> dict:
+    def _lockdown(self):
+        self._require_enforcement()
+        pi_ip = self.state["cfg"].get("pi_ip")
+        if not pi_ip:
+            raise _ApiError(409, 'set "pi_ip" (this box\'s LAN address) in ghost_dns.json first')
         g = self.state["gstate"]
         new = not g.lockdown
-        self.state["enforcer"].set_lockdown(new, self.state["cfg"].get("pi_ip", "192.168.1.20"))
+        self.state["enforcer"].set_lockdown(new, pi_ip)
         g.set_lockdown(new)
-        return {"ok": True, "lockdown": new}
+        return 200, {"ok": True, "lockdown": new}
 
     def _learning(self, body):
-        enabled = bool(body.get("enabled", False))
+        enabled = body.get("enabled")
+        if not isinstance(enabled, bool):
+            raise _ApiError(400, 'need {"enabled": true} or {"enabled": false}')
         self.state["gstate"].set_learning(enabled)
         return 200, {"ok": True, "learning": enabled}
 

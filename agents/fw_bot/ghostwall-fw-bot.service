@@ -11,8 +11,9 @@ WorkingDirectory=/opt/ghostwall/agents/fw_bot
 EnvironmentFile=/etc/ghostwall/fw_bot.env
 # --commands also polls Telegram for /fw commands and alert buttons. Remove it if
 # another process already polls this bot token (two pollers on one token conflict).
-ExecStart=/opt/ghostwall/.venv/bin/python fw_bot.py --owner-file /etc/ghostwall/owner.json --labels /var/lib/ghostwall/labels.jsonl --digest /var/lib/ghostwall/digest.jsonl --follow /opt/ghostwall/agents/ghost_dns/events.jsonl --commands
+ExecStart=/opt/ghostwall/.venv/bin/python fw_bot.py --owner-file /etc/ghostwall/owner.json --labels /var/lib/ghostwall/labels.jsonl --digest /var/lib/ghostwall/digest.jsonl --follow /var/lib/ghostwall/events.jsonl --commands
 StateDirectory=ghostwall
+StateDirectoryMode=0750
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true

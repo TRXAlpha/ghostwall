@@ -29,15 +29,19 @@ class EnforceTests(unittest.TestCase):
         self.assertIn("1h", call)
 
     def test_lockdown_toggle(self):
-        self.assertTrue(self.e.set_lockdown(True))
+        self.assertTrue(self.e.set_lockdown(True, "192.168.1.20"))
         self.assertTrue(self.e.lockdown)
         # second call to turn on is a no-op (stays on, no extra insert)
         inserts = [c for c in self.backend.calls if c[0] == "insert"]
-        self.e.set_lockdown(True)
+        self.e.set_lockdown(True, "192.168.1.20")
         self.assertEqual(len([c for c in self.backend.calls if c[0] == "insert"]),
                          len(inserts))
-        self.assertFalse(self.e.set_lockdown(False))
+        self.assertFalse(self.e.set_lockdown(False, "192.168.1.20"))
         self.assertFalse(self.e.lockdown)
+
+    def test_lockdown_needs_the_box_address(self):
+        with self.assertRaises(ValueError):
+            self.e.set_lockdown(True, None)
 
     def test_null_backend_touches_nothing(self):
         # NullBackend just appends to .calls; no subprocess / network.

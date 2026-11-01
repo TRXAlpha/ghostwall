@@ -9,5 +9,9 @@ crafted DNS name or log line change Ghostwall's state, read data they shouldn't,
 code, or break DNS. The dashboard (`agents/web_ui`) and the query-log parsers
 (`agents/ghost_dns/shadow.py`) are the most exposed parts.
 
-Out of scope: the control API on `127.0.0.1:5380` having no authentication (by design,
-loopback only), and anything that needs root on the box already.
+Out of scope: the control API on `127.0.0.1:5380` having no authentication (by design:
+loopback only, JSON only, loopback `Host` only), and anything that needs root on the box
+already. Getting past those three checks from a browser is in scope.
+
+The services run as the unprivileged `ghostwall` user; ghost-dns holds only
+`CAP_DAC_READ_SEARCH` (to read the DNS server's query log) and `CAP_NET_BIND_SERVICE`.

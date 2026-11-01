@@ -114,6 +114,11 @@ class ThreatFeed:
         self._maybe_reload(time.monotonic())   # report the real size, not a not-yet-loaded 0
         return len(self._domains)
 
+    def info(self) -> tuple[int, float]:
+        """(number of domains, file mtime or 0) for the status page."""
+        n = len(self)
+        return n, self._mtime
+
     def _maybe_reload(self, now: float) -> None:
         if not self.path or now - self._checked < self.recheck:
             return
@@ -281,7 +286,8 @@ class Detectors:
 
     def __init__(self, cfg: dict):
         self.threat_feed = ThreatFeed(cfg.get("threat_feed_path"))
-        self.doh = DohDetector(cfg.get("doh_ignore_clients", ["127.0.0.1", "::1", cfg.get("pi_ip", "")]))
+        self.doh = DohDetector(cfg.get("doh_ignore_clients",
+                                       [ip for ip in ("127.0.0.1", "::1", cfg.get("pi_ip")) if ip]))
         self.tunnel = TunnelDetector(min_distinct=int(cfg.get("tunnel_min_distinct", 30)),
                                      min_long=int(cfg.get("tunnel_min_long", 12)))
         self.beacon = BeaconDetector(min_samples=int(cfg.get("beacon_min_samples", 8)))

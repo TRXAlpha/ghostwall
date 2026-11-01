@@ -1,13 +1,13 @@
 # Project metadata only. Ghostwall is installed with install.sh or Docker, not pip.
 [project]
 name = "ghostwall"
-version = "0.2.0b1"
-description = "Local-first AI DNS firewall: spots infected devices from AdGuard Home or Pi-hole query logs."
+version = "0.2.0b2"
+description = "Spots infected devices on a home network from their DNS lookups, next to AdGuard Home or Pi-hole. Local-first."
 readme = "README.md"
 license = "MIT"
 authors = [{ name = "Morogan Christian" }]
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.24", "onnxruntime>=1.16"]
+dependencies = ["numpy>=1.24,<3", "onnxruntime>=1.16,<2"]
 
 [project.urls]
 Homepage = "https://github.com/TRXAlpha/ghostwall"

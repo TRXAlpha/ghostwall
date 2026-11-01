@@ -122,8 +122,9 @@ class Enforcer:
                               "{", ip, "}")
 
     # -- LAN lockdown -----------------------------------------------------
-    def set_lockdown(self, on: bool, pi_ip: str = "192.168.1.20") -> bool:
-        """Toggle the forward-chain lockdown rule. Returns the new state."""
+    def set_lockdown(self, on: bool, pi_ip: str) -> bool:
+        """Toggle the forward-chain lockdown rule; pi_ip (this box) stays reachable.
+        Returns the new state."""
         pi_ip = _valid_ip(pi_ip)
         with self._lock:
             if on and not self.lockdown:

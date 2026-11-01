@@ -7,34 +7,38 @@ import urllib.request
 
 from signing import make_callback
 
-ALERT_HEADER = "BLOCKED"
+
+def is_block(event: dict) -> bool:
+    return event.get("action") == "block"
 
 
 def format_alert(event: dict, count: int = 1) -> str:
-    """`BLOCKED · <device>` / `<domain> -> <dst ip>` / `Why:` / `Capture:`."""
+    """`BLOCKED · <device>` for a block, `ALERT · <device>` for anything Ghostwall only
+    flagged (shadow and learning mode), then the domain, `Why:` and the capture if any."""
     device = event.get("device", "unknown")
     domain = event.get("domain", "?")
-    dst = event.get("dst_ip") or "?"
     reasons = event.get("reasons") or [event.get("rule", "rule fired")]
-    why = "; ".join(str(r) for r in reasons)
-    capture = event.get("capture") or "none"
     lines = [
-        f"{ALERT_HEADER} · {device}" + (f" (x{count})" if count > 1 else ""),
-        f"{domain} \u2192 {dst}",
-        f"Why: {why}",
-        f"Capture: {capture}",
+        f"{'BLOCKED' if is_block(event) else 'ALERT'} · {device}" + (f" (x{count})" if count > 1 else ""),
+        domain + (f" → {event['dst_ip']}" if event.get("dst_ip") else ""),
+        "Why: " + "; ".join(str(r) for r in reasons),
     ]
+    if event.get("capture"):
+        lines.append(f"Capture: {event['capture']}")
     return "\n".join(lines)
 
 
 def inline_keyboard(event: dict, secret: bytes) -> list[list[dict]]:
-    """One row: [Unblock] [Keep blocked] [Isolate device] [Details]."""
+    """A block: [Unblock] [Keep blocked] [Isolate device] [Details].
+    An alert (nothing was blocked): [Trust domain] [Details]."""
     def btn(text, action):
         return {
             "text": text,
             "callback_data": make_callback(action, event["event_id"], secret),
         }
 
+    if not is_block(event):
+        return [[btn("Trust domain", "trust"), btn("Details", "details")]]
     return [[
         btn("Unblock", "unblock"),
         btn("Keep blocked", "keep"),

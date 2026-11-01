@@ -13,6 +13,11 @@ DGAISH = ["kjwqehdzxklqw.biz", "x7g2qophablz.top", "bexmnvoqeidu.xyz"]
 
 
 class ScoringTests(unittest.TestCase):
+    def test_onnxruntime_telemetry_is_off(self):
+        # onnxruntime >= 1.29 sends telemetry to Microsoft unless this is set before
+        # it is imported, which scoring.py does on import.
+        self.assertEqual(os.environ.get("ORT_DISABLE_TELEMETRY"), "1")
+
     def test_backends_available(self):
         s = scoring.Scorer()
         # On this repo both models ship; at minimum one backend must load.

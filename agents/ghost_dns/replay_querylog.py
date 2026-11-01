@@ -72,15 +72,22 @@ def parse_syslog_time(line: str) -> float | None:
     return ts
 
 
+def first_existing(*paths: str) -> str | None:
+    return next((p for p in paths if os.path.exists(p)), None)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--querylog", required=True, help="AdGuard querylog.json or Pi-hole pihole.log[.N.gz]")
     ap.add_argument("--format", choices=["auto", "adguard", "pihole"], default="auto")
-    ap.add_argument("--devices", default=None)
+    ap.add_argument("--devices", default=first_existing("/etc/ghostwall/devices.json"),
+                    help="device names (default: /etc/ghostwall/devices.json if present)")
     ap.add_argument("--max-lines", type=int, default=0, help="0 = all")
     ap.add_argument("--allowlist", default=os.path.join(HERE, "allowlist.txt"))
     ap.add_argument("--no-allowlist", action="store_true")
-    ap.add_argument("--feed", default=os.path.join(HERE, "threat_feed.txt"))
+    ap.add_argument("--feed", default=first_existing(os.path.join(HERE, "threat_feed.txt"),
+                                                     "/var/lib/ghostwall/threat_feed.txt") or "",
+                    help="threat feed (default: the installed one in /var/lib/ghostwall)")
     a = ap.parse_args()
 
     wd = tempfile.mkdtemp(prefix="ghostwall-replay-")

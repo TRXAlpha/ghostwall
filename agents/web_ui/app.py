@@ -90,8 +90,8 @@ def validate_action(payload: dict) -> tuple[str, dict]:
         if not DOMAIN_RE.match(domain):
             raise ValueError("valid domain required")
         body["domain"] = domain
-    if name == "learning":
-        body["enabled"] = bool(body.get("enabled"))
+    if name == "learning" and not isinstance(body.get("enabled"), bool):
+        raise ValueError("enabled must be true or false")
     return path, body
 
 
@@ -188,6 +188,16 @@ def make_handler(control_base: str, events_path: str, password: str | None = Non
                 self._json(404, {"ok": False, "error": "not found"})
 
         def do_POST(self):
+            # Read the body first: replying over unread bytes can reset the connection.
+            try:
+                n = int(self.headers.get("Content-Length", 0))
+            except ValueError:
+                n = 0
+            if n > 65536:
+                self.close_connection = True
+                self._json(413, {"ok": False, "error": "request too large"})
+                return
+            raw = self.rfile.read(n) if n > 0 else b""
             if not self._allowed():
                 return
             if self.path != "/api/action":
@@ -197,8 +207,9 @@ def make_handler(control_base: str, events_path: str, password: str | None = Non
                 self._json(403, {"ok": False, "error": "cross-origin request refused"})
                 return
             try:
-                n = int(self.headers.get("Content-Length", 0))
-                payload = json.loads(self.rfile.read(n) or b"{}")
+                payload = json.loads(raw or b"{}")
+                if not isinstance(payload, dict):
+                    raise ValueError("expected a JSON object")
                 path, body = validate_action(payload)
             except (ValueError, TypeError) as e:
                 self._json(400, {"ok": False, "error": str(e)})
@@ -207,7 +218,11 @@ def make_handler(control_base: str, events_path: str, password: str | None = Non
                 res = control_call(control_base, path, body, timeout=5)
                 self._json(200, res)
             except urllib.error.HTTPError as e:
-                self._json(e.code, {"ok": False, "error": e.reason})
+                try:  # pass on the control API's own explanation, e.g. why isolation is refused
+                    msg = json.loads(e.read()).get("error") or e.reason
+                except (ValueError, OSError, AttributeError):
+                    msg = e.reason
+                self._json(e.code, {"ok": False, "error": msg})
             except (urllib.error.URLError, OSError) as e:
                 self._json(503, {"ok": False, "error": f"resolver unreachable: {e}"})
 

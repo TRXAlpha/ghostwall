@@ -27,9 +27,19 @@ class FormatTests(unittest.TestCase):
 
     def test_format_missing_fields(self):
         text = format_alert({"device": "phone", "domain": "a.b", "event_id": "e1"})
-        self.assertIn("BLOCKED · phone", text)
-        self.assertIn("Capture: none", text)
+        self.assertEqual(text.split("\n")[:2], ["ALERT · phone", "a.b"])
+        self.assertNotIn("Capture", text)
         self.assertIn("Why: rule fired", text)
+
+    def test_shadow_alert_is_not_called_blocked(self):
+        # Shadow and learning mode only flag; the message must not claim a block.
+        evt = dict(EVENT, action="recommend", dst_ip=None, capture=None)
+        lines = format_alert(evt).split("\n")
+        self.assertEqual(lines[0], "ALERT · laptop")
+        self.assertEqual(lines[1], "xkjqwehz.biz")
+        kb = inline_keyboard(evt, SECRET)[0]
+        self.assertEqual([b["text"] for b in kb], ["Trust domain", "Details"])
+        self.assertEqual([parse_callback(b["callback_data"], SECRET)[0] for b in kb], ["trust", "details"])
 
     def test_keyboard_buttons_signed(self):
         kb = inline_keyboard(EVENT, SECRET)

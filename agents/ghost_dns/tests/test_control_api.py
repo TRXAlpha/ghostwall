@@ -75,15 +75,26 @@ class ControlClient:
         return self._call("/unblock", {"event_id": event_id, "domain": domain})
 
 
+class RecordingNft(NullBackend):
+    """Records calls like NullBackend but reports itself as the nft backend."""
+
+    @property
+    def name(self):
+        return "nft"
+
+
 class ControlApiTests(unittest.TestCase):
+    backend = NullBackend
+    extra_cfg: dict = {}
+
     def setUp(self):
         self.dir = tempfile.mkdtemp()
         self.cfg = config_mod.load_config(None, {
             "state_path": os.path.join(self.dir, "state.json"),
-            "control_port": 0,
+            "control_port": 0, **self.extra_cfg,
         })
         self.state = GhostState(self.cfg["state_path"])
-        self.enforcer = Enforcer(NullBackend())
+        self.enforcer = Enforcer(self.backend())
         self.devices = DeviceMap.from_json(
             [{"name": "dell", "ip": "192.168.1.30", "mac": "aa:bb:cc:dd:ee:01"}])
         self.server = ControlServer(self.cfg, self.state, self.enforcer, self.devices)
@@ -95,44 +106,85 @@ class ControlApiTests(unittest.TestCase):
     def tearDown(self):
         self.server.shutdown()
 
+    def _raw(self, path, body=b"{}", headers=None, method="POST"):
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", method=method,
+                                     data=None if method == "GET" else body, headers=headers or {})
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status
+        except urllib.error.HTTPError as e:
+            return e.code
+
     def test_status(self):
         r = self.client.status()
         self.assertTrue(r["ok"])
         self.assertTrue(r["learning"])
         self.assertFalse(r["lockdown"])
+        self.assertEqual(r["enforce"], "null")
         self.assertEqual(r["devices"][0]["name"], "dell")
+        self.assertIsNone(r["devices"][0]["last_seen"])
         self.assertIsInstance(r["stats"], dict)
 
     def test_device(self):
         r = self.client.device("dell")
         self.assertEqual(r["ip"], "192.168.1.30")
+        self.assertIn("last_seen", r)
 
     def test_unknown_device_404(self):
         with self.assertRaises(ControlError) as cm:
             self.client.device("nope")
         self.assertEqual(cm.exception.status, 404)
 
-    def test_isolate_release(self):
-        self.assertTrue(self.client.isolate("dell")["isolated"])
-        self.assertTrue(self.state.is_isolated("dell"))
+    def test_isolate_refused_without_enforcement(self):
+        # Saying "isolated" while nothing changed would be worse than refusing.
+        with self.assertRaises(ControlError) as cm:
+            self.client.isolate("dell")
+        self.assertEqual(cm.exception.status, 409)
+        self.assertIn("enforcement is off", str(cm.exception))
+        self.assertFalse(self.state.is_isolated("dell"))
+        with self.assertRaises(ControlError) as cm:
+            self.client.lockdown()
+        self.assertEqual(cm.exception.status, 409)
+        self.assertFalse(self.state.lockdown)
+
+    def test_release_always_allowed(self):
+        self.state.isolate("dell")  # e.g. left by an older version
         self.assertFalse(self.client.release("dell")["isolated"])
         self.assertFalse(self.state.is_isolated("dell"))
-        # enforcement went through the (null) backend
-        self.assertTrue(any("isolated_dev" in c for c in self.enforcer.backend.calls))
 
     def test_allow(self):
         r = self.client.allow("example.com")
         self.assertTrue(r["allowed"])
         self.assertTrue(self.state.is_allowed("example.com"))
 
-    def test_lockdown_toggles(self):
-        self.assertTrue(self.client.lockdown()["lockdown"])
-        self.assertTrue(self.state.lockdown)
-        self.assertFalse(self.client.lockdown()["lockdown"])
-
     def test_learning(self):
         self.assertFalse(self.client.learning(False)["learning"])
         self.assertFalse(self.state.learning)
+
+    def test_learning_needs_a_boolean(self):
+        # A missing or string flag must not silently turn blocking on.
+        for body in ({}, {"enabled": "false"}, {"enabled": 0}):
+            with self.assertRaises(ControlError) as cm:
+                self.client._call("/learning", body)
+            self.assertEqual(cm.exception.status, 400)
+        self.assertTrue(self.state.learning)
+
+    def test_post_must_be_json(self):
+        # A cross-site form or no-cors fetch can only send text/plain or form types.
+        self.assertEqual(self._raw("/allow", b'{"domain":"evil.example"}',
+                                   {"Content-Type": "text/plain"}), 415)
+        self.assertEqual(self._raw("/learning", b'{"enabled":false}'), 415)
+        self.assertFalse(self.state.is_allowed("evil.example"))
+        self.assertTrue(self.state.learning)
+
+    def test_rebinding_host_refused(self):
+        # A DNS-rebinding page reaches 127.0.0.1 but still sends its own Host.
+        evil = {"Host": "rebind.evil.example:5380", "Content-Type": "application/json"}
+        self.assertEqual(self._raw("/status", headers=evil, method="GET"), 403)
+        self.assertEqual(self._raw("/allow", b'{"domain":"evil.example"}', evil), 403)
+        self.assertFalse(self.state.is_allowed("evil.example"))
+        for ok in ("127.0.0.1:5380", "localhost:5380", "[::1]:5380"):
+            self.assertEqual(self._raw("/status", headers={"Host": ok}, method="GET"), 200)
 
     def test_unblock_by_domain(self):
         self.state.add_block("bad.example")
@@ -154,6 +206,34 @@ class ControlApiTests(unittest.TestCase):
             out = json.loads(resp.read())
         self.assertEqual(out["domain"], "c2.example")
         self.assertFalse(self.state.is_blocked("c2.example"))
+
+
+class EnforcingControlApiTests(ControlApiTests):
+    """The same contract with enforcement on (enforce: nft)."""
+    backend = RecordingNft
+    extra_cfg = {"pi_ip": "192.168.1.20"}
+
+    def test_status(self):
+        self.assertEqual(self.client.status()["enforce"], "nft")
+
+    def test_isolate_refused_without_enforcement(self):
+        self.assertTrue(self.client.isolate("dell")["isolated"])
+        self.assertTrue(self.state.is_isolated("dell"))
+        self.assertTrue(any("isolated_dev" in c for c in self.enforcer.backend.calls))
+        self.assertFalse(self.client.release("dell")["isolated"])
+        self.assertFalse(self.state.is_isolated("dell"))
+
+    def test_lockdown_toggles(self):
+        self.assertTrue(self.client.lockdown()["lockdown"])
+        self.assertTrue(self.state.lockdown)
+        self.assertFalse(self.client.lockdown()["lockdown"])
+
+    def test_lockdown_needs_pi_ip(self):
+        self.cfg["pi_ip"] = None
+        with self.assertRaises(ControlError) as cm:
+            self.client.lockdown()
+        self.assertEqual(cm.exception.status, 409)
+        self.assertFalse(self.state.lockdown)
 
 
 if __name__ == "__main__":

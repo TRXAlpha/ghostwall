@@ -1,8 +1,8 @@
 {
   "_comment": "Copy to ghost_flow.json and review. autoblock stays off; even with enforce=nft and learning=false, ghost-flow only recommends unless you also pass --autoblock. Shares events.jsonl and resolved_ips.jsonl with ghost-dns.",
-  "resolved_ips_path": "/opt/ghostwall/agents/ghost_dns/resolved_ips.jsonl",
-  "events_path": "/opt/ghostwall/agents/ghost_dns/events.jsonl",
-  "devices_json": "/opt/ghostwall/agents/netconf/devices.json",
+  "resolved_ips_path": "/var/lib/ghostwall/resolved_ips.jsonl",
+  "events_path": "/var/lib/ghostwall/events.jsonl",
+  "devices_json": "/etc/ghostwall/devices.json",
 
   "learning": true,
   "enforce": "null",

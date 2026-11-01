@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Run the dashboard against made-up data, no resolver needed.
+"""Run the dashboard against a made-up day, no resolver needed.
 
     python demo.py [--port 8088]
 
-Starts a fake control API on 127.0.0.1:5381 and the dashboard on --port, with a
-sample events file in a temp dir. The domains are ones the detectors really
-flagged on a home network; device names, IPs and times are invented. Actions
-(trust, isolate, lockdown) work against the fake state.
+Starts a fake control API on 127.0.0.1:5381 and the dashboard on --port, with the
+alerts from demo_events.json in a temp dir. Those alerts are not hand-written:
+make_demo.py produced them by running the real detector (models, allowlist,
+thresholds) over a scripted day on five invented devices. The fake control API
+answers like a fresh install in shadow mode; "Trust" works against fake state.
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import app
 
+HERE = os.path.dirname(os.path.abspath(__file__))
 DEVICES = [
     {"name": "laptop", "ip": "192.168.1.10", "mac": "02:00:00:00:00:10"},
     {"name": "phone", "ip": "192.168.1.11", "mac": "02:00:00:00:00:11"},
@@ -28,60 +30,49 @@ DEVICES = [
     {"name": "console", "ip": "192.168.1.14", "mac": "02:00:00:00:00:14"},
 ]
 
-# (minutes ago, device, domain, rule, severity, dga score or None, reasons)
-SAMPLE = [
-    (6, "tv", "xjw4kqpz7rmd.top", "dga_burst", "high", 0.99,
-     ["6 random-looking new domains in 10 min", "dga score 0.99", "first seen"]),
-    (6, "tv", "pzq8vnhy2kxc.top", "dga_burst", "high", 0.98,
-     ["6 random-looking new domains in 10 min", "first seen"]),
-    (41, "phone", "cloudflare-dns.com", "doh_bypass", "warn", None,
-     ["resolved DoH/DoT provider cloudflare-dns.com", "this device may be bypassing your DNS filter"]),
-    (95, "laptop", "qzxkvwjhplrtm5746.top", "dga_high", "high", 1.00,
-     ["dga score 1.00", "first seen", "not blocked (shadow mode)"]),
-    (180, "printer", "t1.a7f3e9c2.dyndns-ip.net", "dns_beacon", "warn", 0.71,
-     ["queried every 300 s (12 samples)", "dga score 0.71"]),
-    (300, "phone", "sz-special-overseas.ovgtm.com", "dga_suspect", "warn", 0.70,
-     ["dga score 0.70", "first seen"]),
-    (410, "laptop", "cdn.fwupd.org", "dga_suspect", "warn", 0.69, ["dga score 0.69", "first seen"]),
-    (720, "console", "update-7c1e.duckdns.org", "dga_corroborated", "warn", 0.83,
-     ["dga score 0.83", "rarely legitimate TLD", "first seen"]),
-    (1100, "laptop", "cloudflare-dns.com", "doh_bypass", "warn", None,
-     ["resolved DoH/DoT provider cloudflare-dns.com", "this device may be bypassing your DNS filter"]),
-]
+
+def iso(t: datetime) -> str:
+    return t.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def sample_events(now: datetime) -> list[dict]:
+def load_demo() -> dict:
+    with open(os.path.join(HERE, "demo_events.json"), encoding="utf-8") as f:
+        return json.load(f)
+
+
+def sample_events(now: datetime, demo: dict | None = None) -> list[dict]:
+    """demo_events.json with real timestamps, oldest first (as events.jsonl is)."""
     out = []
-    for i, (mins, dev, dom, rule, sev, score, reasons) in enumerate(reversed(SAMPLE)):
-        ip = next(d["ip"] for d in DEVICES if d["name"] == dev)
-        e = {"time": (now - timedelta(minutes=mins)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-             "device": dev, "ip": ip, "domain": dom, "rule": rule, "action": "recommend",
-             "severity": sev, "event_id": f"evt_demo{i:02d}", "reasons": reasons}
-        if score is not None:
-            e["scores"] = {"dga": score}
-        out.append(e)
+    for i, e in enumerate(sorted((demo or load_demo())["events"], key=lambda e: -e["minutes_ago"])):
+        e = dict(e)
+        mins = e.pop("minutes_ago")
+        out.append({"time": iso(now - timedelta(minutes=mins)), **e, "event_id": f"evt_demo{i:02d}"})
     return out
 
 
-def fake_control(port: int) -> ThreadingHTTPServer:
-    st = {"learning": True, "lockdown": False, "isolated": set()}
+def fake_control(port: int, demo: dict) -> ThreadingHTTPServer:
+    st = {"learning": True, "lockdown": False}
+    now = datetime.now(timezone.utc)
+    seen = {d["ip"]: iso(now - timedelta(seconds=20 + 40 * i)) for i, d in enumerate(DEVICES)}
 
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
 
-        def _json(self, obj):
+        def _json(self, obj, code=200):
             b = json.dumps(obj).encode()
-            self.send_response(200)
+            self.send_response(code)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(b)))
             self.end_headers()
             self.wfile.write(b)
 
         def _status(self):
-            return {"ok": True, "shadow": True, "learning": st["learning"], "lockdown": st["lockdown"],
-                    "stats": {"queries": 41873, "recommended": len(SAMPLE), "blocked": 0},
-                    "devices": [dict(d, isolated=d["name"] in st["isolated"], blocked_domains=[])
+            return {"ok": True, "shadow": True, "source": "adguard", "enforce": "null",
+                    "learning": st["learning"], "lockdown": st["lockdown"], "models": demo["models"],
+                    "feed": {"domains": 152845, "updated": iso(now - timedelta(hours=7, minutes=12))},
+                    "stats": {"queries": demo["queries"], "recommended": len(demo["events"]), "blocked": 0},
+                    "devices": [dict(d, isolated=False, last_seen=seen[d["ip"]], blocked_domains=[])
                                 for d in DEVICES]}
 
         def do_GET(self):
@@ -89,16 +80,10 @@ def fake_control(port: int) -> ThreadingHTTPServer:
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
-            p = self.path
-            if p == "/learning":
-                st["learning"] = bool(body.get("enabled"))
-            elif p == "/lockdown":
-                st["lockdown"] = not st["lockdown"]
-            elif p == "/isolate":
-                st["isolated"].add(body.get("name"))
-            elif p == "/release":
-                st["isolated"].discard(body.get("name"))
-            self._json({"ok": True, **body})
+            if self.path == "/allow":
+                self._json({"ok": True, **body, "allowed": True})
+            else:  # as on a real shadow-mode install: nothing to isolate or lock down
+                self._json({"ok": False, "error": "enforcement is off (demo)"}, 409)
 
     srv = ThreadingHTTPServer(("127.0.0.1", port), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -110,11 +95,12 @@ def main(argv=None) -> int:
     ap.add_argument("--port", type=int, default=8088)
     ap.add_argument("--control-port", type=int, default=5381)
     args = ap.parse_args(argv)
+    demo = load_demo()
     events = os.path.join(tempfile.mkdtemp(prefix="ghostwall-demo-"), "events.jsonl")
     with open(events, "w", encoding="utf-8") as f:
-        for e in sample_events(datetime.now(timezone.utc)):
+        for e in sample_events(datetime.now(timezone.utc), demo):
             f.write(json.dumps(e) + "\n")
-    fake_control(args.control_port)
+    fake_control(args.control_port, demo)
     return app.main(["--port", str(args.port), "--control", f"http://127.0.0.1:{args.control_port}",
                      "--events", events])
 

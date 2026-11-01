@@ -1,0 +1,224 @@
+{
+ "queries": 9030,
+ "models": "trm+lr",
+ "events": [
+  {
+   "minutes_ago": 6,
+   "device": "tv",
+   "domain": "zrqk4vhw9tjx.info",
+   "rule": "dga_burst",
+   "action": "recommend",
+   "severity": "high",
+   "mac": "02:00:00:00:00:12",
+   "ip": "192.168.1.12",
+   "scores": {
+    "dga": 0.9979,
+    "burst": 0.5
+   },
+   "reasons": [
+    "5 different random-looking domains in 10 min",
+    "e.g. hv7qkz3mwpxr.biz, kfq9zv2wxnbt.xyz, pzq8vnhy2kxc.top, xjw4kqpz7rmd.top"
+   ]
+  },
+  {
+   "minutes_ago": 7,
+   "device": "tv",
+   "domain": "hv7qkz3mwpxr.biz",
+   "rule": "dga_suspect",
+   "action": "recommend",
+   "severity": "warn",
+   "mac": "02:00:00:00:00:12",
+   "ip": "192.168.1.12",
+   "scores": {
+    "dga_trm": 0.9702,
+    "dga_lr": 0.9999,
+    "dga": 0.9851
+   },
+   "reasons": [
+    "dga score 0.99",
+    "first seen"
+   ]
+  },
+  {
+   "minutes_ago": 8,
+   "device": "tv",
+   "domain": "pzq8vnhy2kxc.top",
+   "rule": "dga_suspect",
+   "action": "recommend",
+   "severity": "warn",
+   "mac": "02:00:00:00:00:12",
+   "ip": "192.168.1.12",
+   "scores": {
+    "dga_trm": 0.9814,
+    "dga_lr": 0.9999,
+    "dga": 0.9906
+   },
+   "reasons": [
+    "dga score 0.99",
+    "first seen"
+   ]
+  },
+  {
+   "minutes_ago": 8,
+   "device": "tv",
+   "domain": "kfq9zv2wxnbt.xyz",
+   "rule": "dga_suspect",
+   "action": "recommend",
+   "severity": "warn",
+   "mac": "02:00:00:00:00:12",
+   "ip": "192.168.1.12",
+   "scores": {
+    "dga_trm": 0.9776,
+    "dga_lr": 0.9999,
+    "dga": 0.9888
+   },
+   "reasons": [
+    "dga score 0.99",
+    "first seen"
+   ]
+  },
+  {
+   "minutes_ago": 9,
+   "device": "tv",
+   "domain": "xjw4kqpz7rmd.top",
+   "rule": "dga_suspect",
+   "action": "recommend",
+   "severity": "warn",
+   "mac": "02:00:00:00:00:12",
+   "ip": "192.168.1.12",
+   "scores": {
+    "dga_trm": 0.9595,
+    "dga_lr": 0.9999,
+    "dga": 0.9797
+   },
+   "reasons": [
+    "dga score 0.98",
+    "first seen"
+   ]
+  },
+  {
+   "minutes_ago": 41,
+   "device": "phone",
+   "domain": "dns.google",
+   "rule": "doh_bypass",
+   "action": "recommend",
+   "severity": "warn",
+   "mac": "02:00:00:00:00:11",
+   "ip": "192.168.1.11",
+   "reasons": [
+    "resolved DoH/DoT provider dns.google",
+    "this device may be bypassing your DNS filter"
+   ]
+  },
+  {
+   "minutes_ago": 96,
+   "device": "laptop",
+   "domain": "qzxkvwjhplrtm5746.top",
+   "rule": "dga_high",
+   "action": "recommend",
+   "severity": "high",
+   "mac": "02:00:00:00:00:10",
+   "ip": "192.168.1.10",
+   "scores": {
+    "dga_trm": 0.9978,
+    "dga_lr": 0.9997,
+    "dga": 0.9987
+   },
+   "reasons": [
+    "dga score 1.00",
+    "first seen",
+    "not blocked (shadow mode)"
+   ]
+  },
+  {
+   "minutes_ago": 205,
+   "device": "printer",
+   "domain": "sync.xpqv.com",
+   "rule": "dns_beacon",
+   "action": "recommend",
+   "severity": "warn",
+   "mac": "02:00:00:00:00:13",
+   "ip": "192.168.1.13",
+   "scores": {
+    "beacon": 1.0
+   },
+   "reasons": [
+    "sync.xpqv.com queried every ~300s (n=8, jitter 0.00)",
+    "regular call-home timing"
+   ]
+  },
+  {
+   "minutes_ago": 310,
+   "device": "phone",
+   "domain": "trkqvz.com",
+   "rule": "dga_suspect",
+   "action": "recommend",
+   "severity": "warn",
+   "mac": "02:00:00:00:00:11",
+   "ip": "192.168.1.11",
+   "scores": {
+    "dga_trm": 0.9963,
+    "dga_lr": 0.9606,
+    "dga": 0.9784
+   },
+   "reasons": [
+    "dga score 0.98",
+    "first seen"
+   ]
+  },
+  {
+   "minutes_ago": 425,
+   "device": "laptop",
+   "domain": "parcel-redelivery-k7f2.top",
+   "rule": "threat_feed",
+   "action": "recommend",
+   "severity": "high",
+   "mac": "02:00:00:00:00:10",
+   "ip": "192.168.1.10",
+   "scores": {
+    "feed": 1.0
+   },
+   "reasons": [
+    "parcel-redelivery-k7f2.top is on the threat feed",
+    "not blocked (shadow mode)"
+   ]
+  },
+  {
+   "minutes_ago": 658,
+   "device": "console",
+   "domain": "ab3884457b246ab402e77625234b18575a7997beb8b0a6ad.cdn-pkt7.net",
+   "rule": "dns_tunnel",
+   "action": "recommend",
+   "severity": "high",
+   "mac": "02:00:00:00:00:14",
+   "ip": "192.168.1.14",
+   "scores": {
+    "tunnel": 0.5
+   },
+   "reasons": [
+    "12 very long high-entropy subdomains of cdn-pkt7.net",
+    "pattern matches DNS tunnelling/exfiltration"
+   ]
+  },
+  {
+   "minutes_ago": 960,
+   "device": "console",
+   "domain": "vrtxq.xyz",
+   "rule": "dga_corroborated",
+   "action": "recommend",
+   "severity": "warn",
+   "mac": "02:00:00:00:00:14",
+   "ip": "192.168.1.14",
+   "scores": {
+    "dga_trm": 0.9053,
+    "dga_lr": 0.969,
+    "dga": 0.9372
+   },
+   "reasons": [
+    "dga score 0.94",
+    "first seen",
+    "rarely-legitimate TLD .xyz"
+   ]
+  }
+ ]
+}

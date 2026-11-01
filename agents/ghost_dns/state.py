@@ -47,9 +47,11 @@ class GhostState:
         # note_seen() fires on every brand-new domain; persisting each one would
         # be a disk write per query, so it is throttled: mark dirty, flush at
         # most every _flush_interval seconds (and on explicit flush()/shutdown).
+        # Novelty is counted in days, so losing a minute of it in a crash costs
+        # nothing, while rewriting the file every few seconds wears an SD card.
         self._dirty = False
         self._last_flush = 0.0
-        self._flush_interval = 5.0
+        self._flush_interval = 60.0
         self._load()
 
     # -- persistence ------------------------------------------------------

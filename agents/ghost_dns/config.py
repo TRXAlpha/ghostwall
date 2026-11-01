@@ -47,12 +47,12 @@ DEFAULTS = {
     "onnx_model": os.path.join(ROOT, "ghostwall", "models", "trm_dga_v2.onnx"),
     "lr_coef": os.path.join(ROOT, "ghostwall", "models", "lr_coef.npy"),
     "lr_meta": os.path.join(ROOT, "ghostwall", "models", "lr_meta.json"),
-    # Thresholds are set from measurement, not guesswork. On 20k benign + 20k DGA
-    # domains from the frozen 2024/2025 test years, the model ensemble scores:
+    # Thresholds are set from measurement, not guesswork. On 50k benign + 50k DGA
+    # domains from each of the frozen 2024 and 2025 test years, the shipped mean scores:
     #   >=0.60 -> flags ~6.5% of NORMAL domains (what made the first deploy so noisy)
     #   >=0.90 -> flags ~2.0% of normal domains (would block 1 in 50 normal domains)
-    #   >=0.96 -> ~1% false positives, ~60% of DGA caught
-    #   >=0.995-> ~0.1% false positives, ~40% of DGA caught
+    #   >=0.96 -> ~1% false positives, ~61% of DGA caught
+    #   >=0.995-> ~0.2% false positives, ~47% of DGA caught
     # A single score cannot do better, so the rest of the detection comes from the
     # behavioural/evidence detectors in detectors.py.
     "recommend_threshold": 0.96,
@@ -70,17 +70,21 @@ DEFAULTS = {
     # --- safety / policy ---
     "learning": True,          # True => score-blocks are recommendations only
     "enforce": "null",         # "null" or "nft"
-    "pi_ip": "192.168.1.20",
+    "pi_ip": None,             # this box's LAN address; lockdown keeps it reachable
     "novelty_days": 7,         # a domain is "new" until seen for this long
     "auto_promote_after": 3,   # confirmations before a recommend becomes a block
 
     # --- paths ---
+    # Development defaults (next to the code). An installed system keeps state and
+    # events in /var/lib/ghostwall and config in /etc/ghostwall; go_shadow.sh writes
+    # those paths into /etc/ghostwall/ghost_dns.json.
     "state_path": os.path.join(HERE, "state.json"),
     "events_path": os.path.join(HERE, "events.jsonl"),
-    "query_log": os.path.join(HERE, "queries.log"),
+    "query_log": None,         # inline mode: a text log of every query (your DNS server keeps one already)
     "devices_json": os.path.join(os.path.dirname(HERE), "netconf", "devices.json"),
     "allowlist_path": os.path.join(HERE, "allowlist.txt"),
-    "resolved_ips_path": os.path.join(HERE, "resolved_ips.jsonl"),
+    "resolved_ips_path": os.path.join(HERE, "resolved_ips.jsonl"),  # inline mode, read by ghost-flow
+    "log_max_bytes": 16 * 2**20,  # query_log / resolved_ips_path start over (one .1 kept) past this
 
     # --- capture freeze trigger (agents/capture/api.py) ---
     "capture_url": "http://127.0.0.1:5381",

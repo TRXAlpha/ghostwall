@@ -11,7 +11,8 @@ COPY agents/web_ui agents/web_ui
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh && rm -rf agents/*/tests
 
-ENV PYTHONUNBUFFERED=1
+# ORT_DISABLE_TELEMETRY: onnxruntime sends usage telemetry to Microsoft unless told not to.
+ENV PYTHONUNBUFFERED=1 ORT_DISABLE_TELEMETRY=1
 VOLUME /data
 EXPOSE 8088
 HEALTHCHECK --interval=60s --timeout=5s --start-period=30s \

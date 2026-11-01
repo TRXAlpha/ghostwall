@@ -11,16 +11,21 @@ All paths assume the installer's layout (`/opt/ghostwall`).
 | Path | What |
 |---|---|
 | `/etc/ghostwall/ghostwall.env` | which DNS server and where its log is, dashboard address and password |
+| `/etc/ghostwall/ghost_dns.json` | ghost-dns config (written by `go_shadow.sh`) |
+| `/etc/ghostwall/devices.json` | your device names, MACs and IPs (optional) |
 | `/etc/ghostwall/fw_bot.env`, `/etc/ghostwall/owner.json` | Telegram token, button-signing secret, your chat id |
-| `/opt/ghostwall/agents/ghost_dns/ghost_dns.json` | ghost-dns config (written by `go_shadow.sh`) |
-| `/opt/ghostwall/agents/ghost_dns/events.jsonl` | every alert, one JSON object per line |
-| `/opt/ghostwall/agents/ghost_dns/state.json` | allowlist, blocklist, novelty, learning and lockdown |
-| `/opt/ghostwall/agents/netconf/devices.json` | your device names, MACs and IPs (optional) |
-| `/var/lib/ghostwall/threat_feed.txt` | threat feed, refreshed daily |
+| `/var/lib/ghostwall/events.jsonl` | every alert, one JSON object per line |
+| `/var/lib/ghostwall/state.json` | allowlist, blocklist, novelty, learning and lockdown |
+| `/var/lib/ghostwall/threat_feed.txt` | phishing list, refreshed daily |
+| `/opt/ghostwall` | the code and its Python venv; nothing you need to keep |
+
+Versions before 0.2.0b2 kept config and data in `/opt/ghostwall/agents/`; the installer
+moves them on upgrade. `/var/lib/ghostwall` is readable only by root and the `ghostwall`
+group: `sudo tail ...`, or add yourself with `sudo usermod -aG ghostwall $USER`.
 
 | Service | Role |
 |---|---|
-| `ghostwall-dns` | the decision core (root; shadow or inline) |
+| `ghostwall-dns` | the decision core (user `ghostwall`; shadow or inline) |
 | `ghostwall-web` | dashboard on port 8088 |
 | `ghostwall-fw-bot` | Telegram alerts and `/fw` commands (optional) |
 | `ghostwall-feed.timer` | daily threat-feed refresh |
@@ -52,20 +57,21 @@ To update later: `git pull && sudo ./install.sh`.
 
 ## Daily use
 
-- **Watch:** the dashboard, Telegram, or `tail -f .../events.jsonl`.
+- **Watch:** the dashboard, Telegram, or `sudo tail -f /var/lib/ghostwall/events.jsonl`.
 - **Trust a domain** that keeps getting flagged: `/fw allow <domain>`, the dashboard
   box, or
   `curl -X POST http://127.0.0.1:5380/allow -H 'Content-Type: application/json' -d '{"domain":"example.com"}'`.
   Domains that should be trusted everywhere can go in `agents/ghost_dns/allowlist.txt`.
-- **Too noisy?** Raise `recommend_threshold` in `ghost_dns.json` (default 0.96) and
-  restart `ghostwall-dns`. Replay your own history first to see the effect:
+- **Too noisy?** Raise `recommend_threshold` in `/etc/ghostwall/ghost_dns.json`
+  (default 0.96) and restart `ghostwall-dns`. Replay your own history first to see the effect:
 
   ```bash
   sudo /opt/ghostwall/.venv/bin/python /opt/ghostwall/agents/ghost_dns/replay_querylog.py \
-      --querylog /opt/AdGuardHome/data/querylog.json --devices /opt/ghostwall/agents/netconf/devices.json
+      --querylog /opt/AdGuardHome/data/querylog.json
   ```
 
-  The replay uses a throw-away state and events file; it changes and sends nothing.
+  The replay uses a throw-away state and events file; it changes and sends nothing. It
+  picks up the installed phishing list and `/etc/ghostwall/devices.json` by itself.
 
 ## Telegram
 
@@ -84,7 +90,9 @@ To update later: `git pull && sudo ./install.sh`.
    ```
 
 Only your chat id can run commands or press alert buttons, and buttons are
-HMAC-signed.
+HMAC-signed. An alert starts with `ALERT · <device>` and offers **Trust domain** and
+**Details**; only a real block (inline mode, learning off) says `BLOCKED` and offers
+Unblock, Keep blocked and Isolate.
 
 | Command | What it does |
 |---|---|
@@ -93,7 +101,7 @@ HMAC-signed.
 | `/fw log [n]` | last n decisions (default 10, max 30) |
 | `/fw summary` | last 24 h by action, rule, device and domain |
 | `/fw device <name>` | one device |
-| `/fw isolate <name>` / `/fw release <name>` | cut a device off / restore it (needs `enforce: "nft"`) |
+| `/fw isolate <name>` / `/fw release <name>` | cut a device off / restore it (needs `enforce: "nft"`; refused otherwise) |
 | `/fw allow <domain>` | trust a domain |
 | `/fw lockdown` | toggle LAN lockdown (needs `enforce: "nft"`) |
 | `/fw learning on\|off` | alert-only vs blocking (inline mode) |
@@ -125,7 +133,7 @@ also means DNS depends on it.
    (and bind it to `127.0.0.1`), then restart AdGuard and check
    `dig @127.0.0.1 -p 5300 example.com` works and `sudo ss -ulpn 'sport = :53'` shows
    nothing.
-2. In `ghost_dns.json` set `"shadow": false`, `"dns_host": "0.0.0.0"`,
+2. In `/etc/ghostwall/ghost_dns.json` set `"shadow": false`, `"dns_host": "0.0.0.0"`,
    `"dns_port": 53`, `"upstream": "127.0.0.1"`, `"upstream_port": 5300`. Keep
    `"learning": true`.
 3. `sudo systemctl restart ghostwall-dns`, then from a client:
@@ -135,9 +143,17 @@ also means DNS depends on it.
    `"learning": false`. A new domain scoring ≥ 0.995, a threat-feed hit or a confirmed
    blocklist entry is then sinkholed. Established and allowlisted domains are never
    auto-blocked.
-5. Optional: `"enforce": "nft"` lets `/fw isolate` and `/fw lockdown` change the
-   kernel's `ghostwall` nftables table. This needs the gateway setup below, because
-   isolation only affects traffic that passes through the Pi.
+5. Optional: `"enforce": "nft"` and `"pi_ip": "<this box's LAN address>"` let
+   `/fw isolate` and `/fw lockdown` change the kernel's `ghostwall` nftables table. This
+   needs the gateway setup below, because isolation only affects traffic that passes
+   through the Pi, and ghost-dns needs `CAP_NET_ADMIN`, which it doesn't get by default:
+
+   ```bash
+   sudo systemctl edit ghostwall-dns     # add these three lines, save
+   [Service]
+   AmbientCapabilities=CAP_NET_ADMIN
+   CapabilityBoundingSet=CAP_NET_ADMIN
+   ```
 
 Back to shadow at any time: `sudo bash /opt/ghostwall/agents/ghost_dns/go_shadow.sh`
 (moves AdGuard back to :53 and aborts if it does not answer).
@@ -148,8 +164,9 @@ Connection-level checks need the Pi to be the LAN's default gateway. This change
 whole network; read it fully first, and keep the router's admin page open.
 
 1. Edit `agents/netconf/config.json` (`pi_ip`, `lan_cidr`, DHCP range) and
-   `agents/netconf/devices.json`, then `python agents/netconf/gen.py`. Output goes to
-   `agents/netconf/out/`.
+   `/etc/ghostwall/devices.json` (every device needs a MAC here), then
+   `sudo python agents/netconf/gen.py --devices /etc/ghostwall/devices.json`. Output goes
+   to `agents/netconf/out/`.
 2. Save current sysctl values for rollback:
 
    ```bash
@@ -206,8 +223,9 @@ whole network; read it fully first, and keep the router's admin page open.
 - **Undo gateway mode:** `sudo ghostwall-breakglass` (removes the `ghostwall` table,
   restores sysctl, prints the router steps), then
   `sudo systemctl disable --now dnsmasq` and re-enable DHCP and IPv6 RA on the router.
-- **Uninstall:** `sudo /opt/ghostwall/uninstall.sh` (keeps `/etc/ghostwall`), or add
-  `--purge` to remove settings, the threat feed and the `ghostwall` user too. If inline
+- **Uninstall:** `sudo /opt/ghostwall/uninstall.sh` (keeps `/etc/ghostwall` and
+  `/var/lib/ghostwall`, so a reinstall carries on), or add `--purge` to remove settings,
+  alerts, state, the phishing list and the `ghostwall` user too. If inline
   mode was on, it hands port 53 back to AdGuard first. The only change to your DNS
   server is AdGuard's smaller query-log buffer, which is harmless to keep; the original
   `AdGuardHome.yaml` is saved next to it as `AdGuardHome.yaml.bak-ghostwall-*`.

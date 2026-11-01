@@ -1,9 +1,9 @@
 """fw_bot.py: wires config, control client, alerts, grouping, commands,
-callbacks into a Telegram update loop. Stdlib only, Python 3.13.
+callbacks into a Telegram update loop. Stdlib only.
 
-Usage:
-    FW_BOT_CALLBACK_SECRET=... .venv/Scripts/python.exe fw_bot.py \
-        --owner-file state/owner.json [--labels labels.jsonl] [--once]
+Usage (ghostwall-fw-bot.service runs it this way; docs/OPERATIONS.md#telegram):
+    FW_BOT_TELEGRAM_TOKEN=... FW_BOT_CALLBACK_SECRET=... python fw_bot.py \
+        --owner-file /etc/ghostwall/owner.json --follow /var/lib/ghostwall/events.jsonl [--commands]
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ import alerts
 import commands
 import config as cfgmod
 from callbacks import CallbackHandler, append_label
-from config import Config
+from config import Config, ConfigError
 from control_client import ControlClient
 from grouping import AlertGrouper, severity_of
 
@@ -158,7 +158,7 @@ class Follower:
 def follow(bot: "FwBot", events_path: str, chat_id: int, poll_seconds: float = 1.0,
            max_loops: int | None = None) -> None:
     """Run a Follower forever (or max_loops passes). Never calls getUpdates, so it
-    can share a bot token with another poller such as ghost-bot without a 409."""
+    can share a bot token with another process that polls it, without a 409."""
     f = Follower(bot, events_path, chat_id)
     loops = 0
     while max_loops is None or loops < max_loops:

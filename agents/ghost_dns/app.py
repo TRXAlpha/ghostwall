@@ -98,6 +98,7 @@ def main(argv=None):
     if resolver.shadow:
         from shadow import QueryLogFollower
         follower = QueryLogFollower(resolver, cfg["querylog"], fmt=cfg.get("querylog_format", "auto"))
+        resolver.source = follower.fmt
         print(f"[ghost-dns] query log format: {follower.fmt}", flush=True)
 
     control = ControlServer(cfg, gstate, enforcer, devices, resolver)

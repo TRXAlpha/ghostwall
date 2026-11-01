@@ -9,6 +9,10 @@
 # and the script aborts if AdGuard then does not answer. AdGuard's query-log buffer
 # (querylog.size_memory, 1000 by default) is lowered to ADGUARD_FLUSH_EVERY (10) so
 # alerts arrive within seconds instead of hours; a backup of the YAML is kept.
+#
+# ghost-dns keeps its config in /etc/ghostwall and its state and alerts in
+# /var/lib/ghostwall, so uninstalling the code keeps them. Installs from before v0.2.0b2
+# kept them in /opt/ghostwall/agents/ghost_dns; they are moved on the first run.
 set -euo pipefail
 
 [ -f /etc/ghostwall/ghostwall.env ] && . /etc/ghostwall/ghostwall.env
@@ -17,7 +21,9 @@ YAML=${ADGUARD_YAML:-/opt/AdGuardHome/AdGuardHome.yaml}
 RESTART=${ADGUARD_RESTART:-systemctl restart AdGuardHome}
 FLUSH=${ADGUARD_FLUSH_EVERY:-10}
 FEED=${GHOSTWALL_FEED:-/var/lib/ghostwall/threat_feed.txt}
-CFG=/opt/ghostwall/agents/ghost_dns/ghost_dns.json
+CFG=/etc/ghostwall/ghost_dns.json
+DATA=/var/lib/ghostwall
+OLD=/opt/ghostwall/agents/ghost_dns
 PY=/opt/ghostwall/.venv/bin/python
 case "$SOURCE" in
   adguard) QUERYLOG=${ADGUARD_QUERYLOG:-/opt/AdGuardHome/data/querylog.json}; NAME="AdGuard Home" ;;
@@ -83,10 +89,23 @@ if [ ! -f "$QUERYLOG" ]; then
 fi
 
 echo "3) write shadow config"
-[ -f "$CFG" ] || cp /opt/ghostwall/agents/ghost_dns/ghost_dns.example.json "$CFG"
-"$PY" - "$CFG" "$QUERYLOG" "$SOURCE" "$FEED" <<'PYEOF'
+install -d -m 750 -o ghostwall -g ghostwall "$DATA"
+# Move what older versions kept next to the code (the uninstaller deletes /opt/ghostwall).
+for f in state.json events.jsonl; do
+  if [ -f "$OLD/$f" ] && [ ! -e "$DATA/$f" ]; then
+    mv "$OLD/$f" "$DATA/$f" && chown ghostwall:ghostwall "$DATA/$f" && echo "   moved $f to $DATA"
+  fi
+done
+if [ ! -f "$CFG" ] && [ -f "$OLD/ghost_dns.json" ]; then
+  mv "$OLD/ghost_dns.json" "$CFG" && echo "   moved ghost_dns.json to $CFG"
+fi
+if [ ! -f /etc/ghostwall/devices.json ] && [ -f /opt/ghostwall/agents/netconf/devices.json ]; then
+  cp /opt/ghostwall/agents/netconf/devices.json /etc/ghostwall/devices.json && echo "   copied devices.json to /etc/ghostwall"
+fi
+[ -f "$CFG" ] || cp "$OLD/ghost_dns.example.json" "$CFG"
+"$PY" - "$CFG" "$QUERYLOG" "$SOURCE" "$FEED" "$DATA" <<'PYEOF'
 import json, sys
-p, querylog, fmt, feed = sys.argv[1:5]
+p, querylog, fmt, feed, data = sys.argv[1:6]
 c = json.load(open(p))
 c.update({"shadow": True, "learning": True, "enforce": "null",
           "querylog": querylog, "querylog_format": fmt, "threat_feed_path": feed})
@@ -94,9 +113,20 @@ c.pop("dns_host", None); c.pop("dns_port", None)   # shadow serves no DNS
 # Drop thresholds pinned by older configs so the measured defaults in config.py apply.
 for k in ("recommend_threshold", "block_threshold"):
     c.pop(k, None)
+# Paths outside /opt/ghostwall, unless you chose your own.
+old = "/opt/ghostwall/agents/"
+for key, new in (("state_path", f"{data}/state.json"), ("events_path", f"{data}/events.jsonl"),
+                 ("resolved_ips_path", f"{data}/resolved_ips.jsonl"),
+                 ("devices_json", "/etc/ghostwall/devices.json")):
+    if not c.get(key) or str(c[key]).startswith(old):
+        c[key] = new
+if str(c.get("query_log") or "").startswith(old):
+    c["query_log"] = None   # old inline-mode copy of every query; the DNS server keeps its own
 json.dump(c, open(p, "w"), indent=2)
 print(f"   shadow=true, learning=true, enforce=null, source={fmt}")
 PYEOF
+chown root:ghostwall "$CFG" && chmod 640 "$CFG"
+[ -f /etc/ghostwall/devices.json ] && chown root:ghostwall /etc/ghostwall/devices.json && chmod 640 /etc/ghostwall/devices.json
 
 echo "4) start ghost-dns in shadow mode"
 systemctl enable ghostwall-dns >/dev/null 2>&1 || true

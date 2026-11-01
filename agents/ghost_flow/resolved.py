@@ -38,6 +38,8 @@ class ResolvedIPs:
         if not self.path or not os.path.exists(self.path):
             return
         try:
+            if os.path.getsize(self.path) < self._offset:
+                self._offset = 0  # ghost-dns started a new file (it rotates past a size cap)
             with open(self.path, "rb") as f:
                 f.seek(self._offset)
                 for raw in f:

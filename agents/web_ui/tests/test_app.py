@@ -95,8 +95,13 @@ class ValidateTests(unittest.TestCase):
             app.validate_action({"action": "isolate", "params": {"name": "x; drop"}})
 
     def test_drops_unexpected_keys(self):
-        _, body = app.validate_action({"action": "learning", "params": {"enabled": 1, "evil": "x"}})
+        _, body = app.validate_action({"action": "learning", "params": {"enabled": True, "evil": "x"}})
         self.assertEqual(body, {"enabled": True})
+
+    def test_learning_needs_a_boolean(self):
+        for params in ({}, {"enabled": 1}, {"enabled": "off"}):
+            with self.assertRaises(ValueError):
+                app.validate_action({"action": "learning", "params": params})
 
 if __name__ == "__main__":
     unittest.main()

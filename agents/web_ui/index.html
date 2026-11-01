@@ -17,6 +17,7 @@
             --text:#1c1d1f; --dim:#6a6e73; --faint:#a9acaf; --amber:#b9770e; --red:#c93c35; --green:#3d8a40; }
   }
   * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
   html, body { margin:0; background:var(--bg); color:var(--text); }
   body { font:14px/1.5 var(--sans); -webkit-font-smoothing:antialiased; }
   .mono { font-family:var(--mono); }
@@ -86,6 +87,8 @@
   .dev .a { font:12px var(--mono); color:var(--dim); }
   .dev .c { grid-column:2; grid-row:1 / span 2; align-self:center; }
   .dev.iso .n { color:var(--red); }
+  .note { margin:10px 0 0; font-size:12px; color:var(--dim); }
+  .note a { color:var(--dim); }
 
   button { font:500 12px var(--sans); color:var(--text); background:transparent; border:1px solid var(--line2);
            border-radius:4px; padding:4px 10px; cursor:pointer; }
@@ -127,7 +130,7 @@
     <div class="stat"><div class="k">Queries scored</div><div class="v" id="queries">—</div><div class="s">since service start</div></div>
     <div class="stat"><div class="k">Alerts · 24 h</div><div class="v" id="alerts24">—</div><div class="s" id="alertsSub">&nbsp;</div></div>
     <div class="stat"><div class="k">Devices</div><div class="v" id="devCount">—</div><div class="s" id="devSub">&nbsp;</div></div>
-    <div class="stat"><div class="k">Lockdown</div><div class="v" id="lock">—</div><div class="s">LAN traffic</div></div>
+    <div class="stat"><div class="k" id="k5">Threat feed</div><div class="v" id="v5">—</div><div class="s" id="s5">&nbsp;</div></div>
   </section>
 
   <section class="strip">
@@ -146,12 +149,14 @@
       <div class="side-sec">
         <h2>Devices</h2>
         <div id="devices"><div class="empty">Loading…</div></div>
+        <p class="note" id="devNote" hidden>Cutting a device off needs Ghostwall to be the network's gateway:
+          <a href="https://github.com/TRXAlpha/ghostwall/blob/main/docs/OPERATIONS.md#gateway-mode-ghost-flow-and-capture" target="_blank" rel="noopener">gateway mode</a>.</p>
       </div>
       <div class="side-sec">
         <h2>Controls</h2>
-        <div class="ctl"><div class="l">Learning<small id="learnSub">alerts only, never blocks</small></div>
-          <button id="btnLearn" data-act="learning">—</button></div>
-        <div class="ctl"><div class="l">LAN lockdown<small>only the Pi and tailnet stay reachable</small></div>
+        <div class="ctl"><div class="l">Blocking<small id="learnSub">&nbsp;</small></div>
+          <button id="btnLearn" data-act="learning" hidden>—</button></div>
+        <div class="ctl" id="lockCtl" hidden><div class="l">LAN lockdown<small>only this box and the tailnet stay reachable</small></div>
           <button id="btnLock" class="warn" data-act="lockdown">—</button></div>
         <form class="allow" id="allowForm">
           <input id="domain" placeholder="trust a domain, e.g. fbsbx.com" autocomplete="off" spellcheck="false">
@@ -168,7 +173,7 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const RULES = {
-  threat_feed: "on a phishing/malware list", dga_burst: "burst of random-looking domains",
+  threat_feed: "on the threat feed (known phishing)", dga_burst: "burst of random-looking domains",
   dga_high: "very random-looking new domain", dga_suspect: "random-looking new domain",
   dga_corroborated: "random name on a risky TLD", doh_bypass: "may be bypassing your DNS filter (DoH)",
   dns_tunnel: "possible data over DNS (tunnel)", dns_beacon: "looked up on a fixed timer",
@@ -203,9 +208,13 @@ function ago(iso) {
 }
 const fmt = (n) => n == null ? "—" : Number(n).toLocaleString("en-US");
 
+const SOURCES = { adguard: "AdGuard Home's", pihole: "Pi-hole's" };
+
 function renderStatus(st) {
   cur = { learning: st.learning, lockdown: st.lockdown };
-  if (st.shadow) { $("mode").innerHTML = '<span class="green">shadow</span>'; $("modeSub").textContent = "reading AdGuard's log"; }
+  // Isolation and lockdown change nftables, so they exist only with enforce: "nft".
+  const enforcing = st.enforce === "nft";
+  if (st.shadow) { $("mode").innerHTML = '<span class="green">shadow</span>'; $("modeSub").textContent = `reading ${SOURCES[st.source] || "your DNS server's"} log`; }
   else if (st.learning) { $("mode").innerHTML = '<span class="amber">inline</span>'; $("modeSub").textContent = "answering DNS, alert only"; }
   else { $("mode").innerHTML = '<span class="red">enforcing</span>'; $("modeSub").textContent = "answering DNS, blocking"; }
   const stats = st.stats || {};
@@ -213,19 +222,35 @@ function renderStatus(st) {
   const devs = st.devices || [];
   $("devCount").textContent = devs.length;
   const iso = devs.filter(d => d.isolated).length;
-  $("devSub").innerHTML = iso ? `<span class="red">${iso} isolated</span>` : "none isolated";
-  $("lock").innerHTML = st.lockdown ? '<span class="red">on</span>' : 'off';
-  $("btnLearn").textContent = st.learning ? "Turn off" : "Turn on";
-  $("learnSub").textContent = st.learning ? "on: alerts only, never blocks" : "off: high-confidence names are blocked";
+  $("devSub").innerHTML = iso ? `<span class="red">${iso} isolated</span>` : "named in devices.json";
+  if (enforcing) {
+    $("k5").textContent = "Lockdown";
+    $("v5").innerHTML = st.lockdown ? '<span class="red">on</span>' : "off";
+    $("s5").textContent = "LAN traffic";
+  } else {
+    const feed = st.feed || {};
+    $("k5").textContent = "Threat feed";
+    $("v5").textContent = feed.domains ? fmt(feed.domains) : "—";
+    $("s5").textContent = feed.updated ? "domains · updated " + ago(feed.updated) : "not downloaded yet";
+  }
+  // Shadow mode can never block, so there is nothing to switch.
+  $("btnLearn").hidden = !!st.shadow;
+  $("btnLearn").textContent = st.learning ? "Turn on" : "Turn off";
+  $("learnSub").textContent = st.shadow ? "off: shadow mode only watches"
+    : st.learning ? "off: learning mode, alerts only" : "on: high-confidence new names are sinkholed";
+  $("lockCtl").hidden = !enforcing;
   $("btnLock").textContent = st.lockdown ? "Release" : "Lock down";
-  $("devices").innerHTML = devs.map(d => `
+  $("devNote").hidden = enforcing;
+  $("devices").innerHTML = devs.map(d => {
+    const btn = d.isolated ? `<button data-act="release" data-name="${esc(d.name)}">Release</button>`
+      : enforcing ? `<button class="warn" data-act="isolate" data-name="${esc(d.name)}">Isolate</button>` : "";
+    return `
     <div class="dev${d.isolated ? " iso" : ""}">
       <div class="n">${esc(d.name)}</div>
-      <div class="c">${d.isolated
-        ? `<button data-act="release" data-name="${esc(d.name)}">Release</button>`
-        : `<button class="warn" data-act="isolate" data-name="${esc(d.name)}">Isolate</button>`}</div>
-      <div class="a">${esc(d.ip)}</div>
-    </div>`).join("") || '<div class="empty">No devices named yet. Add them in devices.json.</div>';
+      <div class="c">${btn}</div>
+      <div class="a">${esc(d.ip)}${d.last_seen ? " · " + esc(ago(d.last_seen)) : ""}</div>
+    </div>`;
+  }).join("") || '<div class="empty">No names yet, so alerts show IP addresses. Name devices in devices.json.</div>';
 }
 
 function renderEvents(evs) {
@@ -268,7 +293,7 @@ function renderEvents(evs) {
 document.addEventListener("click", (ev) => {
   const b = ev.target.closest("button[data-act]"); if (!b) return;
   const a = b.dataset.act;
-  if (a === "learning") act("learning", { enabled: !cur.learning }, cur.learning ? "Learning off" : "Learning on");
+  if (a === "learning") act("learning", { enabled: !cur.learning }, cur.learning ? "Blocking on" : "Blocking off");
   else if (a === "lockdown") act("lockdown", {}, cur.lockdown ? "Lockdown released" : "Lockdown on");
   else if (a === "isolate" || a === "release") act(a, { name: b.dataset.name }, `${b.dataset.name}: ${a}d`);
   else if (a === "allow") act("allow", { domain: b.dataset.domain }, "Trusted " + b.dataset.domain);

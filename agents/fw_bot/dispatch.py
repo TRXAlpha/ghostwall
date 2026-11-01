@@ -21,7 +21,7 @@ from callbacks import CallbackHandler
 from config import Config
 from control_client import ControlClient
 
-DEFAULT_EVENTS = "/opt/ghostwall/agents/ghost_dns/events.jsonl"
+DEFAULT_EVENTS = "/var/lib/ghostwall/events.jsonl"
 DEFAULT_CONTROL = "http://127.0.0.1:5380"
 MAX_LOG = 30
 TAIL_BYTES = 512 * 1024
@@ -150,10 +150,10 @@ class Dispatcher:
 
 
 def from_env(env: dict, api_base: str = "https://api.telegram.org") -> Dispatcher:
-    """Build a dispatcher using ghost-bot's already-loaded environment.
+    """Build a dispatcher for another bot process that already polls the token.
 
-    env needs TELEGRAM_BOT_TOKEN and FW_BOT_CALLBACK_SECRET; owner comes from
-    owner.json, passed in via `owner_chat_id` in env as FW_OWNER_CHAT_ID."""
+    env needs TELEGRAM_BOT_TOKEN, FW_BOT_CALLBACK_SECRET and FW_OWNER_CHAT_ID (the
+    chat id from owner.json); FW_EVENTS, FW_CONTROL and FW_LABELS are optional."""
     token = env.get("TELEGRAM_BOT_TOKEN", "")
     secret = env.get("FW_BOT_CALLBACK_SECRET", "")
     owner = int(env["FW_OWNER_CHAT_ID"])

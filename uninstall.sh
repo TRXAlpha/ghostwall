@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Remove Ghostwall.
 #
-#   sudo ./uninstall.sh            # keeps your settings in /etc/ghostwall and /var/lib/ghostwall
+#   sudo ./uninstall.sh            # keeps your settings (/etc/ghostwall), alerts and state (/var/lib/ghostwall)
 #   sudo ./uninstall.sh --purge    # removes those and the ghostwall user too
 #
 # Your DNS server keeps running. If you had switched to inline mode, AdGuard is moved
@@ -36,10 +36,11 @@ echo "3) remove /opt/ghostwall"
 rm -rf /opt/ghostwall
 
 if [ "$PURGE" = 1 ]; then
-  echo "4) remove settings, threat feed and the ghostwall user"
+  echo "4) remove settings, alerts, state, threat feed and the ghostwall user"
   rm -rf /etc/ghostwall /var/lib/ghostwall
   id ghostwall >/dev/null 2>&1 && userdel ghostwall
 else
-  echo "4) kept /etc/ghostwall and /var/lib/ghostwall (use --purge to remove them)"
+  echo "4) kept your settings in /etc/ghostwall and your alerts and state in /var/lib/ghostwall"
+  echo "   (a reinstall picks them up again; --purge removes them)"
 fi
 echo "Ghostwall is gone. Your DNS server keeps running as before."

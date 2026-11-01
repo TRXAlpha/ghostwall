@@ -18,9 +18,15 @@ import json
 import math
 import os
 
-import numpy as np
+# onnxruntime 1.29 and later send usage telemetry to Microsoft by default (see
+# docs/Privacy.md in its repository). Nothing about this box should leave it, so
+# telemetry is switched off before onnxruntime is first imported; that is the only
+# point where the switch works.
+os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")
 
-from tokenizer import encode, registrable_label, strip_dot
+import numpy as np  # noqa: E402
+
+from tokenizer import encode, registrable_label, strip_dot  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -49,6 +55,8 @@ class TRMModel:
     def __init__(self, path: str):
         import onnxruntime as ort
 
+        if os.environ.get("ORT_DISABLE_TELEMETRY") == "1" and hasattr(ort, "disable_telemetry_events"):
+            ort.disable_telemetry_events()
         so = ort.SessionOptions()
         so.intra_op_num_threads = 1
         so.inter_op_num_threads = 1

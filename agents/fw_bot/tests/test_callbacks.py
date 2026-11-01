@@ -43,6 +43,10 @@ class StubClient(ControlClient):
         self.calls.append(("isolate", name))
         return {"ok": True, "name": name, "isolated": True}
 
+    def allow(self, domain):
+        self.calls.append(("allow", domain))
+        return {"ok": True, "domain": domain, "allowed": True}
+
 
 def make_cfg(tmp):
     p = os.path.join(tmp, "owner.json")
@@ -108,6 +112,11 @@ class CallbackTests(unittest.TestCase):
             recs = [json.loads(l) for l in f if l.strip()]
         self.assertEqual([r["action"] for r in recs],
                          ["isolate", "keep", "details"])
+
+    def test_trust_allowlists_the_domain(self):
+        out = self.h.handle(self._q("trust"))
+        self.assertIn("Trusted xkjqwehz.biz", out)
+        self.assertEqual(self.client.calls, [("allow", "xkjqwehz.biz")])
 
     def test_control_error_shows_failure(self):
         self.client.fail = True

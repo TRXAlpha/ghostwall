@@ -10,7 +10,8 @@
 #
 # Shadow mode never touches DNS or the firewall: Ghostwall only reads the DNS server's
 # query log and alerts. Safe to re-run (that is also how you update): your settings in
-# /etc/ghostwall are kept.
+# /etc/ghostwall and your alerts and state in /var/lib/ghostwall are kept. The code goes
+# to /opt/ghostwall; every service runs as the unprivileged `ghostwall` user.
 set -euo pipefail
 
 SRC=$(cd "$(dirname "$0")" && pwd)
@@ -127,7 +128,7 @@ esac
 say "2) copy to $DEST"
 if [ "$SRC" != "$DEST" ]; then
   mkdir -p "$DEST"
-  tar -C "$SRC" --exclude=./.git --exclude=./.venv --exclude=./data --exclude=./runs --exclude=./research \
+  tar -C "$SRC" --exclude=./.git --exclude=./.venv --exclude=./data --exclude=./runs \
       -cf - . | tar -C "$DEST" -xf -
 fi
 
@@ -141,13 +142,15 @@ fi
 "$DEST/.venv/bin/pip" install -q --disable-pip-version-check --upgrade pip
 if ! "$DEST/.venv/bin/pip" install -q --disable-pip-version-check -r "$DEST/requirements.txt"; then
   # onnxruntime has no wheel for some platforms (32-bit ARM, brand-new Python): run on numpy alone.
-  "$DEST/.venv/bin/pip" install -q --disable-pip-version-check numpy
-  say "   onnxruntime is not available here: scoring uses the numpy model only (slightly less accurate)"
+  "$DEST/.venv/bin/pip" install -q --disable-pip-version-check "numpy>=1.24,<3"
+  say "   onnxruntime is not available here: scoring uses the n-gram model only (catches fewer DGA names)"
 fi
+# The services can't write next to the code, so compile it once here.
+"$DEST/.venv/bin/python" -m compileall -q "$DEST/agents" >/dev/null 2>&1 || true
 
 say "4) user, config and dashboard password"
 id ghostwall >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin ghostwall
-install -d -m 755 -o ghostwall -g ghostwall /var/lib/ghostwall
+install -d -m 750 -o ghostwall -g ghostwall /var/lib/ghostwall
 if ! grep -q '^GHOSTWALL_WEB_PASSWORD=.' "$ENVF"; then
   setenv GHOSTWALL_WEB_PASSWORD "$(python3 -c 'import secrets; print(secrets.token_urlsafe(12))')"
   [ "$FRESH" = 1 ] && setenv GHOSTWALL_WEB_BIND 0.0.0.0
@@ -174,6 +177,7 @@ bash "$DEST/agents/ghost_dns/go_shadow.sh"
 say "8) web dashboard"
 systemctl enable ghostwall-web >/dev/null 2>&1
 systemctl restart ghostwall-web
+systemctl try-restart ghostwall-fw-bot 2>/dev/null || true   # Telegram, if you set it up
 BIND=${GHOSTWALL_WEB_BIND:-127.0.0.1}
 HOST=$BIND
 case "$BIND" in 0.0.0.0|::) HOST=$(hostname -I 2>/dev/null | awk '{print $1}'); HOST=${HOST:-$(hostname)} ;; esac
@@ -189,7 +193,7 @@ Installed. Ghostwall is watching your DNS server's query log; it cannot block an
 
   Dashboard:  http://$HOST:8088   user: ghostwall   password: ${GHOSTWALL_WEB_PASSWORD:-(none, loopback only)}
               (the password is GHOSTWALL_WEB_PASSWORD in $ENVF)
-  Alerts:     tail -f $DEST/agents/ghost_dns/events.jsonl
+  Alerts:     sudo tail -f /var/lib/ghostwall/events.jsonl
   Health:     curl -s http://127.0.0.1:5380/status   ("stats.queries" should keep going up)
 
 Next steps (README.md): name your devices, add Telegram alerts, replay your history.

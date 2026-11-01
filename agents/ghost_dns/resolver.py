@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import os
 import socket
 import threading
 import time
@@ -63,8 +64,10 @@ class Resolver:
         # Shadow mode: scoring a log of queries someone else already answered.
         # Nothing here can block, so decisions are only ever recommendations.
         self.shadow = bool(cfg.get("shadow", False))
+        self.source = None                   # shadow: "adguard" or "pihole", set by app.py
         self.clock = time.monotonic          # overridable, so tests can drive time
         self.det = Detectors(cfg)            # threat feed, DoH, tunnel, beacon, DGA burst
+        self.last_seen: dict[str, str] = {}  # client ip -> ISO time of its latest query
         self.stats = {"queries": 0, "blocked": 0, "recommended": 0, "suppressed": 0,
                       "forwarded": 0, "errors": 0, "fallbacks": 0, "failopen": 0}
 
@@ -75,6 +78,9 @@ class Resolver:
             return Decision("allow", "empty")
         dev = self.devices.device_for_ip(client_ip)
         now = self.clock()
+        if len(self.last_seen) > 10000:      # a LAN has far fewer clients; bound it anyway
+            self.last_seen.clear()
+        self.last_seen[client_ip] = events_mod.now_iso()
 
         # Evidence that is checked BEFORE the allowlist: a known-bad host (an exact
         # feed match wins even over a trusted parent domain) and DoH bypass.
@@ -310,10 +316,21 @@ class Resolver:
         ts = datetime.now(timezone.utc).strftime("%b %d %H:%M:%S")
         line = f"{ts} ghost-dns[{self.stats['queries']}]: query[{q.qtype_name}] {q.name} from {client_ip}\n"
         try:
-            with self._query_lock, open(path, "a", encoding="utf-8") as f:
-                f.write(line)
+            with self._query_lock:
+                self._append(path, line)
         except OSError:
             pass
+
+    def _append(self, path: str, text: str) -> None:
+        """Append to an inline-mode log. Past log_max_bytes the file is moved to
+        <path>.1 (replacing the previous one) and started again, so it can't fill the disk."""
+        try:
+            if os.path.getsize(path) > int(self.cfg.get("log_max_bytes", 16 * 2**20)):
+                os.replace(path, path + ".1")
+        except OSError:
+            pass  # no file yet
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(text)
 
     def _record_resolved(self, client_ip: str, domain: str, reply: bytes) -> None:
         path = self.cfg.get("resolved_ips_path")
@@ -342,11 +359,9 @@ class Resolver:
             if not fresh:
                 return
             try:
-                with open(path, "a", encoding="utf-8") as f:
-                    for ip in fresh:
-                        f.write(json.dumps({"time": ts, "ip": ip, "domain": domain,
-                                            "client": client_ip},
-                                           separators=(",", ":")) + "\n")
+                self._append(path, "".join(
+                    json.dumps({"time": ts, "ip": ip, "domain": domain, "client": client_ip},
+                               separators=(",", ":")) + "\n" for ip in fresh))
             except OSError:
                 pass
 

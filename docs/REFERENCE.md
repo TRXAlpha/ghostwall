@@ -7,6 +7,9 @@ flags.
 
 HTTP/JSON on `127.0.0.1:5380`, served by `ghost-dns` (`control_api.py`), used by the
 dashboard and Telegram bot. No authentication: it must never listen beyond loopback.
+Because a web page in a browser on the same machine can reach loopback too, POSTs must
+send `Content-Type: application/json` (else 415) and every request must name a
+loopback `Host` such as `127.0.0.1:5380` (else 403, which stops DNS rebinding).
 
 Every response is a JSON object: `{"ok": true, ...}` on success, or a non-2xx status
 with `{"ok": false, "error": "..."}`. All endpoints take POST with a JSON body;
@@ -14,17 +17,18 @@ with `{"ok": false, "error": "..."}`. All endpoints take POST with a JSON body;
 
 | Endpoint | Body | Returns |
 |---|---|---|
-| `/status` | — | `devices` (name, ip, mac, isolated, blocked_domains), `lockdown`, `learning`, `shadow`, `stats` (counters since start; `queries` rising means it is scoring) |
-| `/device` | `{"name": "laptop"}` | that device plus `last_seen`; 404 if unknown |
-| `/isolate` | `{"name": "laptop"}` | `{"name", "isolated": true}`: the device may only reach the Pi's DNS |
+| `/status` | — | `devices` (name, ip, mac, isolated, last_seen, blocked_domains), `lockdown`, `learning`, `shadow`, `source` (`adguard` or `pihole` in shadow mode), `enforce` (`null` or `nft`), `models`, `feed` (`domains`, `updated`), `stats` (counters since start; `queries` rising means it is scoring) |
+| `/device` | `{"name": "laptop"}` | that device plus `last_seen` (its latest query since ghost-dns started, or null); 404 if unknown |
+| `/isolate` | `{"name": "laptop"}` | `{"name", "isolated": true}`: the device may only reach the Pi's DNS. 409 unless `enforce` is `nft` |
 | `/release` | `{"name": "laptop"}` | `{"name", "isolated": false}` |
 | `/allow` | `{"domain": "example.com"}` | `{"domain", "allowed": true}`: allowlisted network-wide |
-| `/lockdown` | `{}` | `{"lockdown": bool}`: toggles; drops forwarded traffic except to the Pi and tailnet |
-| `/learning` | `{"enabled": bool}` | `{"learning": bool}`: learning on means alerts only |
+| `/lockdown` | `{}` | `{"lockdown": bool}`: toggles; drops forwarded traffic except to the Pi and tailnet. 409 unless `enforce` is `nft` and `pi_ip` is set |
+| `/learning` | `{"enabled": true\|false}` | `{"learning": bool}`: learning on means alerts only. Anything but a boolean is a 400 |
 | `/unblock` | `{"event_id": "...", "domain": "..."}` | `{"event_id", "unblocked": true}` (alert buttons) |
 
-Isolation and lockdown only change the kernel with `"enforce": "nft"`; otherwise they
-are recorded in state only.
+Isolation and lockdown change the kernel's nftables, so they exist only with
+`"enforce": "nft"`; with the default null backend they are refused rather than
+pretended.
 
 ## events.jsonl
 
@@ -56,8 +60,8 @@ against this schema (exit 1 on any invalid line).
 
 ## ghost-dns configuration
 
-Defaults live in `agents/ghost_dns/config.py`; `ghost_dns.json` overrides any of them.
-The most useful keys:
+Defaults live in `agents/ghost_dns/config.py`; `/etc/ghostwall/ghost_dns.json`
+overrides any of them. The most useful keys:
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -71,7 +75,7 @@ The most useful keys:
 | `upstream_fallbacks` | `["9.9.9.9"]` | used when the upstream is down; `[]` to disable |
 | `block_response` | `"sinkhole"` | or `"nxdomain"`; sinkhole answers `sinkhole_ip4` / `sinkhole_ip6` |
 | `recommend_threshold` | `0.96` | single-name alert score (~1% false positives) |
-| `block_threshold` | `0.995` | single-name block score (~0.1% false positives) |
+| `block_threshold` | `0.995` | single-name block score (~0.2% false positives) |
 | `corroborated_threshold` | `0.80` | alert score when the TLD is rarely legitimate |
 | `suspect_only_new` | `true` | plain score alerts only for names new to this network |
 | `novelty_days` | `7` | how long a name counts as new |
@@ -81,9 +85,13 @@ The most useful keys:
 | `event_dedupe_seconds` | `86400` | one alert per device, domain and rule per day |
 | `threat_feed_path` | installer: `/var/lib/ghostwall/threat_feed.txt` | written by `update_feed.py` |
 | `allowlist_path` | `agents/ghost_dns/allowlist.txt` | starter allowlist |
-| `devices_json` | `agents/netconf/devices.json` | device names; unknown clients are named by IP |
+| `devices_json` | installer: `/etc/ghostwall/devices.json` | device names; unknown clients are named by IP |
+| `state_path`, `events_path` | installer: `/var/lib/ghostwall/state.json`, `.../events.jsonl` | persistent state and the alert log |
+| `query_log` | `null` (off) | inline mode: a text log of every query |
+| `resolved_ips_path` | installer: `/var/lib/ghostwall/resolved_ips.jsonl` | inline mode: answered IPs, read by ghost-flow |
+| `log_max_bytes` | 16 MiB | `query_log` and `resolved_ips_path` start a new file past this (one `.1` kept) |
 | `capture_enabled` | `false` | POST `/freeze` to the capture agent on high alerts |
-| `pi_ip` | `192.168.1.20` | the Pi's LAN address, used by the lockdown rule; set yours before enforcing |
+| `pi_ip` | unset | this box's LAN address; lockdown needs it and keeps it reachable, and its own lookups never raise `doh_bypass` |
 
 ## Command-line tools
 
@@ -92,7 +100,9 @@ The most useful keys:
 | `ghost_dns/app.py --config FILE` | run ghost-dns; `--shadow --querylog FILE`, `--once` (build and exit), `--dns-port`, `--upstream`, `--enforce`, `--learning/--no-learning` |
 | `ghost_dns/go_shadow.sh` | switch to shadow mode safely (root) |
 | `ghost_dns/update_feed.py --out FILE [--feed URL ...]` | download threat feeds; keeps the old file on failure |
-| `ghost_dns/replay_querylog.py --querylog FILE [--devices FILE]` | dry-run detection over real history |
+| `ghost_dns/replay_querylog.py --querylog FILE [--devices FILE]` | dry-run detection over real history (uses the installed phishing list and devices by default) |
+| `web_ui/demo.py` | the dashboard on demo data, no install needed |
+| `web_ui/make_demo.py` | regenerate the demo data by running the real detector over a scripted day |
 | `ghost_dns/eval_detection.py` | before/after simulation on labelled data |
 | `fw_bot/fw_bot.py --owner-file FILE --follow EVENTS [--commands]` | Telegram alerts, optionally commands |
 | `fw_bot/validate_events.py FILE` | validate an events file |

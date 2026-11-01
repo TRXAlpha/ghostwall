@@ -1,8 +1,7 @@
 """Domain tokenizer + registrable-part logic. numpy only, no model deps.
 
-Must stay byte-for-byte compatible with:
-  - trm/data.py          (the TRM training tokenizer: last 64 bytes, pad=0, unk=1)
-  - research/dns_scorer/scorer.py (the first, standalone Pi inference copy)
+Must stay byte-for-byte compatible with trm/data.py (the TRM training tokenizer:
+last 64 bytes, pad=0, unk=1).
 
 Both the ONNX TRM model and the numpy logistic-regression scorer consume these
 exact token ids, so do not change the vocab or the mapping without re-exporting
@@ -25,8 +24,8 @@ for _i, _ch in enumerate(VOCAB):
     if _ch.isalpha():
         _LUT[ord(_ch.upper())] = _i + 2
 
-# Small built-in public-suffix list (same set as the Pi scorer). Incomplete by
-# design: it covers the common TLDs and 2-level suffixes we actually see.
+# Small built-in public-suffix list. Incomplete by design: it covers the common
+# TLDs and 2-level suffixes we actually see.
 PUBLIC_SUFFIXES = frozenset("""
 com net org edu gov mil int info biz xyz online site store tech app dev io
 co uk co.uk org.uk ac.uk gov.uk me.uk net.uk sch.uk

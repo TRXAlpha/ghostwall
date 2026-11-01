@@ -3,14 +3,15 @@
 #
 # The resolver, control API, DNS wire code, enforcement bridge, capture and
 # fw_bot are stdlib-only. The only third-party runtime deps are the model
-# stack used for domain scoring:
-numpy>=1.24
-onnxruntime>=1.16        # CPU inference for the TRM DGA model
+# stack used for domain scoring. Upper bounds keep a future major release from
+# changing behaviour under an existing install; CI tests the newest allowed.
+numpy>=1.24,<3
+onnxruntime>=1.16,<2     # CPU inference for the TRM DGA model
 
 # ghost-flow NFQUEUE binding on the Pi (Linux + root only; not needed on
 # the dev box, where the inspector is driven by source.replay / read_pcap):
 #   NetfilterQueue>=1.1   ; sys_platform == "linux"
 #
-# Training / research code under trm/, scanner/, agents/dga_eval/ has heavier
-# deps (torch, scikit-learn, lightgbm, pyarrow) that the production runtime
-# does NOT require; install those separately only if you retrain the models.
+# Training code under trm/ and agents/dga_eval/ has heavier deps (torch,
+# scikit-learn, lightgbm, pyarrow) that the runtime does NOT need; install
+# those separately only if you retrain the models.
