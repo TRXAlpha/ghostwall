@@ -97,3 +97,31 @@ class TrustTests(AbusedServiceTests):
         self.assertEqual(self.q("cloudflare-dns.com").reason, "doh_bypass")
         self.state.allow("cloudflare-dns.com")      # the dashboard's Trust button
         self.assertNotEqual(self.q("cloudflare-dns.com").reason, "doh_bypass")
+
+
+class ClockTests(unittest.TestCase):
+    """The history replay drives the state's clock from the log's timestamps."""
+
+    def _resolver(self, d):
+        cfg = config_mod.load_config(None, {
+            "state_path": os.path.join(d, "s.json"), "events_path": os.path.join(d, "e.jsonl"),
+            "query_log": None, "resolved_ips_path": None, "threat_feed_path": None, "allowlist_path": None})
+        st = GhostState(cfg["state_path"])
+        return Resolver(cfg, st, Low(), Enforcer(NullBackend()),
+                        DeviceMap.from_json([{"name": "tv", "ip": "192.168.1.50"}]), EventLog(cfg["events_path"])), st
+
+    def test_baseline_follows_log_time(self):
+        r, st = self._resolver(tempfile.mkdtemp())
+        t = {"now": datetime(2026, 10, 1, tzinfo=timezone.utc)}
+        st.clock = lambda: t["now"]
+        r.decide("192.168.1.50", "example.com", "A")               # day 0 in the log
+        t["now"] += timedelta(days=4)                                 # four log-days later
+        self.assertEqual(r.decide("192.168.1.50", "abc.ngrok-free.app", "A").reason, "abused_service")
+
+    def test_dedupe_survives_a_restart(self):
+        d = tempfile.mkdtemp()
+        r, st = self._resolver(d)
+        self.assertFalse(r._is_repeat("tv", "x.example.com", "dga_suspect"))
+        st.flush()
+        r2, _ = self._resolver(d)                                     # ghost-dns restarted
+        self.assertTrue(r2._is_repeat("tv", "y.example.com", "dga_suspect"))   # same family, same day

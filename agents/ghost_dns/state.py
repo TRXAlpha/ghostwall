@@ -23,6 +23,7 @@ from tokenizer import registrable_part
 
 _MAX_EVENTS = 5000
 _MAX_FIRST_SEEN = 200000
+_MAX_RECENT_ALERTS = 20000
 
 
 def _now() -> str:
@@ -36,6 +37,9 @@ def _parse_iso(s: str) -> datetime:
 class GhostState:
     def __init__(self, path: str, learning_default: bool = True):
         self.path = path
+        # Wall clock for first-seen dates, novelty and device baselines; the history
+        # replay points it at the log's own timestamps.
+        self.clock = lambda: datetime.now(timezone.utc)
         self._lock = threading.RLock()
         self.allowlist: set[str] = set()
         self.blocklist: set[str] = set()
@@ -47,6 +51,7 @@ class GhostState:
         self.events: dict[str, dict] = {}
         self.device_since: dict[str, str] = {}          # device -> first query (ISO)
         self.device_services: dict[str, list] = {}      # device -> abused services it has used
+        self.recent_alerts: dict[str, float] = {}       # "device|domain family|rule" -> epoch of last alert
         # note_seen() fires on every brand-new domain; persisting each one would
         # be a disk write per query, so it is throttled: mark dirty, flush at
         # most every _flush_interval seconds (and on explicit flush()/shutdown).
@@ -87,6 +92,7 @@ class GhostState:
         self.events = dict(d.get("events", {}))
         self.device_since = dict(d.get("device_since", {}))
         self.device_services = {k: list(v) for k, v in dict(d.get("device_services", {})).items()}
+        self.recent_alerts = {k: float(v) for k, v in dict(d.get("recent_alerts", {})).items()}
 
     def _save_locked(self) -> None:
         # Keep the persisted file bounded.
@@ -108,6 +114,7 @@ class GhostState:
             "events": self.events,
             "device_since": self.device_since,
             "device_services": self.device_services,
+            "recent_alerts": self.recent_alerts,
         }
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -148,6 +155,24 @@ class GhostState:
         with self._lock:
             return domain in self.blocklist or registrable_part(domain) in self.blocklist
 
+    def _stamp(self) -> str:
+        return self.clock().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def seen_alert(self, key: str, window: float) -> bool:
+        """True if this alert key fired within `window` seconds; records it otherwise.
+        Kept in state.json, so a restart or an update doesn't re-send the day's alerts."""
+        now = self.clock().timestamp()
+        with self._lock:
+            last = self.recent_alerts.get(key)
+            if last is not None and now - last < window:
+                return True
+            self.recent_alerts[key] = now
+            if len(self.recent_alerts) > _MAX_RECENT_ALERTS:
+                keep = sorted(self.recent_alerts.items(), key=lambda kv: kv[1])[-(_MAX_RECENT_ALERTS // 2):]
+                self.recent_alerts = {k: v for k, v in keep if now - v < window}
+            self._touch_locked()
+            return False
+
     def _touch_locked(self) -> None:
         """Mark changed; write at most every _flush_interval seconds. For data that is
         cheap to lose in a crash and can change once per query."""
@@ -162,7 +187,7 @@ class GhostState:
         with self._lock:
             if reg in self.first_seen:
                 return False
-            self.first_seen[reg] = _now()
+            self.first_seen[reg] = self._stamp()
             self._touch_locked()
             return True
 
@@ -170,12 +195,12 @@ class GhostState:
         """Record that `device` used `service`. True: first use after the device's
         baseline (alert). False: seen before. None: still in the baseline (learned)."""
         with self._lock:
-            now = datetime.now(timezone.utc)
+            now = self.clock()
             since = self.device_since.get(device)
             if since is None:
                 if len(self.device_since) >= 10000:   # a LAN has far fewer devices
                     return False
-                self.device_since[device] = since = _now()
+                self.device_since[device] = since = self._stamp()
                 self._touch_locked()
             used = self.device_services.setdefault(device, [])
             if service in used:
@@ -193,7 +218,7 @@ class GhostState:
         """Start a device's baseline on its first query."""
         with self._lock:
             if device not in self.device_since and len(self.device_since) < 10000:
-                self.device_since[device] = _now()
+                self.device_since[device] = self._stamp()
                 self._touch_locked()
 
     def is_new(self, domain: str, novelty_days: int) -> bool:
@@ -204,7 +229,7 @@ class GhostState:
         if not ts:
             return True
         try:
-            age = datetime.now(timezone.utc) - _parse_iso(ts)
+            age = self.clock() - _parse_iso(ts)
         except ValueError:
             return False
         return age.days < novelty_days

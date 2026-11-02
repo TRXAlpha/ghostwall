@@ -66,7 +66,6 @@ class Resolver:
         self._resolved_lock = threading.Lock()
         self._query_lock = threading.Lock()
         self._recent_ip: dict[str, float] = {}   # ip -> monotonic last-written
-        self._recent_events: dict[tuple, float] = {}  # (device, registrable) -> monotonic
         self._events_lock = threading.Lock()
         self._alert_times: dict[str, list[float]] = {}  # device -> monotonic times of written alerts
         self._primary_down_until = 0.0   # monotonic; skip a dead primary upstream until then
@@ -274,20 +273,12 @@ class Resolver:
 
     def _is_repeat(self, device: str, domain: str, rule: str = "") -> bool:
         """True if this device already got this kind of alert for this registrable
-        domain within event_dedupe_seconds. Records the sighting otherwise."""
+        domain within event_dedupe_seconds. Records the sighting otherwise (in state.json,
+        so restarts don't repeat alerts)."""
         window = float(self.cfg.get("event_dedupe_seconds", 86400))
         if window <= 0:
             return False
-        key = (device, registrable_part(domain), rule)
-        now = time.monotonic()
-        with self._events_lock:
-            last = self._recent_events.get(key)
-            if last is not None and now - last < window:
-                return True
-            self._recent_events[key] = now
-            if len(self._recent_events) > 20000:  # bound memory
-                self._recent_events = _prune(self._recent_events, now - window, 20000)
-        return False
+        return self.state.seen_alert(f"{device}|{registrable_part(domain)}|{rule}", window)
 
     def _maybe_freeze(self, dev, evt) -> None:
         order = {"info": 0, "warn": 1, "high": 2, "critical": 3}

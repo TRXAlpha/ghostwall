@@ -246,7 +246,7 @@ def write_private(path: str, text: str, group: str | None = "ghostwall") -> None
     os.replace(tmp, path)
 
 
-def cmd_telegram(a, token: str | None = None, start_service: bool = True) -> int:
+def cmd_telegram(a, token: str | None = None, start_service: bool = True, private: bool | None = None) -> int:
     print("Telegram alerts, in three steps. Your alerts (device + domain) go through Telegram's servers.\n")
     if start_service and shutil_which("systemctl"):
         # a running bot polls the same token, and Telegram allows one poller at a time
@@ -260,9 +260,14 @@ def cmd_telegram(a, token: str | None = None, start_service: bool = True) -> int
     print("2. ", end="")
     chat_id, who = find_private_chat(token, me.get("username", "your bot"), wait=a.wait)
     print(f"   Got it: {who} (chat {chat_id}). Only this account can give commands.\n")
+    if private is None:
+        private = sys.stdin.isatty() and input(
+            "   Keep domain names, IPs and MACs out of Telegram messages (they'd say only which\n"
+            "   device and what kind of alert; details on the dashboard)? [y/N] ").strip().lower() in ("y", "yes")
     os.makedirs(ETC, exist_ok=True)
     write_private(os.path.join(ETC, "fw_bot.env"),
-                  f"FW_BOT_TELEGRAM_TOKEN={token}\nFW_BOT_CALLBACK_SECRET={secrets.token_hex(32)}\n")
+                  f"FW_BOT_TELEGRAM_TOKEN={token}\nFW_BOT_CALLBACK_SECRET={secrets.token_hex(32)}\n"
+                  + ("FW_BOT_PRIVACY=minimal\n" if private else ""))
     write_private(os.path.join(ETC, "owner.json"), json.dumps({"chat_id": chat_id, "user": who}) + "\n")
     print(f"3. Saved {ETC}/fw_bot.env and {ETC}/owner.json (readable by root and ghostwall only).")
     if start_service and shutil_which("systemctl"):

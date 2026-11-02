@@ -119,7 +119,7 @@ class CliTests(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             code = cli.cmd_telegram(type("A", (), {"wait": 5})(), token="123456:" + "A" * 30,
-                                    start_service=False)
+                                    start_service=False, private=True)
         self.assertEqual(code, 0)
         with open(os.path.join(self.etc, "owner.json")) as f:
             self.assertEqual(json.load(f)["chat_id"], 4242)       # the private chat, not the group
@@ -129,6 +129,7 @@ class CliTests(unittest.TestCase):
             text = f.read()
         self.assertIn("FW_BOT_TELEGRAM_TOKEN=123456:", text)
         self.assertRegex(text, r"FW_BOT_CALLBACK_SECRET=[0-9a-f]{64}")
+        self.assertIn("FW_BOT_PRIVACY=minimal", text)
 
     def test_bad_token_shape_refused(self):
         with contextlib.redirect_stdout(io.StringIO()):

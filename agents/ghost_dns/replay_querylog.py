@@ -19,7 +19,7 @@ import sys
 import tempfile
 import time
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -103,6 +103,8 @@ def main() -> int:
                  Enforcer(NullBackend()), dm, EventLog(cfg["events_path"]))
     clock = {"t": 0.0}
     r.clock = lambda: clock["t"]
+    # novelty, device baselines and alert de-duplication follow the log's time too
+    state.clock = lambda: datetime.fromtimestamp(clock["t"], timezone.utc)
 
     fmt = detect_format(a.querylog) if a.format == "auto" else a.format
     opener = gzip.open if a.querylog.endswith(".gz") else open
