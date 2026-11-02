@@ -272,14 +272,20 @@ function renderEvents(evs) {
   $("bars").innerHTML = hours.map(n => `<i class="${n >= 3 ? "hot" : n ? "hit" : ""}" style="height:${n ? 12 + 88 * n / max : 4}%" title="${n} alert${n === 1 ? "" : "s"}"></i>`).join("");
   $("stripMax").textContent = "peak " + Math.max(...hours);
 
+  // A burst already names the random-looking names it was made of: fold that device's
+  // single-name alerts from the 10 minutes before it into the burst row.
+  const bursts = alerts.filter(e => e.rule === "dga_burst");
+  const covered = (e) => (e.rule === "dga_suspect" || e.rule === "dga_high") && bursts.some(b =>
+    b.device === e.device && Date.parse(e.time) <= Date.parse(b.time) && Date.parse(b.time) - Date.parse(e.time) <= 600e3);
+  const folded = alerts.filter(covered).length;
   // collapse repeats of the same device + domain + rule into one row (newest first)
   const groups = new Map();
-  for (const e of alerts) {
+  for (const e of alerts.filter(e => !covered(e))) {
     const k = e.device + "|" + e.domain + "|" + e.rule;
     if (groups.has(k)) groups.get(k).n++; else groups.set(k, { ...e, n: 1 });
   }
   const rows = [...groups.values()];
-  $("feedCount").textContent = rows.length ? rows.length + " recent" : "";
+  $("feedCount").textContent = rows.length ? rows.length + " recent" + (folded ? ` · ${folded} folded into bursts` : "") : "";
   $("feed").innerHTML = rows.map(e => {
     const score = e.scores && e.scores.dga != null ? ` · score ${e.scores.dga.toFixed(2)}` : "";
     const why = (e.reasons || []).slice(0, 3).join(" · ");

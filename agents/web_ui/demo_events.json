@@ -1,5 +1,5 @@
 {
- "queries": 9030,
+ "queries": 9031,
  "models": "trm+lr",
  "events": [
   {
@@ -128,6 +128,20 @@
     "dga score 1.00",
     "first seen",
     "not blocked (shadow mode)"
+   ]
+  },
+  {
+   "minutes_ago": 130,
+   "device": "tv",
+   "domain": "api.telegram.org",
+   "rule": "abused_service",
+   "action": "recommend",
+   "severity": "warn",
+   "mac": "02:00:00:00:00:12",
+   "ip": "192.168.1.12",
+   "reasons": [
+    "first use of a Telegram bot API (api.telegram.org) by this device",
+    "malware uses these for commands, payloads or stolen data; trust it if you know why this device started"
    ]
   },
   {
