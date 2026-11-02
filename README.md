@@ -83,8 +83,7 @@ false positives (53.4% up to v0.2.0-beta.2, which did not look inside dynamic-DN
 `x7kq2v9w.ddns.net`). A 1–5-gram model retrained on that data catches 80.5% of names from
 known families and 64.8% from families it never saw, against 81.4% and 60.8% for an
 Endgame-style LSTM, at about 40 µs per name in plain numpy (x86, one thread; not yet
-measured on a Pi). It is not shipped yet: it
-needs retraining and measuring on DRIFT first.
+measured on a Pi). It is not shipped yet: it needs retraining and measuring on DRIFT first.
 
 ## Install
 
