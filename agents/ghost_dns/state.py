@@ -42,6 +42,7 @@ class GhostState:
         self.clock = lambda: datetime.now(timezone.utc)
         self._lock = threading.RLock()
         self.allowlist: set[str] = set()
+        self.static_allow: set[str] = set()   # from allowlist.txt: reloaded at start, not "yours"
         self.blocklist: set[str] = set()
         self.isolated: set[str] = set()
         self.lockdown: bool = False
@@ -144,6 +145,7 @@ class GhostState:
                 line = line.strip().lower()
                 if line and not line.startswith("#"):
                     self.allowlist.add(line)
+                    self.static_allow.add(line)
 
     # -- queries ----------------------------------------------------------
     def is_allowed(self, domain: str) -> bool:
@@ -264,6 +266,20 @@ class GhostState:
             self.blocklist.discard(domain)
             self.confirmations.pop(domain, None)
             self._save_locked()
+
+    def trusted(self) -> list[str]:
+        """Domains trusted through the dashboard, Telegram or the CLI (not the starter file)."""
+        with self._lock:
+            return sorted(self.allowlist - self.static_allow)
+
+    def untrust(self, domain: str) -> bool:
+        """Undo a Trust. False if it isn't trusted, or comes from the starter file."""
+        with self._lock:
+            if domain not in self.allowlist or domain in self.static_allow:
+                return False
+            self.allowlist.discard(domain)
+            self._save_locked()
+            return True
 
     def unblock(self, domain: str) -> None:
         with self._lock:

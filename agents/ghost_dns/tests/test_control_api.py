@@ -303,3 +303,17 @@ class ControlAuthTests(unittest.TestCase):
         cfg = dict(self.cfg, control_host="0.0.0.0")
         with self.assertRaises(ValueError):
             ControlServer(cfg, None, None, None)
+
+
+class TrustListTests(ControlAuthTests):
+    def test_trusted_list_and_undo(self):
+        tok = "Bearer " + self.token
+        g = self.server.httpd.RequestHandlerClass.state["gstate"]
+        g.allowlist.add("starter.example"); g.static_allow.add("starter.example")
+        self.assertEqual(self._post("/allow", {"domain": "mine.example"}, tok), 200)
+        self.assertEqual(g.trusted(), ["mine.example"])                  # the starter entry isn't "yours"
+        self.assertEqual(self._post("/trusted", {}, None), 401)
+        self.assertEqual(self._post("/untrust", {"domain": "starter.example"}, tok), 409)
+        self.assertEqual(self._post("/untrust", {"domain": "mine.example"}, tok), 200)
+        self.assertFalse(g.is_allowed("mine.example"))
+        self.assertEqual(self._post("/untrust", {"domain": "mine.example"}, tok), 404)

@@ -34,6 +34,8 @@ with `{"ok": false, "error": "..."}`. All endpoints take POST with a JSON body;
 | `/isolate` | `{"name": "laptop"}` | `{"name", "isolated": true}`: the device may only reach the Pi's DNS. 409 unless `enforce` is `nft` |
 | `/release` | `{"name": "laptop"}` | `{"name", "isolated": false}` |
 | `/allow` | `{"domain": "example.com"}` | `{"domain", "allowed": true}`: allowlisted network-wide. 400 unless it is a hostname |
+| `/trusted` | `{}` | `{"domains": [...]}`: what was trusted with `/allow` (the starter `allowlist.txt` aside) |
+| `/untrust` | `{"domain": "example.com"}` | `{"domain", "allowed": false}`: undoes `/allow`; 409 for a starter-file entry, 404 if not trusted |
 | `/lockdown` | `{}` | `{"lockdown": bool}`: toggles; drops forwarded traffic except to the Pi and tailnet. 409 unless `enforce` is `nft` and `pi_ip` is set |
 | `/learning` | `{"enabled": true\|false}` | `{"learning": bool}`: learning on means alerts only. Anything but a boolean is a 400 |
 | `/unblock` | `{"event_id": "...", "domain": "..."}` | `{"event_id", "unblocked": true}` (alert buttons) |
@@ -114,7 +116,7 @@ overrides any of them. The most useful keys:
 
 | Command | Purpose |
 |---|---|
-| `ghostwall status \| alerts \| allow D \| unblock D \| learning on\|off \| password \| telegram \| calibrate [--target P] [--apply]` | everyday commands (`ghost_dns/ghostwall_cli.py`, on the PATH after install; actions need sudo) |
+| `ghostwall status \| version \| alerts \| allow D \| trusted \| untrust D \| unblock D \| learning on\|off \| password \| telegram \| calibrate [--target P] [--apply]` | everyday commands (`ghost_dns/ghostwall_cli.py`, on the PATH after install; actions need sudo) |
 | `ghost_dns/app.py --config FILE` | run ghost-dns; `--shadow --querylog FILE`, `--once` (build and exit), `--dns-port`, `--upstream`, `--enforce`, `--learning/--no-learning` |
 | `ghost_dns/go_shadow.sh` | switch to shadow mode safely (root) |
 | `ghost_dns/update_feed.py --out FILE [--feed URL ...]` | download threat feeds; keeps the old file on failure |

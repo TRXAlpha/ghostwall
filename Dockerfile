@@ -9,6 +9,7 @@ WORKDIR /opt/ghostwall
 COPY requirements.lock .
 RUN pip install --no-cache-dir --disable-pip-version-check --require-hashes -r requirements.lock
 
+COPY pyproject.toml .
 COPY ghostwall/models ghostwall/models
 COPY agents/ghost_dns agents/ghost_dns
 COPY agents/web_ui agents/web_ui

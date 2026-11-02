@@ -116,6 +116,9 @@
     .stat:last-child { grid-column:1 / -1; }
   }
   @media (max-width:520px) { .wrap { padding:0 16px; } .alert .side .tag { display:none; } }
+.trusted ul { list-style: none; margin: 4px 0 0; padding: 0; }
+.trusted li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 2px 0; word-break: break-all; }
+.trusted button { padding: 0 8px; }
 </style>
 </head>
 <body>
@@ -162,6 +165,7 @@
           <input id="domain" placeholder="trust a domain, e.g. fbsbx.com" autocomplete="off" spellcheck="false">
           <button class="primary" type="submit">Trust</button>
         </form>
+        <div class="trusted" id="trustedBox" hidden><p class="sub">Trusted by you (no alerts for these):</p><ul id="trusted"></ul></div>
       </div>
     </aside>
   </div>
@@ -298,6 +302,7 @@ document.addEventListener("click", (ev) => {
   else if (a === "lockdown") act("lockdown", {}, cur.lockdown ? "Lockdown released" : "Lockdown on");
   else if (a === "isolate" || a === "release") act(a, { name: b.dataset.name }, `${b.dataset.name}: ${a}d`);
   else if (a === "allow") act("allow", { domain: b.dataset.domain }, "Trusted " + b.dataset.domain);
+  else if (a === "untrust") act("untrust", { domain: b.dataset.domain }, "No longer trusted: " + b.dataset.domain);
 });
 $("allowForm").addEventListener("submit", (ev) => {
   ev.preventDefault();
@@ -310,6 +315,13 @@ async function refresh() {
   try {
     const [s, e] = await Promise.all([api("/api/status"), api("/api/events?limit=200")]);
     renderStatus(s.resolver); renderEvents(e.events);
+    try {  // the user's own trusted domains, with an undo
+      const t = await api("/api/action", { method: "POST", headers: {"Content-Type": "application/json"},
+                                            body: JSON.stringify({ action: "trusted", params: {} }) });
+      const doms = t.domains || [];
+      $("trustedBox").hidden = !doms.length;
+      $("trusted").innerHTML = doms.map(d => `<li><span>${esc(d)}</span> <button data-act="untrust" data-domain="${esc(d)}" title="stop trusting">×</button></li>`).join("");
+    } catch (_) { $("trustedBox").hidden = true; }
     $("dot").className = "dot on"; $("conn").textContent = "live";
   } catch (err) {
     $("dot").className = "dot off"; $("conn").textContent = "resolver unreachable";

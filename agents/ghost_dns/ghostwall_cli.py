@@ -4,9 +4,11 @@
     ghostwall status                 mode, models, queries scored, feed, devices
     ghostwall alerts [-n 20]         the latest alerts, newest first
     ghostwall allow DOMAIN           trust a domain network-wide (no more alerts for it)
+    ghostwall trusted                what you have trusted;  ghostwall untrust DOMAIN  undoes one
     ghostwall unblock DOMAIN         take a domain off the blocklist (inline mode)
     ghostwall learning on|off        alerts only (on) or allow blocking (off, inline mode)
     ghostwall password               the dashboard password
+    ghostwall version                what is installed
     ghostwall telegram               set up Telegram alerts step by step
     ghostwall calibrate [--apply]    thresholds from YOUR network's history, not a dataset's
 
@@ -94,6 +96,7 @@ def cmd_status(_a) -> int:
             else "inline, alerts only" if st.get("learning") else "inline, BLOCKING")
     stats = st.get("stats") or {}
     feed = st.get("feed") or {}
+    print(f"version:  {installed_version()}")
     print(f"mode:     {mode}")
     print(f"models:   {st.get('models', '?')}")
     print(f"scored:   {stats.get('queries', 0):,} queries since start, "
@@ -158,6 +161,18 @@ def cmd_allow(a) -> int:
     return 0
 
 
+def cmd_trusted(_a) -> int:
+    doms = control("/trusted", {}).get("domains") or []
+    print("\n".join(doms) if doms else "Nothing trusted yet (the starter allowlist file aside).")
+    return 0
+
+
+def cmd_untrust(a) -> int:
+    r = control("/untrust", {"domain": _domain(a.domain)})
+    print(f"{r.get('domain')} is no longer trusted: it can raise alerts again.")
+    return 0
+
+
 def cmd_unblock(a) -> int:
     r = control("/unblock", {"domain": _domain(a.domain)})
     print(f"Unblocked {r.get('domain')}.")
@@ -182,6 +197,26 @@ def _env_value(path: str, key: str) -> str | None:
     except FileNotFoundError:
         pass
     return None
+
+
+def installed_version() -> str:
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    try:
+        with open(os.path.join(root, "VERSION"), encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        pass
+    try:
+        with open(os.path.join(root, "pyproject.toml"), encoding="utf-8") as f:
+            m = re.search(r'^version = "([^"]+)"', f.read(), re.M)
+        return m.group(1) if m else "unknown"
+    except OSError:
+        return "unknown"
+
+
+def cmd_version(_a) -> int:
+    print(f"ghostwall {installed_version()}")
+    return 0
 
 
 def cmd_password(_a) -> int:
@@ -397,6 +432,10 @@ def main(argv=None) -> int:
     p = sub.add_parser("allow", help="trust a domain")
     p.add_argument("domain")
     p.set_defaults(fn=cmd_allow)
+    sub.add_parser("trusted", help="domains you have trusted").set_defaults(fn=cmd_trusted)
+    p = sub.add_parser("untrust", help="undo a trust")
+    p.add_argument("domain")
+    p.set_defaults(fn=cmd_untrust)
     p = sub.add_parser("unblock", help="take a domain off the blocklist")
     p.add_argument("domain")
     p.set_defaults(fn=cmd_unblock)
@@ -404,6 +443,7 @@ def main(argv=None) -> int:
     p.add_argument("state", choices=["on", "off"])
     p.set_defaults(fn=cmd_learning)
     sub.add_parser("password", help="the dashboard password").set_defaults(fn=cmd_password)
+    sub.add_parser("version", help="what is installed").set_defaults(fn=cmd_version)
     p = sub.add_parser("calibrate", help="thresholds from your own network's query log")
     p.add_argument("--querylog", help="default: the log in /etc/ghostwall/ghostwall.env")
     p.add_argument("--target", type=float, default=0.5,

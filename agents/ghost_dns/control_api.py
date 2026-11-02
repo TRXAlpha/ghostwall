@@ -142,6 +142,8 @@ class ControlHandler(BaseHTTPRequestHandler):
             "/isolate": lambda: self._isolate(body),
             "/release": lambda: self._release(body),
             "/allow": lambda: self._allow(body),
+            "/trusted": self._trusted,
+            "/untrust": lambda: self._untrust(body),
             "/lockdown": self._lockdown,
             "/learning": lambda: self._learning(body),
             "/unblock": lambda: self._unblock(body),
@@ -241,6 +243,20 @@ class ControlHandler(BaseHTTPRequestHandler):
             raise _ApiError(400, "not a domain name")
         self.state["gstate"].allow(domain)
         return 200, {"ok": True, "domain": domain, "allowed": True}
+
+    def _trusted(self):
+        return 200, {"ok": True, "domains": self.state["gstate"].trusted()}
+
+    def _untrust(self, body):
+        domain = str(body.get("domain", "")).strip().rstrip(".").lower()
+        if not DOMAIN_RE.match(domain):
+            raise _ApiError(400, "not a domain name")
+        g = self.state["gstate"]
+        if domain in g.static_allow:
+            raise _ApiError(409, f"{domain} is in the starter allowlist file (allowlist_path); remove it there")
+        if not g.untrust(domain):
+            raise _ApiError(404, f"{domain} is not trusted")
+        return 200, {"ok": True, "domain": domain, "allowed": False}
 
     def _lockdown(self):
         self._require_enforcement()

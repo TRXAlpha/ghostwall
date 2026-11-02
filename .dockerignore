@@ -1,6 +1,7 @@
 # Only what the image needs (see Dockerfile).
 *
 !requirements.lock
+!pyproject.toml
 !ghostwall/models
 !agents/ghost_dns
 !agents/web_ui

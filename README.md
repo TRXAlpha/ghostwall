@@ -197,7 +197,7 @@ about 25 MB each for the dashboard and the Telegram bot).
 ghostwall status                  # is it scoring? ("queries" should keep rising)
 sudo ghostwall alerts             # what it found, newest first
 sudo ghostwall telegram           # alerts on your phone: paste a bot token, message the bot, done
-sudo ghostwall allow example.com  # stop alerts for a domain you trust
+sudo ghostwall allow example.com  # stop alerts for a domain you trust (ghostwall untrust undoes it)
 sudo ghostwall calibrate          # after a few days: what each threshold would flag on YOUR network
 ```
 

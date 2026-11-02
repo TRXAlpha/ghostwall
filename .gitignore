@@ -76,3 +76,6 @@ agents/fw_bot/integrate_ghost_bot.py
 
 # pickled models from experiments: never shipped
 *.joblib
+
+# written by install.sh into /opt/ghostwall (and into a checkout installed in place)
+/VERSION

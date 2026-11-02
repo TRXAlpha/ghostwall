@@ -44,6 +44,8 @@ ACTIONS = {
     "isolate": ("/isolate", {"name"}),
     "release": ("/release", {"name"}),
     "allow": ("/allow", {"domain"}),
+    "untrust": ("/untrust", {"domain"}),
+    "trusted": ("/trusted", set()),
     "lockdown": ("/lockdown", set()),
     "learning": ("/learning", {"enabled"}),
 }
@@ -144,7 +146,7 @@ def validate_action(payload: dict) -> tuple[str, dict]:
     body = {k: v for k, v in (payload.get("params") or {}).items() if k in allowed}
     if name in ("isolate", "release") and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", str(body.get("name", ""))):
         raise ValueError("device name required")
-    if name == "allow":
+    if name in ("allow", "untrust"):
         domain = str(body.get("domain", "")).strip().rstrip(".").lower()
         if not DOMAIN_RE.match(domain):
             raise ValueError("valid domain required")

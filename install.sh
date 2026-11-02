@@ -132,6 +132,10 @@ if [ "$SRC" != "$DEST" ]; then
   tar -C "$SRC" --exclude=./.git --exclude=./.venv --exclude=./data --exclude=./runs \
       -cf - . | tar -C "$DEST" --no-same-owner --no-same-permissions -xf -
 fi
+# What is installed, for `ghostwall version` (the version in pyproject.toml + the commit).
+VER=$(sed -n 's/^version = "\(.*\)"/\1/p' "$SRC/pyproject.toml" | head -1)
+REV=$(git -C "$SRC" describe --always --dirty 2>/dev/null || echo "no git")
+printf '%s (%s), installed %s\n' "${VER:-unknown}" "$REV" "$(date -u +%Y-%m-%d)" > "$DEST/VERSION"
 # The code runs as the ghostwall user (with the right to read any file) and uninstall.sh
 # runs as root, so nobody but root may change it. A clone keeps the cloning user's
 # ownership, which would let that user (or anything running as them) edit it.

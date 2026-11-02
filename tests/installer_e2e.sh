@@ -66,6 +66,7 @@ ex 'grep -q "^Seccomp:\s*2" /proc/$(systemctl show -p MainPID --value ghostwall-
 [ "$(ex 'stat -c %U /opt/ghostwall/agents/ghost_dns/app.py')" = root ] || fail "code not root-owned"
 if ex 'su pi -s /bin/sh -c "touch /opt/ghostwall/agents/ghost_dns/app.py"' 2>/dev/null; then fail "user can edit the code"; fi
 [ "$(ex 'stat -c %a /var/lib/ghostwall/control_token')" = 600 ] || fail "token not 0600"
+ex 'ghostwall version' | grep -q "^ghostwall 0\." || fail "no version recorded"
 
 echo "== scoring, CLI, dashboard"
 ex 'echo "{\"T\":\"2026-11-02T18:00:00Z\",\"QH\":\"xk2qv9zr7wpl3mfa.top\",\"QT\":\"A\",\"IP\":\"192.168.1.20\"}" >> /opt/AdGuardHome/data/querylog.json'
@@ -74,6 +75,8 @@ ex 'ghostwall alerts -n 1' | grep -q xk2qv9zr7wpl3mfa.top || fail "query not sco
 ex 'su pi -s /bin/sh -c "ghostwall status"' | grep -q "1 queries" || fail "status (no sudo) wrong"
 if ex 'su pi -s /bin/sh -c "ghostwall allow example.org"' 2>/dev/null; then fail "non-root could take an action"; fi
 ex 'ghostwall allow example.org' >/dev/null || fail "root could not take an action"
+ex 'ghostwall trusted' | grep -qx example.org || fail "trusted list wrong"
+ex 'ghostwall allow undo.example && ghostwall untrust undo.example' >/dev/null || fail "untrust failed"
 PASS=$(ex 'ghostwall password' | awk '{print $4}')
 [ "$(ex "curl -sk -o /dev/null -w %{http_code} https://127.0.0.1:8088/")" = 401 ] || fail "https without password"
 [ "$(ex "curl -sk -o /dev/null -w %{http_code} -u ghostwall:$PASS https://127.0.0.1:8088/api/events")" = 200 ] || fail "https with password"
