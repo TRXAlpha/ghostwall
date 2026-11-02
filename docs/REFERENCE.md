@@ -101,7 +101,7 @@ overrides any of them. The most useful keys:
 | `threat_feed_path` | installer: `/var/lib/ghostwall/threat_feed.txt` | written by `update_feed.py` |
 | `allowlist_path` | `agents/ghost_dns/allowlist.txt` | starter allowlist |
 | `devices_json` | installer: `/etc/ghostwall/devices.json` | device names; unknown clients are named by IP |
-| `state_path`, `events_path` | installer: `/var/lib/ghostwall/state.json`, `.../events.jsonl` | persistent state and the alert log |
+| `state_path`, `events_path` | installer: `/var/lib/ghostwall/state.json`, `.../events.jsonl` | persistent state and the alert log. The log starts a new file past 32 MiB and keeps one `events.jsonl.1`; the dashboard and bot read across both |
 | `query_log` | `null` (off) | inline mode: a text log of every query |
 | `resolved_ips_path` | installer: `/var/lib/ghostwall/resolved_ips.jsonl` | inline mode: answered IPs, read by ghost-flow |
 | `log_max_bytes` | 16 MiB | `query_log` and `resolved_ips_path` start a new file past this (one `.1` kept) |

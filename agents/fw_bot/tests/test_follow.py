@@ -66,6 +66,17 @@ class FollowTests(unittest.TestCase):
         fo.poll()
         self.assertEqual(self.bot.calls[-1], ("evt_5", 42))
 
+    def test_rotation_sends_the_old_files_last_lines_then_the_new_file(self):
+        fo = fw_bot.Follower(self.bot, self.path, 42)
+        self._append(evt(1))
+        self.assertEqual(fo.poll(), 1)
+        self._append(evt(2))                      # written, not yet seen...
+        os.replace(self.path, self.path + ".1")   # ...when ghost-dns rotates
+        self._append(evt(3), evt(4))
+        self.assertEqual(fo.poll(), 3)
+        self.assertEqual([c[0] for c in self.bot.calls], ["evt_1", "evt_2", "evt_3", "evt_4"])
+        self.assertEqual(fo.poll(), 0)
+
     def test_skips_garbage_lines(self):
         fo = fw_bot.Follower(self.bot, self.path, 42)
         self._append(raw="not json\n")

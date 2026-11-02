@@ -76,18 +76,83 @@ def make_event(
     return evt
 
 
-class EventLog:
-    """Append-only JSONL writer, line-atomic and thread-safe."""
+try:
+    import fcntl  # serialises rotation between ghost-dns and ghost-flow (Linux, macOS)
+except ImportError:  # pragma: no cover - Windows dev box: one writer, no lock needed
+    fcntl = None
 
-    def __init__(self, path: str):
+MAX_BYTES = 32 * 2**20  # events.jsonl starts over past this; one events.jsonl.1 is kept
+
+
+class EventLog:
+    """Append-only JSONL writer, line-atomic and thread-safe, with size rotation.
+
+    Past max_bytes the file becomes <path>.1 (replacing an older .1) and a new one
+    starts. ghost-dns and ghost-flow append to the same file from two processes, so
+    rotation happens under an flock and only if the file we hold is still the one at
+    `path` (else the other process rotated first and we just reopen)."""
+
+    def __init__(self, path: str, max_bytes: int = MAX_BYTES):
         self.path = path
+        self.max_bytes = max_bytes
         self._lock = threading.Lock()
         d = os.path.dirname(path)
         if d:
             os.makedirs(d, exist_ok=True)
 
     def write(self, event: dict) -> None:
-        line = json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+        line = (json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
         with self._lock:
-            with open(self.path, "a", encoding="utf-8") as f:
+            for _ in range(3):
+                with open(self.path, "ab") as f:
+                    if fcntl:
+                        fcntl.flock(f, fcntl.LOCK_EX)
+                    try:
+                        if os.fstat(f.fileno()).st_ino != _inode(self.path):
+                            continue  # rotated under us: write to the new file
+                        if self.max_bytes and f.tell() + len(line) > self.max_bytes and f.tell() > 0:
+                            os.replace(self.path, self.path + ".1")
+                            continue
+                        f.write(line)
+                        return
+                    finally:
+                        if fcntl:
+                            fcntl.flock(f, fcntl.LOCK_UN)
+            with open(self.path, "ab") as f:  # never drop an alert over a rotation race
                 f.write(line)
+
+
+def _inode(path: str) -> int:
+    try:
+        return os.stat(path).st_ino
+    except FileNotFoundError:
+        return -1
+
+
+def read_tail(path: str, limit: int | None, tail_bytes: int) -> list[dict]:
+    """Newest-first events from the end of the log, continuing into <path>.1 after a
+    rotation so a fresh file doesn't make recent history look empty."""
+    out: list[dict] = []
+    for p in (path, path + ".1"):
+        if not os.path.exists(p):
+            continue
+        with open(p, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - tail_bytes))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+        if size > tail_bytes and lines:
+            lines = lines[1:]  # the first line is probably cut off
+        for line in reversed(lines):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except ValueError:
+                continue
+            if limit is not None and len(out) >= limit:
+                return out
+        if size > tail_bytes:
+            break  # this file alone was longer than the tail: don't reach further back
+    return out

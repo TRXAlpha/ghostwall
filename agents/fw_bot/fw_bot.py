@@ -118,6 +118,13 @@ class FwBot:
                     print(f"update error: {exc}", file=sys.stderr)
 
 
+def _inode(path: str) -> int:
+    try:
+        return os.stat(path).st_ino
+    except FileNotFoundError:
+        return -1
+
+
 class Follower:
     """Send-only tail of events.jsonl. Records the current end of the file at
     creation, so history is never replayed. Each poll() sends new alerts once."""
@@ -127,14 +134,25 @@ class Follower:
         self.path = events_path
         self.chat_id = chat_id
         self.offset = os.path.getsize(events_path) if os.path.exists(events_path) else 0
+        self.inode = _inode(events_path)
 
     def poll(self) -> int:
         sent = 0
         if not os.path.exists(self.path):
             return sent
-        if os.path.getsize(self.path) < self.offset:
-            self.offset = 0  # file was truncated or rotated
-        with open(self.path, "rb") as f:
+        ino = _inode(self.path)
+        if ino != self.inode:
+            # ghost-dns rotated the log: finish what was added to the old file first
+            if self.inode != -1 and _inode(self.path + ".1") == self.inode:
+                sent += self._read(self.path + ".1")
+            self.inode, self.offset = ino, 0
+        elif os.path.getsize(self.path) < self.offset:
+            self.offset = 0  # file was truncated
+        return sent + self._read(self.path)
+
+    def _read(self, path: str) -> int:
+        sent = 0
+        with open(path, "rb") as f:
             f.seek(self.offset)
             for raw in f:
                 if not raw.endswith(b"\n"):
