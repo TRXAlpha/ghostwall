@@ -27,6 +27,7 @@ runs/
 # ---- Runtime state written by the agents (not source) ----
 agents/*/state.json
 agents/*/events.jsonl
+agents/*/control_token
 agents/*/resolved_ips.jsonl
 agents/*/flow_events.jsonl
 agents/*/queries.log

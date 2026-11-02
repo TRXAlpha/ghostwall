@@ -1,6 +1,6 @@
 # Only what the image needs (see Dockerfile).
 *
-!requirements.txt
+!requirements.lock
 !ghostwall/models
 !agents/ghost_dns
 !agents/web_ui
@@ -12,3 +12,4 @@
 **/queries.log
 **/threat_feed.txt
 **/ghost_dns.json
+**/control_token

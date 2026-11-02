@@ -144,8 +144,9 @@ if ! python3 -c 'import ensurepip' 2>/dev/null; then
   apt-get install -y -qq python3-venv >/dev/null || { apt-get update -qq && apt-get install -y -qq python3-venv >/dev/null; }
 fi
 [ -x "$DEST/.venv/bin/python" ] || python3 -m venv "$DEST/.venv"
-"$DEST/.venv/bin/pip" install -q --disable-pip-version-check --upgrade pip
-if ! "$DEST/.venv/bin/pip" install -q --disable-pip-version-check -r "$DEST/requirements.txt"; then
+# Exact versions, checked by hash (requirements.lock): a compromised or replaced
+# package on PyPI fails the install instead of running as part of Ghostwall.
+if ! "$DEST/.venv/bin/pip" install -q --disable-pip-version-check --require-hashes -r "$DEST/requirements.lock"; then
   # onnxruntime has no wheel for some platforms (32-bit ARM, brand-new Python): run on numpy alone.
   "$DEST/.venv/bin/pip" install -q --disable-pip-version-check "numpy>=1.24,<3"
   say "   onnxruntime is not available here: scoring uses the n-gram model only (catches fewer DGA names)"

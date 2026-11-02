@@ -127,8 +127,12 @@ docker compose up -d --build
    `docker compose exec ghostwall cat /data/web_password`.
 
 The Ghostwall container keeps one capability (`DAC_OVERRIDE`, to read AdGuard's log), a
-read-only filesystem and `no-new-privileges`; copy those lines from `compose.yaml` if
-you write your own service.
+read-only filesystem and `no-new-privileges`, and sees AdGuard's files read-only. Only the
+small `adguard-tune` service, which has no network and no capabilities, can write
+AdGuard's config (to lower its log buffer). Images are pinned by digest. Copy those lines
+from `compose.yaml` if you write your own service. Docker Hub rate-limiting your builds?
+`docker build --build-arg BASE=mirror.gcr.io/library/python@sha256:e697c818...` (the full
+digest is in the `Dockerfile`) uses Google's mirror of the same image.
 
 Port 53 already taken on Ubuntu? That is `systemd-resolved`; the "resolved" section of
 AdGuard's [Docker docs](https://github.com/AdguardTeam/AdGuardHome/wiki/Docker) shows

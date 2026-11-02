@@ -1,9 +1,13 @@
 # Ghostwall: ghost-dns in shadow mode + the dashboard. See compose.yaml.
-FROM python:3.12-slim
+# Pinned by digest: the same base image on every build (bump it deliberately). Rate-limited
+# by Docker Hub? The same digest from a mirror works too:
+#   docker build --build-arg BASE=mirror.gcr.io/library/python@sha256:e697c818... .
+ARG BASE=python:3.12.16-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337
+FROM ${BASE}
 
 WORKDIR /opt/ghostwall
-COPY requirements.txt .
-RUN pip install --no-cache-dir --disable-pip-version-check -r requirements.txt
+COPY requirements.lock .
+RUN pip install --no-cache-dir --disable-pip-version-check --require-hashes -r requirements.lock
 
 COPY ghostwall/models ghostwall/models
 COPY agents/ghost_dns agents/ghost_dns

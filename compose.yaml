@@ -13,7 +13,8 @@
 # mount your existing folders instead (README.md, "Docker").
 services:
   adguardhome:
-    image: adguard/adguardhome:latest
+    # Pinned (tag and digest); bump deliberately after reading AdGuard's release notes.
+    image: adguard/adguardhome:v0.107.79@sha256:aba9e3bf0613be3ba3755e1fc311b126e2c24bec25e18b6483894a88283074f0
     restart: unless-stopped
     ports:
       - "${DNS_PORT:-53}:53/tcp"
@@ -35,7 +36,9 @@ services:
       GHOSTWALL_QUERYLOG: /adguard/work/data/querylog.json
       # GHOSTWALL_WEB_PASSWORD: choose-one   # default: generated once into /data/web_password
     # Root inside the container (to read AdGuard's root-owned log) but with one capability,
-    # a read-only filesystem and no way to gain privileges.
+    # a read-only filesystem and no way to gain privileges. It sees AdGuard's files
+    # read-only and never its config: the dashboard listens on the network, and a bug
+    # there must not be able to change where your DNS goes.
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
@@ -43,5 +46,21 @@ services:
     security_opt: ["no-new-privileges:true"]
     volumes:
       - ./adguard/work:/adguard/work:ro
-      - ./adguard/conf:/adguard/conf       # writable only to lower AdGuard's log buffer
       - ./ghostwall-data:/data
+
+  # Lowers AdGuard's query-log buffer (1000 queries by default) so alerts arrive in
+  # seconds. The only part that can write AdGuard's config: no network, no capabilities,
+  # and it runs nothing but adguard_conf.py every 5 minutes.
+  adguard-tune:
+    image: ghostwall:local
+    restart: unless-stopped
+    depends_on: [ghostwall]
+    command: ["tune-adguard"]
+    healthcheck:
+      disable: true       # the image's check probes ghost-dns, which this service doesn't run
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ./adguard/conf:/adguard/conf
