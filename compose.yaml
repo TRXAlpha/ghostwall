@@ -50,8 +50,9 @@ services:
       - ./ghostwall-data:/data
 
   # Lowers AdGuard's query-log buffer (1000 queries by default) so alerts arrive in
-  # seconds. The only part that can write AdGuard's config: no network, no capabilities,
-  # and it runs nothing but adguard_conf.py every 5 minutes.
+  # seconds. The only part that can write AdGuard's config: no network, nothing mounted
+  # but that folder, and it runs nothing but adguard_conf.py. Its two capabilities let it
+  # edit the file whoever owns it, and keep that owner (AdGuard may run as a normal user).
   adguard-tune:
     image: ghostwall:local
     restart: unless-stopped
@@ -62,6 +63,7 @@ services:
     network_mode: none
     read_only: true
     cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE]
     security_opt: ["no-new-privileges:true"]
     volumes:
       - ./adguard/conf:/adguard/conf

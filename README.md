@@ -134,8 +134,8 @@ docker compose up -d --build
 
 The Ghostwall container keeps one capability (`DAC_OVERRIDE`, to read AdGuard's log), a
 read-only filesystem and `no-new-privileges`, and sees AdGuard's files read-only. Only the
-small `adguard-tune` service, which has no network and no capabilities, can write
-AdGuard's config (to lower its log buffer). Images are pinned by digest. Copy those lines
+small `adguard-tune` service, which has no network and sees nothing but that folder, can
+write AdGuard's config (to lower its log buffer, keeping the file's owner). Images are pinned by digest. Copy those lines
 from `compose.yaml` if you write your own service. Docker Hub rate-limiting your builds?
 `docker build --build-arg BASE=mirror.gcr.io/library/python@sha256:e697c818...` (the full
 digest is in the `Dockerfile`) uses Google's mirror of the same image.

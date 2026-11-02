@@ -22,7 +22,8 @@ FLUSH=${ADGUARD_FLUSH_EVERY:-10}
 tune_adguard() {  # lower AdGuard's query-log buffer; AdGuard applies it on its next restart
   [ "$FLUSH" -gt 0 ] && [ -f "$YAML" ] && [ -w "$YAML" ] || return 0
   local changed
-  changed=$(python agents/ghost_dns/adguard_conf.py "$YAML" --flush "$FLUSH" 2>/dev/null) || return 0
+  changed=$(python agents/ghost_dns/adguard_conf.py "$YAML" --flush "$FLUSH" 2>&1) \
+    || { echo "[ghostwall] could not tune AdGuard: $changed"; return 0; }
   case "$changed" in
     *flush:*) echo "[ghostwall] AdGuard was buffering ${changed##*flush:} queries before writing its log; set to $FLUSH." \
                    "Restart AdGuard once so alerts arrive in seconds: docker compose restart adguardhome" ;;

@@ -59,14 +59,16 @@ jobs:
           PASS=$(sudo cat data/web_password)
           test "$(curl -s -o /dev/null -w '%{http_code}' -u "ghostwall:$PASS" http://127.0.0.1:8088/api/events)" = 200
           if docker logs gw 2>&1 | grep -qF "$PASS"; then echo "password leaked into the logs"; exit 1; fi
-      - name: adguard-tune sidecar (no network, no capabilities) lowers AdGuard's buffer
+      - name: adguard-tune sidecar (no network, as in compose.yaml) lowers AdGuard's buffer and keeps the file's owner
         run: |
           mkdir -p conf
           printf 'dns:\n  port: 53\nquerylog:\n  enabled: true\n  size_memory: 1000\n' > conf/AdGuardHome.yaml
-          docker run -d --name tune --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
-            -v "$PWD/conf:/adguard/conf" ghostwall:ci tune-adguard
+          chmod 600 conf/AdGuardHome.yaml   # owned by the runner user, like AdGuard run as a normal user
+          docker run -d --name tune --network none --read-only --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE \
+            --security-opt no-new-privileges -v "$PWD/conf:/adguard/conf" ghostwall:ci tune-adguard
           for i in $(seq 20); do grep -q 'size_memory: 10$' conf/AdGuardHome.yaml && break; sleep 1; done
           grep -q 'size_memory: 10$' conf/AdGuardHome.yaml
+          test "$(stat -c %u:%a conf/AdGuardHome.yaml)" = "$(id -u):600"
           docker logs tune
       - if: failure()
         run: docker logs gw; docker logs tune || true

@@ -52,6 +52,16 @@ def main(argv=None) -> int:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(new)
         shutil.copymode(a.yaml, tmp)
+        st = os.stat(a.yaml)
+        if (os.stat(tmp).st_uid, os.stat(tmp).st_gid) != (st.st_uid, st.st_gid):
+            # The new file must keep the owner: AdGuard may run as that user, and its
+            # config is 0600. Without the right to chown, leave the file alone.
+            try:
+                os.chown(tmp, st.st_uid, st.st_gid)
+            except PermissionError:
+                os.unlink(tmp)
+                print(f"can't keep {a.yaml}'s owner (uid {st.st_uid}); not changed", file=sys.stderr)
+                return 1
         os.replace(tmp, a.yaml)
     print(" ".join(changes))
     return 0
