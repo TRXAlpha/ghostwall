@@ -83,7 +83,8 @@ setenv() {  # setenv KEY VALUE: replace or append KEY in ghostwall.env
 import re, shlex, sys
 path, key, val = sys.argv[1:4]
 lines = open(path, encoding="utf-8").read().splitlines()
-new = f"{key}={shlex.quote(val) if re.search(r'''[\s"'$`\\]''', val) else val}"
+needs_quotes = re.search(r"[\s\"'$`\\]", val)  # (no quotes nested in an f-string: Python < 3.12)
+new = key + "=" + (shlex.quote(val) if needs_quotes else val)
 for i, line in enumerate(lines):
     if line.startswith(key + "="):
         lines[i] = new

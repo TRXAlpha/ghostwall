@@ -31,7 +31,20 @@ jobs:
           done
           python agents/netconf/test_gen.py
       - name: shell scripts parse
-        run: for f in install.sh uninstall.sh agents/ghost_dns/go_shadow.sh docker/entrypoint.sh; do bash -n "$f"; done
+        run: for f in install.sh uninstall.sh agents/ghost_dns/go_shadow.sh docker/entrypoint.sh tests/installer_e2e.sh; do bash -n "$f"; done
+
+  installer:
+    # install.sh for real, under systemd, as a user would run it. (Before this job, a
+    # Python 3.12-only line made every fresh install on Debian 12 / Ubuntu 22.04 fail.)
+    name: installer (${{ matrix.image }}, systemd)
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["debian:bookworm", "ubuntu:22.04", "ubuntu:24.04"]
+    steps:
+      - uses: actions/checkout@v4
+      - run: tests/installer_e2e.sh "${{ matrix.image }}"
 
   docker:
     name: docker image (${{ matrix.os }})
