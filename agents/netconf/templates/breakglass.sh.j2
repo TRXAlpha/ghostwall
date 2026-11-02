@@ -28,10 +28,10 @@ restore() {
     [ -z "$val" ] && val="$fallback"
     sysctl -w "${key}=${val}"
 }
-for k in net.ipv4.conf.all.send_redirects net.ipv4.conf.default.send_redirects net.ipv4.conf.eth0.send_redirects; do
+for k in net.ipv4.conf.all.send_redirects net.ipv4.conf.default.send_redirects net.ipv4.conf.{{ lan_iface }}.send_redirects; do
     restore "$k" 1
 done
-for k in net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter net.ipv4.conf.eth0.rp_filter; do
+for k in net.ipv4.conf.all.rp_filter net.ipv4.conf.default.rp_filter net.ipv4.conf.{{ lan_iface }}.rp_filter; do
     restore "$k" 2
 done
 echo "[ok] sysctl restored (before-file values or fallbacks: rp_filter=2, send_redirects=1)"

@@ -31,7 +31,7 @@ log-async=25
 # --- Safety / correctness ---
 # Do not forward DHCP requests we did not originate on this interface.
 bind-interfaces
-interface=eth0
+interface={{ lan_iface }}
 # Ignore clients that ask from addresses outside our LAN.
 dhcp-authoritative
 # Quiet about missing TFTP etc.

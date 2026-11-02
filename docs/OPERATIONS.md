@@ -180,7 +180,7 @@ Back to shadow at any time: `sudo bash /opt/ghostwall/agents/ghost_dns/go_shadow
 Connection-level checks need the Pi to be the LAN's default gateway. This changes the
 whole network; read it fully first, and keep the router's admin page open.
 
-1. Edit `agents/netconf/config.json` (`pi_ip`, `lan_cidr`, DHCP range) and
+1. Edit `agents/netconf/config.json` (`lan_iface`, e.g. `eth0` on a Pi, `pi_ip`, `lan_cidr`, DHCP range) and
    `/etc/ghostwall/devices.json` (every device needs a MAC here), then
    `sudo python agents/netconf/gen.py --devices /etc/ghostwall/devices.json`. Output goes
    to `agents/netconf/out/`.

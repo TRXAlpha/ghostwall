@@ -18,7 +18,7 @@ bad()  { echo "[FAIL] $1"; FAIL=1; }
     && ok "sysctl file present" || bad "/etc/sysctl.d/99-ghostwall.conf missing"
 
 # 3) redirects off (asymmetric routing requirement)
-for k in all default eth0; do
+for k in all default {{ lan_iface }}; do
     [ "$(sysctl -n net.ipv4.conf.$k.send_redirects 2>/dev/null)" = "0" ] \
         && ok "send_redirects($k)=0" || bad "send_redirects($k) != 0"
 done
@@ -59,7 +59,7 @@ for p in 3000 8080 22; do
 done
 
 # 9) Pi has its own IP and route
-ip -4 addr show eth0 | grep -q "$PI_IP" && ok "Pi has $PI_IP" || bad "Pi does not have $PI_IP on eth0"
+ip -4 addr show {{ lan_iface }} | grep -q "$PI_IP" && ok "Pi has $PI_IP" || bad "Pi does not have $PI_IP on {{ lan_iface }}"
 ip route | grep -q default && ok "default route present" || bad "no default route"
 
 # 10) lease log file writable

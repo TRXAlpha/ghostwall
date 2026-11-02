@@ -57,6 +57,23 @@ sleep 1'
 get() { ex "ip netns exec lan curl -s -o /dev/null -w %{http_code} --connect-timeout 4 $1"; }
 [ "$(get http://93.184.215.14/)" = 200 ] || fail "lab routing broken"
 
+echo "== the generated gateway firewall (netconf/gen.py) loads, reloads and breaks glass"
+ex 'set -e; cd /opt/ghostwall/agents/netconf
+python3 gen.py --devices devices.example.json --out /tmp/netconf >/dev/null
+f=/tmp/netconf/ghostwall.nft
+if ! nft -f $f 2>/tmp/nft.err; then
+  # a kernel without flowtables (CONFIG_NF_FLOW_TABLE): load the rest of the ruleset
+  grep -q "flowtable\|flow add" /tmp/nft.err || { cat /tmp/nft.err; exit 1; }
+  echo "   kernel lacks flowtables: loading without the fast path"
+  python3 -c "import re,sys; s=open(sys.argv[1]).read(); s=re.sub(r\"    flowtable f \\{.*?\\n    \\}\\n\", \"\", s, flags=re.S); open(sys.argv[1],\"w\").write(s.replace(\"        ct state established,related flow add @f\\n\", \"\"))" $f
+  nft -f $f
+fi
+nft -f $f                                   # reload: idempotent
+nft add element inet ghostwall isolated_dev { 192.168.1.50 }
+nft list chain inet ghostwall prerouting_nat | grep -q "redirect to :53"
+bash /tmp/netconf/breakglass.sh >/dev/null 2>&1
+! nft list tables | grep -q "inet ghostwall"' || fail "generated nftables ruleset does not load, reload or break glass"
+
 echo "== the documented queue rule (docs/OPERATIONS.md, gateway mode step 5)"
 ex 'nft add table inet ghostwall && nft "add chain inet ghostwall forward { type filter hook forward priority 0; policy accept; }"'
 if ex "nft add rule inet ghostwall forward iifname \"gw0\" ct state new meta l4proto '{ tcp, udp }' th dport != 53 queue num 100 bypass" 2>"$WORK/nft.err"; then

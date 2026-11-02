@@ -104,7 +104,11 @@ def main(argv=None):
     out_dir = Path(args.out) if args.out else OUT
 
     cfg, static_leases = load_ctx(args.devices)
+    lan_iface = str(cfg.get("lan_iface", "eth0"))
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", lan_iface):   # it ends up inside firewall rules
+        raise SystemExit(f"lan_iface {lan_iface!r} is not an interface name")
     ctx = {
+        "lan_iface": lan_iface,
         "pi_ip": cfg["pi_ip"],
         "lan_cidr": cfg["lan_cidr"],
         "dhcp_start": cfg["dhcp_start"],

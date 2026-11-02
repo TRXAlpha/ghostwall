@@ -36,6 +36,11 @@ Your settings, alerts, allowlist and thresholds are kept.
   tcpdump's `-W` with `-G` made the capture ring exit after one round (about 5 minutes), so
   later freezes were empty. A freeze also skipped the last seconds before the alert. All
   fixed and now tested on a real kernel queue with real tcpdump.
+- The generated gateway firewall (`netconf/gen.py` → `ghostwall.nft`) never loaded: it began
+  with `destroy table` (nftables 1.0.8+, while Debian 12 / Raspberry Pi OS ship 1.0.6) and put
+  the DNS redirect in a filter chain, which the kernel refuses (`nft -c` didn't notice). The
+  redirect now has its own nat chain, the reload works on 1.0.6, and the LAN interface is
+  `lan_iface` in `netconf/config.json` instead of `eth0` written into every file.
 
 ### Security
 

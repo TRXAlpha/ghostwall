@@ -5,14 +5,17 @@
 # Validate (dry run) before applying:  nft -c -f ghostwall.nft
 # Apply:                               sudo nft -f ghostwall.nft
 
-destroy table inet ghostwall  # idempotent reload of OUR table only
+# Idempotent reload of OUR table only (nftables 1.0.6 on Debian 12 / Raspberry Pi OS has no
+# "destroy" command, which arrived in 1.0.8). Declaring the table first makes the delete safe.
+table inet ghostwall {}
+delete table inet ghostwall
 
 table inet ghostwall {
 
     # ---------- flowtable: hardware/fast-path offload for ESTABLISHED flows ----------
     flowtable f {
         hook ingress priority filter
-        devices = { eth0 }
+        devices = { {{ lan_iface }} }
     }
 
     # ---------- named sets ----------
@@ -80,24 +83,24 @@ table inet ghostwall {
         iifname "lo" accept
 
         # SSH: LAN and tailscale0 only
-        iifname "eth0" ip saddr {{ lan_cidr }} tcp dport 22 ct state new accept
+        iifname "{{ lan_iface }}" ip saddr {{ lan_cidr }} tcp dport 22 ct state new accept
         iifname "tailscale0" tcp dport 22 accept
 
         # DNS to us (the Pi is the LAN's resolver): LAN only
-        iifname "eth0" ip saddr {{ lan_cidr }} udp dport 53 accept
-        iifname "eth0" ip saddr {{ lan_cidr }} tcp dport 53 accept
+        iifname "{{ lan_iface }}" ip saddr {{ lan_cidr }} udp dport 53 accept
+        iifname "{{ lan_iface }}" ip saddr {{ lan_cidr }} tcp dport 53 accept
         iifname "tailscale0" udp dport 53 accept
         iifname "tailscale0" tcp dport 53 accept
 
         # DHCP from LAN clients
-        iifname "eth0" udp dport 67 accept
+        iifname "{{ lan_iface }}" udp dport 67 accept
 
         # AdGuard Home UI
-        iifname "eth0" ip saddr {{ lan_cidr }} tcp dport 3000 accept
+        iifname "{{ lan_iface }}" ip saddr {{ lan_cidr }} tcp dport 3000 accept
         iifname "tailscale0" tcp dport 3000 accept
 
         # qBittorrent Web UI: LAN and tailnet
-        iifname "eth0" ip saddr {{ lan_cidr }} tcp dport 8080 accept
+        iifname "{{ lan_iface }}" ip saddr {{ lan_cidr }} tcp dport 8080 accept
         iifname "tailscale0" tcp dport 8080 accept
 
         # ICMP (ping, path-mtu, etc.)
@@ -120,7 +123,7 @@ table inet ghostwall {
         # --- isolation: strict-profile devices ---
         # They may only do DNS to the Pi and reach the tailnet.
         ip daddr @isolated_dev ip daddr != {{ pi_ip }} drop
-        iifname "eth0" ip saddr @isolated_dev ip daddr != {{ pi_ip }} ip daddr != 100.64.0.0/10 drop
+        iifname "{{ lan_iface }}" ip saddr @isolated_dev ip daddr != {{ pi_ip }} ip daddr != 100.64.0.0/10 drop
 
         # --- blocked destinations (any device) ---
         ip daddr @blocked_ip drop
@@ -133,12 +136,9 @@ table inet ghostwall {
         tcp dport 853 drop
         udp dport 853 drop
 
-        # --- force LAN DNS to the Pi ---
-        # Redirect any LAN client's port 53 to the Pi (except the Pi itself).
-        iifname "eth0" ip saddr != {{ pi_ip }} udp dport 53 redirect to :53
-        iifname "eth0" ip saddr != {{ pi_ip }} tcp dport 53 redirect to :53
-        # (also block the *forwarded* DNS that escaped the redirect, so a
-        # hardcoded-DoT client can't bypass — we already drop 853 above)
+        # (LAN DNS is forced to the Pi in chain prerouting_nat below: a redirect is
+        # only allowed in a nat chain, and in a filter chain it made the whole
+        # file fail to load. Hardcoded DoT is dropped above: port 853.)
 
         # --- LOCKDOWN SWITCH ---
         # To enter lockdown:  nft add rule inet ghostwall forward position 0 \
@@ -153,7 +153,7 @@ table inet ghostwall {
         # Reserved for the "ai_firewall" userspace inspector (ghostwall v2).
         # Enable later with:
         #   nft add rule inet ghostwall forward \
-        #       iifname "eth0" ct state new \
+        #       iifname "{{ lan_iface }}" ct state new \
         #       meta l4proto { tcp, udp } th dport != 53 \
         #       queue num 100 bypass
         # The `bypass` (queue ... bypass) flag means: if no userspace listener
@@ -165,5 +165,13 @@ table inet ghostwall {
 
         # Everything else: forward (the router does NAT; we do NOT masquerade
         # LAN traffic — the router's own NAT handles internet egress).
+    }
+
+    # ---------- force LAN DNS to the Pi ----------
+    # Any LAN client's port-53 query, to whatever server, is answered by the Pi.
+    chain prerouting_nat {
+        type nat hook prerouting priority dstnat; policy accept;
+        iifname "{{ lan_iface }}" ip saddr != {{ pi_ip }} udp dport 53 redirect to :53
+        iifname "{{ lan_iface }}" ip saddr != {{ pi_ip }} tcp dport 53 redirect to :53
     }
 }

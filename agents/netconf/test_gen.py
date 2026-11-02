@@ -244,8 +244,32 @@ class TestBreakglassRestore(unittest.TestCase):
         h = (OUT / "health.sh").read_text()
         self.assertIn("nft list table inet ghostwall", h)
         nft = (OUT / "ghostwall.nft").read_text()
-        self.assertIn("destroy table inet ghostwall", nft)
+        # idempotent on nftables 1.0.6 too (Debian 12): no "destroy", declare-then-delete
+        self.assertNotIn("destroy table", nft)
+        self.assertIn("table inet ghostwall {}\ndelete table inet ghostwall", nft)
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLanInterface(unittest.TestCase):
+    def test_interface_is_configurable(self):
+        import json, tempfile
+        d = tempfile.mkdtemp()
+        cfg = json.load(open(os.path.join(HERE, "config.json")))
+        cfg["lan_iface"] = "enp1s0"
+        orig = os.path.join(HERE, "config.json")
+        saved = open(orig).read()
+        try:
+            with open(orig, "w") as f:
+                json.dump(cfg, f)
+            gen.main(["--devices", os.path.join(HERE, "devices.example.json"), "--out", d])
+        finally:
+            with open(orig, "w") as f:
+                f.write(saved)
+        for name in os.listdir(d):
+            text = open(os.path.join(d, name)).read()
+            self.assertNotIn("eth0", text, name)
+        self.assertIn('iifname "enp1s0"', open(os.path.join(d, "ghostwall.nft")).read())
+        self.assertIn("interface=enp1s0", open(os.path.join(d, "dnsmasq.conf")).read())
