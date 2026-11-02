@@ -251,7 +251,7 @@ Installed. Ghostwall is watching your DNS server's query log; it cannot block an
   Dashboard:  $SCHEME://$HOST:8088   user: ghostwall   password: ${GHOSTWALL_WEB_PASSWORD:-(none, loopback only)}
               (again later: sudo ghostwall password)$FPR
   Alerts:     sudo tail -f /var/lib/ghostwall/events.jsonl
-  Health:     curl -s http://127.0.0.1:5380/status   ("stats.queries" should keep going up)
+  Health:     ghostwall status   ("scored" should keep going up)
 
 Next steps:  ghostwall status              is it scoring?
              sudo ghostwall telegram      alerts on your phone (2 minutes)

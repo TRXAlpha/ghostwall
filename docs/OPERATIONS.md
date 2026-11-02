@@ -224,10 +224,12 @@ whole network; read it fully first, and keep the router's admin page open.
 
 | Symptom | Check |
 |---|---|
-| No events at all | `curl -s 127.0.0.1:5380/status`: `stats.queries` should rise over time. If not, `journalctl -u ghostwall-dns -n 30`; a `querylog not found` warning means the log path in `ghostwall.env` is wrong or the query log is off. AdGuard: `size_memory` under `querylog:` in `AdGuardHome.yaml` should be small (re-run the installer). No events with rising `queries` just means nothing suspicious. |
-| Too many alerts | allowlist, raise `recommend_threshold`, replay to compare |
-| Dashboard won't load | `systemctl status ghostwall-web`; check `GHOSTWALL_WEB_BIND`; any bind but loopback needs `GHOSTWALL_WEB_PASSWORD`. Ubuntu with ufw: `sudo ufw allow 8088/tcp` |
-| Forgot the dashboard password | `sudo grep PASSWORD /etc/ghostwall/ghostwall.env` |
+| No events at all | `ghostwall status`: "scored" should rise over time. If not, `journalctl -u ghostwall-dns -n 30`; a `querylog not found` warning means the log path in `ghostwall.env` is wrong or the query log is off. AdGuard: `size_memory` under `querylog:` in `AdGuardHome.yaml` should be small (re-run the installer). Rising numbers and no alerts just means nothing suspicious. |
+| Too many alerts | `sudo ghostwall alerts` to see which rule; `sudo ghostwall allow <domain>` for names you trust (`ghostwall untrust` undoes it); `sudo ghostwall calibrate` to see what the thresholds flag on your network and `--target 0.2 --apply` to quieten them |
+| Dashboard won't load | `systemctl status ghostwall-web`; it is `https://` now (plain `http://` redirects); check `GHOSTWALL_WEB_BIND`; any bind but loopback needs `GHOSTWALL_WEB_PASSWORD`. Ubuntu with ufw: `sudo ufw allow 8088/tcp` |
+| Browser warns about the certificate | expected once: it is the box's own self-signed one. Compare the SHA-256 fingerprint the installer printed (`openssl x509 -noout -fingerprint -sha256 -in /etc/ghostwall/tls/cert.pem`) |
+| Forgot the dashboard password | `sudo ghostwall password` |
+| Alerts show IP addresses | `sudo ghostwall devices`, then `sudo ghostwall name <ip> <name>` |
 | Telegram silent | `journalctl -u ghostwall-fw-bot -n 50`; token, chat id, file permissions |
 | Telegram `409 Conflict` | another process polls the same token; see "Already running a bot" |
 | No DNS (inline) | `sudo bash .../go_shadow.sh` puts AdGuard back on :53 |

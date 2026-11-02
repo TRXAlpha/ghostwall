@@ -253,6 +253,10 @@ on the missing model's empty score.)
 
 ## Limits
 
+- **Baselines trust what is already there.** `abused_service` learns each device's usual
+  services in its first 3 days, and novelty counts names as normal after a week. A device
+  that is already infected when you install Ghostwall teaches it that its malware is
+  normal; the phishing list, bursts, tunnels and DoH rules don't depend on a baseline.
 - **Detection is name-based.** It sees what a device looks up, not what it does
   afterwards. The models miss about 4 in 10 DGA domains, and nearly all made of
   dictionary words. Malware that talks to shared
