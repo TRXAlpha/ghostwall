@@ -16,10 +16,10 @@ import urllib.request
 import alerts
 import commands
 import config as cfgmod
-from callbacks import CallbackHandler, append_label
+from callbacks import CallbackHandler
 from config import Config, ConfigError
 from control_client import ControlClient
-from grouping import AlertGrouper, severity_of
+from grouping import AlertGrouper
 
 
 class FwBot:
@@ -38,7 +38,6 @@ class FwBot:
         if "callback_query" in update:
             return self.callbacks.handle(update["callback_query"])
         msg = update.get("message") or {}
-        chat_id = (msg.get("chat") or {}).get("id")
         text = msg.get("text", "")
         if not self.cfg.is_owner_message(msg):
             return "ignored: not owner"

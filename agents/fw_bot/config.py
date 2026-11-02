@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field
-from pathlib import Path
 
 # Control API endpoint (loopback only, see docs/REFERENCE.md)
 CONTROL_HOST = "127.0.0.1"

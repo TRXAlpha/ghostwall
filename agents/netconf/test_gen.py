@@ -1,4 +1,4 @@
-"""Unit tests for gen.py — stdlib unittest, runs on Windows:
+r"""Unit tests for gen.py — stdlib unittest, runs on Windows:
     .venv\Scripts\python.exe -m unittest agents.netconf.test_gen -v
 (also pytest-compatible).
 

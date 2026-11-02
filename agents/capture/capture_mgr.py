@@ -14,8 +14,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import (check_ring_dir, load_config, load_devices, ring_usage)
-from ring import RingManager, safe_name
+from config import check_ring_dir, load_config, load_devices
+from ring import RingManager
 from incidents import freeze_incident
 
 
