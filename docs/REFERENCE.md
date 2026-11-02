@@ -112,6 +112,7 @@ overrides any of them. The most useful keys:
 
 | Command | Purpose |
 |---|---|
+| `ghostwall status \| alerts \| allow D \| unblock D \| learning on\|off \| password \| telegram` | everyday commands (`ghost_dns/ghostwall_cli.py`, on the PATH after install; actions need sudo) |
 | `ghost_dns/app.py --config FILE` | run ghost-dns; `--shadow --querylog FILE`, `--once` (build and exit), `--dns-port`, `--upstream`, `--enforce`, `--learning/--no-learning` |
 | `ghost_dns/go_shadow.sh` | switch to shadow mode safely (root) |
 | `ghost_dns/update_feed.py --out FILE [--feed URL ...]` | download threat feeds; keeps the old file on failure |

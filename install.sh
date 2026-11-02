@@ -173,6 +173,13 @@ for u in agents/ghost_dns/ghostwall-dns.service agents/ghost_dns/ghostwall-feed.
 done
 systemctl daemon-reload
 
+# `ghostwall status`, `sudo ghostwall allow example.com`, `sudo ghostwall telegram`, ...
+cat > /usr/local/bin/ghostwall <<'SH'
+#!/bin/sh
+exec /opt/ghostwall/.venv/bin/python /opt/ghostwall/agents/ghost_dns/ghostwall_cli.py "$@"
+SH
+chmod 755 /usr/local/bin/ghostwall
+
 say "6) threat feed (daily)"
 systemctl enable --now ghostwall-feed.timer >/dev/null
 systemctl start ghostwall-feed.service || say "   feed download failed; the timer retries daily"
@@ -202,6 +209,9 @@ Installed. Ghostwall is watching your DNS server's query log; it cannot block an
   Alerts:     sudo tail -f /var/lib/ghostwall/events.jsonl
   Health:     curl -s http://127.0.0.1:5380/status   ("stats.queries" should keep going up)
 
-Next steps (README.md): name your devices, add Telegram alerts, replay your history.
+Next steps:  ghostwall status              is it scoring?
+             sudo ghostwall telegram      alerts on your phone (2 minutes)
+             sudo ghostwall alerts        what it found so far
+More in README.md: name your devices, replay your history.
 Remove it again: sudo $DEST/uninstall.sh
 EOF

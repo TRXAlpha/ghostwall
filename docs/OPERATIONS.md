@@ -59,8 +59,8 @@ To update later: `git pull && sudo ./install.sh`.
 ## Daily use
 
 - **Watch:** the dashboard, Telegram, or `sudo tail -f /var/lib/ghostwall/events.jsonl`.
-- **Trust a domain** that keeps getting flagged: `/fw allow <domain>`, the dashboard
-  box, or
+- **Trust a domain** that keeps getting flagged: `sudo ghostwall allow <domain>`,
+  `/fw allow <domain>`, the dashboard box, or
   `curl -X POST http://127.0.0.1:5380/allow -H 'Content-Type: application/json' -H "Authorization: Bearer $(sudo cat /var/lib/ghostwall/control_token)" -d '{"domain":"example.com"}'`.
   Domains that should be trusted everywhere can go in `agents/ghost_dns/allowlist.txt`.
 - **Too noisy?** Raise `recommend_threshold` in `/etc/ghostwall/ghost_dns.json`
@@ -75,6 +75,10 @@ To update later: `git pull && sudo ./install.sh`.
   picks up the installed phishing list and `/etc/ghostwall/devices.json` by itself.
 
 ## Telegram
+
+The quick way: `sudo ghostwall telegram`. It asks for the token from
+[@BotFather](https://t.me/BotFather), waits for you to message the bot, writes both
+files below with the right permissions and starts the bot. By hand:
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and note the token.
 2. Send your bot any message, then read your chat id from

@@ -175,17 +175,20 @@ about 25 MB each for the dashboard and the Telegram bot).
 ## After installing
 
 ```bash
-sudo tail -f /var/lib/ghostwall/events.jsonl   # alerts as they happen
-curl -s http://127.0.0.1:5380/status           # "stats.queries" should keep rising
+ghostwall status                  # is it scoring? ("queries" should keep rising)
+sudo ghostwall alerts             # what it found, newest first
+sudo ghostwall telegram           # alerts on your phone: paste a bot token, message the bot, done
+sudo ghostwall allow example.com  # stop alerts for a domain you trust
 ```
 
-- **Dashboard:** `http://<box>:8088`, user `ghostwall`, password in
-  `/etc/ghostwall/ghostwall.env`. To keep it to your tailnet or to the box itself, see
+- **Dashboard:** `http://<box>:8088`, user `ghostwall`, password from
+  `sudo ghostwall password`. To keep it to your tailnet or to the box itself, see
   [Dashboard access](docs/OPERATIONS.md#dashboard-access).
 - **Name your devices:** copy `agents/netconf/devices.example.json` to
   `/etc/ghostwall/devices.json`, fill in your devices, and
   `sudo systemctl restart ghostwall-dns`, so alerts say `laptop` instead of an IP.
-- **Telegram alerts and `/fw` commands:** [docs/OPERATIONS.md](docs/OPERATIONS.md#telegram).
+- **Telegram alerts and `/fw` commands:** `sudo ghostwall telegram`, or by hand:
+  [docs/OPERATIONS.md](docs/OPERATIONS.md#telegram).
 - **Check it against your own history** (changes nothing):
   `sudo /opt/ghostwall/.venv/bin/python /opt/ghostwall/agents/ghost_dns/replay_querylog.py --querylog <querylog.json or pihole.log>`
 - **Update:** `git pull && sudo ./install.sh`. **Remove:** `sudo /opt/ghostwall/uninstall.sh`

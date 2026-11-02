@@ -16,7 +16,8 @@ COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh && rm -rf agents/*/tests
 
 # ORT_DISABLE_TELEMETRY: onnxruntime sends usage telemetry to Microsoft unless told not to.
-ENV PYTHONUNBUFFERED=1 ORT_DISABLE_TELEMETRY=1
+# GHOSTWALL_DATA/ETC: where `python agents/ghost_dns/ghostwall_cli.py` finds things here.
+ENV PYTHONUNBUFFERED=1 ORT_DISABLE_TELEMETRY=1 GHOSTWALL_DATA=/data GHOSTWALL_ETC=/data
 VOLUME /data
 EXPOSE 8088
 HEALTHCHECK --interval=60s --timeout=5s --start-period=30s \
