@@ -89,12 +89,20 @@ events are deduplicated per device, registrable domain and rule for 24 hours.
 ### Scoring (`tokenizer.py`, `scoring.py`)
 
 The score is the mean of two models over the registrable label (dots stripped, the
-same tokenizer as training):
+same tokenizer as training). The registrable label is the one left of the public
+suffix: `example` in `www.example.co.uk`. A small built-in suffix list covers common
+TLDs, country second levels such as `com.ua` or `gov.br`, and dynamic-DNS providers
+such as `ddns.net` or `duckdns.org`, whose hosts belong to different people: without
+them, `x7kq2v9w.ddns.net` would be scored as `ddns`. Hosting and CDN suffixes are left
+out on purpose (their host names are machine-made and would be flagged).
 
 - **TRM** (`ghostwall/models/trm_dga_v2.onnx`): a tiny recursive model, ~108k
   parameters, run with onnxruntime on the CPU.
 - **LR** (`lr_coef.npy`, `lr_meta.json`): hashed character 1–3-gram logistic
-  regression, reimplemented in numpy so the Pi needs no scikit-learn.
+  regression, reimplemented in numpy so the Pi needs no scikit-learn. The features
+  (`ngram.py`) are shared with the trainers; `lr_meta.json` can also select 1–5-grams
+  with start and end markers (`train_lr.py --v3`, compared in
+  [results_public.md](../agents/dga_eval/results_public.md)).
 
 If one model is missing the other is used; if both are, a lexical-entropy heuristic
 keeps the pipeline running.

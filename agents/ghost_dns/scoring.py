@@ -26,6 +26,7 @@ os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")
 
 import numpy as np  # noqa: E402
 
+from ngram import hashed_ngrams  # noqa: E402
 from tokenizer import encode, registrable_label, strip_dot  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -72,10 +73,11 @@ class TRMModel:
 
 
 class LRModel:
-    """Pure-numpy hashed char 1-3-gram logistic regression (no sklearn/scipy).
+    """Pure-numpy hashed char n-gram logistic regression (no sklearn/scipy).
 
-    Reproduces ghostwall/train_lr.ngram_matrix @ coef + intercept
-    exactly, so it matches lr_coef.npy / lr_meta.json trained for the Pi.
+    Features come from ngram.hashed_ngrams, the same function the trainers use;
+    lr_meta.json says which ones (ngram_max, boundary, buckets). A meta file without
+    "boundary" is the shipped v2 model (1-3-grams, no boundary markers).
     """
 
     def __init__(self, coef_path: str, meta_path: str):
@@ -85,25 +87,18 @@ class LRModel:
         self.intercept = float(meta["intercept"])
         self.buckets = int(meta["buckets"])
         self.ngram_max = int(meta.get("ngram_max", 3))
+        self.boundary = bool(meta.get("boundary", False))
+        if self.coef.shape[0] != self.buckets:
+            raise ValueError(f"{coef_path}: {self.coef.shape[0]} weights for {self.buckets} buckets")
 
     def score(self, labels: list[str]) -> np.ndarray:
         return self.score_tokens(strip_dot(encode(labels)))
 
     def score_tokens(self, toks: np.ndarray) -> np.ndarray:
         """Dot-stripped int64 token rows -> p_dga (used by agents/dga_eval)."""
-        lengths = (toks != 0).sum(axis=1)
         z = np.full(len(toks), self.intercept, dtype=np.float64)
-        width = toks.shape[1]
-        for ng in range(1, self.ngram_max + 1):
-            for j in range(width - ng + 1):
-                m = lengths >= (ng + j)
-                if not m.any():
-                    continue
-                code = np.zeros(int(m.sum()), dtype=np.int64)
-                for k in range(ng):
-                    code = code * 131 + toks[m, j + k].astype(np.int64)
-                code &= 0x7FFFFFFF
-                z[m] += self.coef[code % self.buckets]
+        for rows, cols in hashed_ngrams(toks, self.buckets, self.ngram_max, self.boundary):
+            z[rows] += self.coef[cols]
         return _sigmoid(z)
 
 
@@ -118,6 +113,10 @@ class Scorer:
     ):
         self.trm: TRMModel | None = None
         self.lr: LRModel | None = None
+        # The TRM costs milliseconds per name on a Pi and most lookups repeat a few
+        # thousand names, so scores are kept per label (bounded; cleared when full).
+        self._cache: dict[str, dict] = {}
+        self.cache_max = 50_000
         if onnx_path and os.path.exists(onnx_path):
             try:
                 self.trm = TRMModel(onnx_path)
@@ -141,6 +140,16 @@ class Scorer:
     def score_one(self, domain: str) -> dict:
         """Return {'dga': float, 'dga_trm': float|None, 'dga_lr': float|None}."""
         label = registrable_label(domain)
+        hit = self._cache.get(label)
+        if hit is not None:
+            return dict(hit)
+        out = self._score_label(label)
+        if len(self._cache) >= self.cache_max:
+            self._cache.clear()
+        self._cache[label] = out
+        return dict(out)
+
+    def _score_label(self, label: str) -> dict:
         out: dict = {"dga_trm": None, "dga_lr": None}
         vals = []
         if self.trm is not None:
