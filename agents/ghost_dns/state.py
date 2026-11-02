@@ -12,8 +12,11 @@ domain).
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
+import secrets
 import sys
 import threading
 import time
@@ -61,7 +64,41 @@ class GhostState:
         self._dirty = False
         self._last_flush = 0.0
         self._flush_interval = 60.0
+        # first_seen stores keyed hashes, not names: novelty needs "seen before, and when",
+        # and state.json should not be a readable history of every site the household uses.
+        self._nkey_secret = self._load_secret(os.path.join(os.path.dirname(os.path.abspath(path)), "novelty_key"))
         self._load()
+
+    @staticmethod
+    def _load_secret(path: str) -> bytes:
+        try:
+            with open(path, "rb") as f:
+                key = f.read().strip()
+            if len(key) >= 32:
+                return key
+        except OSError:
+            pass
+        key = secrets.token_hex(32).encode()
+        try:
+            fd = os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(key + b"\n")
+            os.replace(path + ".tmp", path)
+        except OSError:
+            pass  # read-only place (tests, replays): a per-run key works the same
+        return key
+
+    def _nkey(self, reg: str) -> str:
+        return hmac.new(self._nkey_secret, reg.encode("utf-8"), hashlib.sha256).hexdigest()[:24]
+
+    def set_first_seen(self, domain: str, iso: str) -> None:
+        """When `domain`'s family was first seen (for tests and imports)."""
+        with self._lock:
+            self.first_seen[self._nkey(registrable_part(domain))] = iso
+
+    def was_seen(self, domain: str) -> bool:
+        with self._lock:
+            return self._nkey(registrable_part(domain)) in self.first_seen
 
     # -- persistence ------------------------------------------------------
     def _load(self) -> None:
@@ -88,7 +125,10 @@ class GhostState:
         self.isolated = set(d.get("isolated", []))
         self.lockdown = bool(d.get("lockdown", False))
         self.learning = bool(d.get("learning", self.learning))
-        self.first_seen = dict(d.get("first_seen", {}))
+        self.first_seen = {}
+        for k, v in dict(d.get("first_seen", {})).items():
+            # older versions stored the names themselves: hash them on the way in
+            self.first_seen[self._nkey(k) if "." in k else k] = v
         self.confirmations = dict(d.get("confirmations", {}))
         self.events = dict(d.get("events", {}))
         self.device_since = dict(d.get("device_since", {}))
@@ -185,7 +225,7 @@ class GhostState:
     def note_seen(self, domain: str) -> bool:
         """Record a domain sighting. Returns True if this is the FIRST time the
         registrable part has ever been seen."""
-        reg = registrable_part(domain)
+        reg = self._nkey(registrable_part(domain))
         with self._lock:
             if reg in self.first_seen:
                 return False
@@ -225,7 +265,7 @@ class GhostState:
 
     def is_new(self, domain: str, novelty_days: int) -> bool:
         """True if the registrable part was first seen within novelty_days."""
-        reg = registrable_part(domain)
+        reg = self._nkey(registrable_part(domain))
         with self._lock:
             ts = self.first_seen.get(reg)
         if not ts:

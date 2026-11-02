@@ -17,6 +17,7 @@ All paths assume the installer's layout (`/opt/ghostwall`).
 | `/var/lib/ghostwall/events.jsonl` | every alert, one JSON object per line |
 | `/var/lib/ghostwall/state.json` | allowlist, blocklist, novelty, learning and lockdown |
 | `/var/lib/ghostwall/control_token` | the control API token (created by ghost-dns; the dashboard and bot read it) |
+| `/var/lib/ghostwall/novelty_key` | the key that turns "first seen" domains into hashes, so `state.json` holds no list of the sites your household visits |
 | `/var/lib/ghostwall/threat_feed.txt` | phishing list, refreshed daily |
 | `/opt/ghostwall` | the code and its Python venv; nothing you need to keep |
 

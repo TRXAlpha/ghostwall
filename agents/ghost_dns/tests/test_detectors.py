@@ -275,14 +275,14 @@ class ResolverWiringTests(unittest.TestCase):
     def test_established_domain_does_not_raise_plain_suspect(self):
         r = self.build()
         r.scorer = FakeScorer(0.97)                          # between recommend (0.96) and block (0.995)
-        self.state.first_seen["longtime.example"] = "2020-01-01T00:00:00Z"   # seen for years
+        self.state.set_first_seen("longtime.example", "2020-01-01T00:00:00Z")   # seen for years
         self.assertEqual(r.decide("192.168.1.30", "longtime.example", "A").action, "allow")
         self.assertEqual(r.decide("192.168.1.30", "brandnew.example", "A").reason, "dga_suspect")
 
     def test_suspect_only_new_can_be_turned_off(self):
         r = self.build(suspect_only_new=False)
         r.scorer = FakeScorer(0.97)
-        self.state.first_seen["longtime.example"] = "2020-01-01T00:00:00Z"
+        self.state.set_first_seen("longtime.example", "2020-01-01T00:00:00Z")
         self.assertEqual(r.decide("192.168.1.30", "longtime.example", "A").reason, "dga_suspect")
 
     def test_internal_names_are_never_scored_or_beaconed(self):

@@ -35,7 +35,8 @@ Your settings, alerts, allowlist and thresholds are kept.
 Control API token; capture API browser checks and limits; owner-only Telegram commands;
 per-device alert rate cap and throttled state writes (a web page can make a browser look up
 thousands of names); fsync'd state; anchored Pi-hole parser; dashboard CSP and a limit on wrong
-passwords; tighter systemd sandboxes; hash-locked Python dependencies; `events.jsonl` rotates.
+passwords; `state.json` keeps "first seen" domains as keyed hashes instead of a readable list of
+every site your household visits (converted on the first start); tighter systemd sandboxes; hash-locked Python dependencies; `events.jsonl` rotates.
 
 ### New
 

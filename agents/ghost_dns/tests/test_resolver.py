@@ -85,7 +85,7 @@ class ResolverTests(unittest.TestCase):
     def test_high_score_established_domain_recommends(self):
         r, s = self._resolver(0.95, learning=False)
         # make it "old": seed first_seen far in the past
-        s.first_seen["estab.example"] = "2000-01-01T00:00:00Z"
+        s.set_first_seen("estab.example", "2000-01-01T00:00:00Z")
         d = r.decide("192.168.1.30", "estab.example", "A")
         self.assertEqual(d.action, "recommend")
 

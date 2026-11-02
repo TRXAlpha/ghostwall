@@ -28,6 +28,7 @@ runs/
 agents/*/state.json
 agents/*/events.jsonl
 agents/*/control_token
+agents/*/novelty_key
 agents/*/resolved_ips.jsonl
 agents/*/flow_events.jsonl
 agents/*/queries.log
