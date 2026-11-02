@@ -6,10 +6,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
-# WorkingDirectory and ExecStart paths: adjust to where this repo lives on the Pi.
-WorkingDirectory=/opt/ghostwall/capture
-# capture_conf.json next to capture_mgr.py sets the interface (default eth0) and limits.
-ExecStart=/usr/bin/python3 /opt/ghostwall/capture/capture_mgr.py serve --devices /opt/ghostwall/capture/devices.json --ring-dir /run/ghostwall/cap
+WorkingDirectory=/opt/ghostwall/agents/capture
+# /etc/ghostwall/capture.json sets the interface (default eth0) and limits; the devices
+# are the same file ghost-dns uses.
+ExecStart=/usr/bin/python3 /opt/ghostwall/agents/capture/capture_mgr.py serve --devices /etc/ghostwall/devices.json --ring-dir /run/ghostwall/cap
 Restart=on-failure
 RestartSec=5
 # The ring must be on tmpfs (the manager refuses to start otherwise). /run is tmpfs, and

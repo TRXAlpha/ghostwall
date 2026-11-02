@@ -29,10 +29,14 @@ DEFAULTS = {
 
 def load_config(argv_overrides: dict) -> dict:
     cfg = dict(DEFAULTS)
-    path = os.path.join(HERE, "capture_conf.json")
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            cfg.update(json.load(f))
+    # Settings: /etc/ghostwall/capture.json (kept by updates and uninstall), else the
+    # older capture_conf.json next to this file.
+    for path in (os.environ.get("GHOSTWALL_CAPTURE_CONF", "/etc/ghostwall/capture.json"),
+                 os.path.join(HERE, "capture_conf.json")):
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                cfg.update(json.load(f))
+            break
     cfg.update({k: v for k, v in argv_overrides.items() if v is not None})
     return cfg
 
@@ -41,6 +45,8 @@ def load_devices(path: str, max_devices: int) -> list:
     """devices JSON: list of {name, ip[, mac, profile]}."""
     with open(path, "r", encoding="utf-8") as f:
         raw = json.load(f)
+    if isinstance(raw, dict):   # /etc/ghostwall/devices.json, as ghost-dns and `ghostwall name` use it
+        raw = list(raw.get("devices", [])) + list(raw.get("_pending", []))
     devices = []
     seen_names, seen_ips, seen_folders = set(), set(), {}
     for d in raw:

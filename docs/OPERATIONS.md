@@ -220,12 +220,14 @@ whole network; read it fully first, and keep the router's admin page open.
    (Versions before this one documented `ct original proto-dst != 53`, which nft rejects.)
    `bypass` means traffic keeps flowing whenever ghost-flow isn't running.
    Leave it recommend-only (no `--autoblock`).
-6. **capture:** install `tcpdump`, copy `agents/capture/` to `/opt/ghostwall/capture`
-   with a `devices.json` using the same names, and a `capture_conf.json` there if your LAN
-   interface isn't `eth0` (`{"interface": "eth1"}`). Install `ghost-capture.service` and set
-   `"capture_enabled": true` in `ghost_dns.json`. Each device keeps the last 5 minutes
-   (`ring_keep_minutes`) in RAM; a high-severity alert freezes them plus 5 more minutes
-   into `/var/lib/ghostwall/incidents/<event_id>/`.
+6. **capture:** `sudo apt install tcpdump`; if your LAN interface isn't `eth0`, write
+   `{"interface": "eth1"}` to `/etc/ghostwall/capture.json`; then
+   `sudo install -m 644 /opt/ghostwall/agents/capture/ghost-capture.service /etc/systemd/system/`,
+   `sudo systemctl enable --now ghost-capture`, and set `"capture_enabled": true` in
+   `ghost_dns.json`. It captures the devices in `/etc/ghostwall/devices.json`
+   (`ghostwall name` adds them). Each keeps the last 5 minutes (`ring_keep_minutes`) in
+   RAM; a high-severity alert freezes them plus 5 more minutes into
+   `/var/lib/ghostwall/incidents/<event_id>/`.
 
 ## Troubleshooting
 

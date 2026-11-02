@@ -128,9 +128,10 @@ ex 'for p in $(pgrep -f "[a]pp.py --config /etc/ghostwall/ghost_flow.json"); do 
 echo "== capture: real tcpdump ring and a freeze"
 ex 'mkdir -p /run/ghostwall/cap && mount -t tmpfs -o size=64M tmpfs /run/ghostwall/cap
 cd /opt/ghostwall/agents/capture
-printf "{\"interface\": \"gw0\", \"ring_seconds\": 3, \"ring_keep_minutes\": 0.15, \"freeze_extra_minutes\": 0.05}\n" > capture_conf.json
-echo "[{\"name\": \"camera\", \"ip\": \"10.9.0.2\"}]" > devices.json
-(python3 capture_mgr.py serve --devices devices.json --ring-dir /run/ghostwall/cap > /tmp/cap.log 2>&1 &)
+# as docs/OPERATIONS.md sets it up: /etc/ghostwall/capture.json, the shared devices file
+printf "{\"interface\": \"gw0\", \"ring_seconds\": 3, \"ring_keep_minutes\": 0.15, \"freeze_extra_minutes\": 0.05}\n" > /etc/ghostwall/capture.json
+echo "{\"devices\": [], \"_pending\": [{\"name\": \"camera\", \"ip\": \"10.9.0.2\", \"mac\": null}]}" > /etc/ghostwall/devices.json
+(python3 capture_mgr.py serve --devices /etc/ghostwall/devices.json --ring-dir /run/ghostwall/cap > /tmp/cap.log 2>&1 &)
 for i in $(seq 25); do ip netns exec lan curl -s -o /dev/null http://93.184.215.14/; sleep 1; done'
 st=$(ex 'curl -s http://127.0.0.1:5381/status')
 echo "$st" | grep -q '"capturing": true' || fail "tcpdump stopped after one ring: $st"

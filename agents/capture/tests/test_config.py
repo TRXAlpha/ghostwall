@@ -95,3 +95,13 @@ class DeviceValidationTests(unittest.TestCase):
     def test_names_sharing_a_capture_folder_refused(self):
         with self.assertRaises(ValueError):
             self._load([{"name": "my laptop", "ip": "192.168.1.5"}, {"name": "my_laptop", "ip": "192.168.1.6"}])
+
+
+class SharedDevicesFileTests(unittest.TestCase):
+    def test_reads_ghost_dns_devices_format(self):
+        import json, tempfile
+        p = os.path.join(tempfile.mkdtemp(), "devices.json")
+        with open(p, "w") as f:
+            json.dump({"devices": [{"name": "laptop", "ip": "192.168.1.50", "mac": "aa:bb:cc:dd:ee:01"}],
+                       "_pending": [{"name": "tv", "ip": "192.168.1.51", "mac": None}]}, f)
+        self.assertEqual([d["name"] for d in load_devices(p, 32)], ["laptop", "tv"])
