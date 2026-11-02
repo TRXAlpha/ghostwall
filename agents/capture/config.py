@@ -1,4 +1,5 @@
 """Config, paths, devices JSON loading, tmpfs check for capture_mgr."""
+import ipaddress
 import json
 import os
 import shutil
@@ -42,7 +43,7 @@ def load_devices(path: str, max_devices: int) -> list:
     with open(path, "r", encoding="utf-8") as f:
         raw = json.load(f)
     devices = []
-    seen_names, seen_ips = set(), set()
+    seen_names, seen_ips, seen_folders = set(), set(), {}
     for d in raw:
         name = str(d.get("name", "")).strip()
         ip = str(d.get("ip", "")).strip()
@@ -50,8 +51,16 @@ def load_devices(path: str, max_devices: int) -> list:
             raise ValueError("device entry missing name or ip: %r" % (d,))
         if name in seen_names or ip in seen_ips:
             raise ValueError("duplicate device name or ip: %s/%s" % (name, ip))
-        if "/" in ip or " " in ip or ";" in ip:
-            raise ValueError("suspicious ip value: %r" % (ip,))
+        try:  # the ip ends up in tcpdump's filter: only a plain address may get there
+            ip = str(ipaddress.ip_address(ip))
+        except ValueError:
+            raise ValueError("not an IP address: %r" % (ip,))
+        from ring import safe_name
+        folder = safe_name(name)
+        if folder in seen_folders:  # "my laptop" and "my_laptop" would share a ring folder
+            raise ValueError("device names %r and %r map to the same capture folder %r"
+                             % (seen_folders[folder], name, folder))
+        seen_folders[folder] = name
         seen_names.add(name)
         seen_ips.add(ip)
         devices.append({"name": name, "ip": ip,

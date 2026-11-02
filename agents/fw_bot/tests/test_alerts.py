@@ -69,3 +69,12 @@ class FormatTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TrustButtonTests(unittest.TestCase):
+    def test_no_trust_button_for_phishing_feed_hits(self):
+        evt = {"event_id": "evt_1", "rule": "threat_feed", "action": "recommend"}
+        labels = [b["text"] for row in inline_keyboard(evt, b"k") for b in row]
+        self.assertNotIn("Trust domain", labels)
+        evt["rule"] = "doh_bypass"
+        self.assertIn("Trust domain", [b["text"] for row in inline_keyboard(evt, b"k") for b in row])

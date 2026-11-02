@@ -90,3 +90,10 @@ class AbusedServiceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TrustTests(AbusedServiceTests):
+    def test_trusting_a_doh_host_stops_the_alert(self):
+        self.assertEqual(self.q("cloudflare-dns.com").reason, "doh_bypass")
+        self.state.allow("cloudflare-dns.com")      # the dashboard's Trust button
+        self.assertNotEqual(self.q("cloudflare-dns.com").reason, "doh_bypass")

@@ -63,6 +63,8 @@ def inline_keyboard(event: dict, secret: bytes) -> list[list[dict]]:
         }
 
     if not is_block(event):
+        if event.get("rule") == "threat_feed":   # on the phishing list: trusting it would not stick
+            return [[btn("Details", "details")]]
         return [[btn("Trust domain", "trust"), btn("Details", "details")]]
     return [[
         btn("Unblock", "unblock"),

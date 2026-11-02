@@ -80,11 +80,16 @@ PASS=$(ex 'ghostwall password' | awk '{print $4}')
 [ "$(ex "curl -s -o /dev/null -w %{http_code} http://127.0.0.1:8088/")" = 301 ] || fail "http not redirected"
 
 echo "== update keeps settings"
+ex 'python3 - <<PY
+import json; p = "/etc/ghostwall/ghost_dns.json"; c = json.load(open(p))
+c["recommend_threshold"] = 0.97; c["thresholds_from"] = "me"; json.dump(c, open(p, "w"))
+PY'
 FPR=$(ex 'openssl x509 -noout -fingerprint -sha256 -in /etc/ghostwall/tls/cert.pem')
 ex 'cd /home/pi/ghostwall && ./install.sh' > "$WORK/update.log" 2>&1 || { cat "$WORK/update.log"; fail "update failed"; }
 [ "$FPR" = "$(ex 'openssl x509 -noout -fingerprint -sha256 -in /etc/ghostwall/tls/cert.pem')" ] || fail "cert replaced"
 [ "$PASS" = "$(ex 'ghostwall password' | awk '{print $4}')" ] || fail "password changed"
 ex 'grep -q example.org /var/lib/ghostwall/state.json' || fail "allowlist lost"
+ex 'grep -q "\"recommend_threshold\": 0.97" /etc/ghostwall/ghost_dns.json' || fail "update dropped a chosen threshold"
 
 echo "== uninstall"
 ex '/opt/ghostwall/uninstall.sh' >/dev/null 2>&1 || fail "uninstall failed"

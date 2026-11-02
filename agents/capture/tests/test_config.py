@@ -75,3 +75,23 @@ class TestConfig(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeviceValidationTests(unittest.TestCase):
+    def _load(self, devs):
+        import json, tempfile
+        p = os.path.join(tempfile.mkdtemp(), "d.json")
+        with open(p, "w") as f:
+            json.dump(devs, f)
+        return load_devices(p, 32)
+
+    def test_only_plain_addresses_reach_tcpdump(self):
+        for bad in ("192.168.1.5\tor\tport\t22", "192.168.1.5 or port 22", "host", "10.0.0.0/8", "1.2.3.4;id"):
+            with self.assertRaises(ValueError, msg=bad):
+                self._load([{"name": "pc", "ip": bad}])
+        self.assertEqual(self._load([{"name": "pc", "ip": " 192.168.1.5 "}])[0]["ip"], "192.168.1.5")
+        self.assertEqual(self._load([{"name": "pc", "ip": "FD00::0005"}])[0]["ip"], "fd00::5")
+
+    def test_names_sharing_a_capture_folder_refused(self):
+        with self.assertRaises(ValueError):
+            self._load([{"name": "my laptop", "ip": "192.168.1.5"}, {"name": "my_laptop", "ip": "192.168.1.6"}])

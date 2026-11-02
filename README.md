@@ -12,9 +12,11 @@ that suddenly starts using a bot API, a paste site or a tunnel service, skips yo
 filter, smuggles data through DNS, calls home on a timer, looks up known phishing
 domains, or a burst of random-looking names. Two small on-device models score how
 random a name looks; the behaviour rules do most of the work. Alerts go to a dashboard
-or Telegram. Your DNS traffic is never sent anywhere; the only thing Ghostwall downloads
-is a daily phishing list, and the only thing it sends out is the alerts themselves, if
-you turn on Telegram (domain names can be left out of those too).
+or Telegram. Ghostwall never sends your DNS traffic anywhere (one exception: in inline
+mode, while your DNS server is down, it answers through a fallback resolver, Quad9 by
+default; `"upstream_fallbacks": []` turns that off). The only thing it downloads is a
+daily phishing list, and the only thing it sends out is the alerts themselves, if you
+turn on Telegram (domain names can be left out of those too).
 
 > **Status: a detector, with blocking as an experiment.** The recommended *shadow mode*
 > reads the query log and alerts; it cannot break DNS. It has run on the author's home

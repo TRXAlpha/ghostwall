@@ -365,6 +365,7 @@ def cmd_calibrate(a) -> int:
         except FileNotFoundError:
             cfg = {}
         cfg["recommend_threshold"] = max(thr, float(r["current"]["corroborated_threshold"]))
+        cfg["thresholds_from"] = f"ghostwall calibrate --target {a.target:g}, {time.strftime('%Y-%m-%d')}"
         tmp = cfg_path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2)

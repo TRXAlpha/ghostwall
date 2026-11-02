@@ -284,7 +284,7 @@ function renderEvents(evs) {
       <div class="dom">${esc(e.domain)}</div>
       <div class="side"><span class="when" title="${esc(e.time)}">${ago(e.time)}</span>
         <span class="tag ${e.action === "block" ? "block" : ""}">${e.action === "block" ? "blocked" : "flagged"}</span>
-        <button data-act="allow" data-domain="${esc(e.domain)}">Trust</button></div>
+        ${e.rule === "threat_feed" ? "" : `<button data-act="allow" data-domain="${esc(e.domain)}">Trust</button>`}</div>
       <div class="meta"><b>${esc(e.device)}</b>: ${esc(RULES[e.rule] || e.rule)}${score}${e.n > 1 ? ` · ×${e.n}` : ""}</div>
       ${why ? `<div class="why">${esc(why)}</div>` : ""}
     </li>`;

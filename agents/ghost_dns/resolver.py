@@ -109,7 +109,7 @@ class Resolver:
                               severity="high", scores={"feed": 1.0}, reasons=why)
             return Decision("block" if enforce else "recommend", "threat_feed", evt)
         hit = self.det.doh.check(client_ip, domain)
-        if hit:
+        if hit and domain not in self.state.allowlist:   # trusted by exact name: a DoH you chose
             return Decision("recommend", hit.rule, self._emit_hit(dev, domain, hit))
 
         # A device starting to use a service malware favours (bot APIs, paste sites,

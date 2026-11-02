@@ -110,9 +110,13 @@ c = json.load(open(p))
 c.update({"shadow": True, "learning": True, "enforce": "null",
           "querylog": querylog, "querylog_format": fmt, "threat_feed_path": feed})
 c.pop("dns_host", None); c.pop("dns_port", None)   # shadow serves no DNS
-# Drop thresholds pinned by older configs so the measured defaults in config.py apply.
-for k in ("recommend_threshold", "block_threshold"):
-    c.pop(k, None)
+# Drop the thresholds the first versions pinned (0.60 / 0.90: far too noisy) so the
+# measured defaults in config.py apply. Anything else is a choice (yours, or
+# `ghostwall calibrate --apply`, which also sets "thresholds_from") and is kept.
+if "thresholds_from" not in c:
+    for k, legacy in (("recommend_threshold", (0.6, 0.85)), ("block_threshold", (0.9, 0.95))):
+        if c.get(k) in legacy:
+            c.pop(k)
 # Paths outside /opt/ghostwall, unless you chose your own.
 old = "/opt/ghostwall/agents/"
 for key, new in (("state_path", f"{data}/state.json"), ("events_path", f"{data}/events.jsonl"),
