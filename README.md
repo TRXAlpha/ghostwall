@@ -85,9 +85,12 @@ plain score therefore only alerts for names new to your network, and the behavio
 rules above do the rest.
 
 A 1-5-gram model retrained on the public data catches 80.5% of names from known families
-and 64.8% from families it never saw, against 81.4% and 60.8% for an Endgame-style LSTM
-(one dataset, one seed, an LSTM trained without tuning: a hint, not a verdict), at about
-40 µs per name in plain numpy (x86, one thread). A version trained on all of that data
+and 64.8% from families it never saw, against 81.4% and 60.8% for an Endgame-style LSTM.
+In a [fairer rematch](agents/dga_eval/results_lstm_fair.md) (the LSTM early-stopped on
+held-out names, three seeds each, the same five unseen-family folds) it is 64.6% against
+60.9% at 1% false positives and about even at 0.1% (38.0% against 37.2%): the LSTM wins
+two folds, the n-gram model wins clearly on folds with dictionary-word families. One
+dataset still. The n-gram model scores a name in about 40 µs in plain numpy (x86, one thread). A version trained on all of that data
 ships as an opt-in: `"models": "v3-public"` in `/etc/ghostwall/ghost_dns.json`, then
 `sudo systemctl restart ghostwall-dns`. It runs without onnxruntime (ghost-dns used 44 MB
 instead of 71 MB on the x86 test machine) and its thresholds flag the same share of

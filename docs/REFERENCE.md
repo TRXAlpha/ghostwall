@@ -124,6 +124,7 @@ overrides any of them. The most useful keys:
 | `web_ui/demo.py` | the dashboard on demo data, no install needed |
 | `web_ui/make_demo.py` | regenerate the demo data by running the real detector over a scripted day |
 | `ghost_dns/eval_detection.py` | before/after simulation on labelled data |
+| `dga_eval/fair_lstm.py --data DIR` | 1-5-gram model vs an early-stopped LSTM, 3 seeds × 5 unseen-family folds → `results_lstm_fair.md` |
 | `dga_eval/train_public.py --data DIR` | retrain the opt-in `v3-public` model and its thresholds → `results_v3_public.md` |
 | `dga_eval/public_bench.py --data DIR --download` | public DGA benchmark (pinned data, ~2 h on 4 cores; needs scikit-learn, torch, onnx) → `results_public.md` |
 | `fw_bot/fw_bot.py --owner-file FILE --follow EVENTS [--commands]` | Telegram alerts, optionally commands |

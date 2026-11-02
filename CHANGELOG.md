@@ -50,6 +50,6 @@ every site your household visits (converted on the first start); tighter systemd
   your own query log). The dashboard lists what you trusted, with an undo.
 - `FW_BOT_PRIVACY=minimal`: no domains, IPs or MACs in Telegram messages.
 - Opt-in `"models": "v3-public"` (no onnxruntime), and a public, reproducible benchmark:
-  `agents/dga_eval/results_public.md`.
+  `agents/dga_eval/results_public.md`, with a fairer LSTM rematch in `results_lstm_fair.md`.
 - CI installs Ghostwall for real under systemd (Debian 12, Ubuntu 22.04 and 24.04), inline
   mode included.
