@@ -209,7 +209,10 @@ false-positive rate.
 - **Detection is name-based.** It sees what a device looks up, not what it does
   afterwards. The models miss about 4 in 10 DGA domains. Malware that talks to shared
   services (cloud storage, CDNs, chat apps) looks like everyone else, and a device with
-  hardcoded DNS-over-HTTPS is invisible unless it looks the server up by name.
+  hardcoded DNS-over-HTTPS is invisible unless it looks the server up by name. Any web
+  page can also make your browser look up random-looking names, so an alert means
+  "check this device", not proof of infection; alerts are capped per device per
+  minute so such a page can't flood you.
 - **Tested on one home network** (Pi 4, AdGuard Home in Docker). The x86_64 install,
   Pi-hole support and the Docker image are new in v0.2 and verified on Ubuntu 24.04
   (x86_64), a Pi 4, the official Pi-hole Docker image and in CI, not yet on many real setups. Expect
