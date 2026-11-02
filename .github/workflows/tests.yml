@@ -19,8 +19,8 @@ jobs:
         os: [ubuntu-24.04, ubuntu-24.04-arm]
         python: ["3.10", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: ${{ matrix.python }}
       - run: pip install --require-hashes -r requirements.lock
@@ -43,7 +43,7 @@ jobs:
       matrix:
         image: ["debian:bookworm", "ubuntu:22.04", "ubuntu:24.04"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - run: tests/installer_e2e.sh "${{ matrix.image }}"
 
   gateway:
@@ -51,7 +51,7 @@ jobs:
     name: gateway mode (ghost-flow + capture)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - run: tests/gateway_e2e.sh
 
   docker:
@@ -61,7 +61,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - run: docker build -t ghostwall:ci .
       - name: smoke test (locked down as in compose.yaml; follows a fake AdGuard log, scores a query, dashboard needs the password)
         run: |
