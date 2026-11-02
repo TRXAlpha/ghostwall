@@ -277,9 +277,10 @@ on the missing model's empty score.)
 - **Isolating a device and LAN lockdown need gateway mode** (the box routes your LAN's
   traffic). In the default setup the dashboard doesn't offer them and the API refuses.
 - **`ghost-flow`** (raw-IP, DoH-by-IP, beacon and JA4 connection checks) and **`capture`**
-  (pcap freeze on alert) need gateway mode too. Both have run against a real kernel queue
-  and real tcpdump in a lab container (a device and a "wan" in network namespaces), not
-  yet on a real network.
+  (pcap freeze on alert) need gateway mode too. CI runs them in a lab container (a device
+  and a "wan" in network namespaces): the generated firewall loads on nftables 1.0.6,
+  isolation and lockdown change it, ghost-flow reads a real kernel queue, capture runs
+  real tcpdump. Not yet on a real network.
 - **The dashboard is HTTPS with a self-signed certificate** (the installer makes it and
   prints its fingerprint; browsers warn once) and a password. Fine on a home LAN or a
   tailnet; never expose it to the internet. The control API

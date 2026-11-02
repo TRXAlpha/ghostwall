@@ -71,8 +71,26 @@ fi
 nft -f $f                                   # reload: idempotent
 nft add element inet ghostwall isolated_dev { 192.168.1.50 }
 nft list chain inet ghostwall prerouting_nat | grep -q "redirect to :53"
+cd /opt/ghostwall/agents/ghost_dns && python3 - <<PY
+# ghost-dns enforcement (what the control API calls for isolate / release / lockdown), real table
+import subprocess
+from enforce import Enforcer, NftBackend
+e = Enforcer(NftBackend())
+nft = lambda *a: subprocess.run(["nft", *a], capture_output=True, text=True, check=True).stdout
+e.isolate("192.168.1.77")
+assert "192.168.1.77" in nft("list", "set", "inet", "ghostwall", "isolated_dev"), "isolate"
+e.release("192.168.1.77")
+assert "192.168.1.77" not in nft("list", "set", "inet", "ghostwall", "isolated_dev"), "release"
+e.block_ip("203.0.113.66")
+assert "203.0.113.66" in nft("list", "set", "inet", "ghostwall", "blocked_ip"), "block_ip"
+e.set_lockdown(True, "192.168.1.20")
+assert "ghostwall_lockdown" in nft("-a", "list", "chain", "inet", "ghostwall", "forward"), "lockdown on"
+e.set_lockdown(False, "192.168.1.20")
+assert "ghostwall_lockdown" not in nft("-a", "list", "chain", "inet", "ghostwall", "forward"), "lockdown off"
+print("   enforcement: isolate, release, block_ip, lockdown on/off all work on nft")
+PY
 bash /tmp/netconf/breakglass.sh >/dev/null 2>&1
-! nft list tables | grep -q "inet ghostwall"' || fail "generated nftables ruleset does not load, reload or break glass"
+! nft list tables | grep -q "inet ghostwall"' || fail "generated ruleset or ghost-dns enforcement failed on real nftables"
 
 echo "== the documented queue rule (docs/OPERATIONS.md, gateway mode step 5)"
 ex 'nft add table inet ghostwall && nft "add chain inet ghostwall forward { type filter hook forward priority 0; policy accept; }"'
