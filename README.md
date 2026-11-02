@@ -75,6 +75,17 @@ lookups the author made, 3 devices using DNS-over-HTTPS, 9 random-looking ad-red
 and pop-up style domains on the author's computers and phone, and 1 false positive (a
 weather script polling every 15 minutes). Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#detection).
 
+**On public data.** The numbers above use DRIFT, which is not public.
+[results_public.md](agents/dga_eval/results_public.md) uses only data anyone can download
+(25 DGA families from Netlab 360, the Tranco top 1M) and reproduces with
+`agents/dga_eval/public_bench.py`. There the shipped models catch 60.3% of DGA names at 1%
+false positives (53.4% up to v0.2.0-beta.2, which did not look inside dynamic-DNS names such as
+`x7kq2v9w.ddns.net`). A 1–5-gram model retrained on that data catches 80.5% of names from
+known families and 64.8% from families it never saw, against 81.4% and 60.8% for an
+Endgame-style LSTM, at about 40 µs per name in plain numpy (x86, one thread; not yet
+measured on a Pi). It is not shipped yet: it
+needs retraining and measuring on DRIFT first.
+
 ## Install
 
 Pick one. All of them start in shadow mode: your DNS keeps working exactly as before.
@@ -256,7 +267,8 @@ agents/fw_bot/      Telegram alerts and /fw commands
 agents/ghost_flow/  connection inspector (gateway mode)
 agents/capture/     per-device pcap ring + freeze on alert (gateway mode)
 agents/netconf/     generator for the Pi-as-gateway configs (dnsmasq, nftables, sysctl)
-agents/dga_eval/    evaluation of the shipped models (eval_shipped.py -> results_shipped.md)
+agents/dga_eval/    evaluation: shipped models on DRIFT (eval_shipped.py -> results_shipped.md),
+                    public benchmark (public_bench.py -> results_public.md)
 ghostwall/          shipped models + the numpy LR trainer
 trm/                neural-net training code
 ```

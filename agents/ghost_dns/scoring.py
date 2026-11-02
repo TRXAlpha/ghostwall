@@ -26,7 +26,7 @@ os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")
 
 import numpy as np  # noqa: E402
 
-from ngram import hashed_ngrams  # noqa: E402
+from ngram import hashed_ngrams, hashed_ngrams_one  # noqa: E402
 from tokenizer import encode, registrable_label, strip_dot  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -96,6 +96,10 @@ class LRModel:
 
     def score_tokens(self, toks: np.ndarray) -> np.ndarray:
         """Dot-stripped int64 token rows -> p_dga (used by agents/dga_eval)."""
+        if len(toks) == 1:  # the resolver's case: one name, no numpy loop overhead
+            cols = hashed_ngrams_one(toks[0], self.buckets, self.ngram_max, self.boundary)
+            z = self.intercept + float(self.coef[cols].sum()) if cols else self.intercept
+            return _sigmoid(np.array([z], dtype=np.float64))
         z = np.full(len(toks), self.intercept, dtype=np.float64)
         for rows, cols in hashed_ngrams(toks, self.buckets, self.ngram_max, self.boundary):
             z[rows] += self.coef[cols]

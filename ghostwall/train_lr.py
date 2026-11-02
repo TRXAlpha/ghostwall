@@ -4,9 +4,9 @@ Needs the DRIFT parquet files in data/drift and scikit-learn + scipy (training o
 The features are agents/ghost_dns/ngram.py, the same code the scorer runs on the device.
 
     python ghostwall/train_lr.py            # v2, as shipped: 1-3-grams, 2^18 buckets
-    python ghostwall/train_lr.py --v3       # 1-5-grams with start/end markers, 2^20 buckets
+    python ghostwall/train_lr.py --v3       # 1-5-grams, 2^20 buckets (--boundary: + start/end markers)
 
---v3 is the variant agents/dga_eval/public_bench.py compares; after training it, rerun
+--v3 is the best variant in agents/dga_eval/results_public.md; after training it, rerun
 agents/dga_eval/eval_shipped.py before shipping it (the README's numbers are for v2).
 """
 import argparse, os, sys, numpy as np, json
@@ -35,11 +35,12 @@ def ngram_matrix(tokens, lengths=None, ngram_max=NGRAM_MAX, buckets=NGRAM_BUCKET
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--v3", action="store_true", help="1-5-grams + boundary markers, 2^20 buckets")
+    ap.add_argument("--v3", action="store_true", help="1-5-grams, 2^20 buckets")
+    ap.add_argument("--boundary", action="store_true", help="with --v3: add start/end-of-label markers")
     ap.add_argument("--out", default=os.path.join(ROOT, "ghostwall", "models"))
     args = ap.parse_args()
     if args.v3:
-        NGRAM_MAX, NGRAM_BUCKETS, BOUNDARY = 5, 1 << 20, True
+        NGRAM_MAX, NGRAM_BUCKETS, BOUNDARY = 5, 1 << 20, args.boundary
     else:
         BOUNDARY = False
     feats = lambda T, L: ngram_matrix(T, L, NGRAM_MAX, NGRAM_BUCKETS, BOUNDARY)  # noqa: E731

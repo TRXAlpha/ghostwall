@@ -115,3 +115,30 @@ class CacheTests(unittest.TestCase):
         for d in ["a1.com", "b2.com", "c3.com", "d4.com", "e5.com"]:
             s.score_one(d)
         self.assertLessEqual(len(s._cache), 3)
+
+
+class SingleNamePathTests(unittest.TestCase):
+    def test_one_name_path_matches_batch_path(self):
+        import numpy as np
+        from ngram import hashed_ngrams, hashed_ngrams_one
+        from tokenizer import encode, strip_dot
+        names = BENIGN + DGAISH + ["a", "", "x" * 80, "my-site", "q1w2e3r4t5y6u7i8o9p0", "brothernerveplace"]
+        toks = strip_dot(encode(names))
+        for nmax, b in ((3, False), (5, False), (5, True)):
+            want = [[] for _ in names]
+            for rows, cols in hashed_ngrams(toks, 1 << 20, nmax, b):
+                for r, c in zip(rows, cols):
+                    want[r].append(int(c))
+            for i in range(len(names)):
+                self.assertEqual(sorted(hashed_ngrams_one(toks[i], 1 << 20, nmax, b)), sorted(want[i]),
+                                 (names[i], nmax, b))
+
+    def test_scores_equal_one_at_a_time(self):
+        if not os.path.exists(scoring.DEFAULT_LR_COEF):
+            self.skipTest("lr model absent")
+        import numpy as np
+        lr = scoring.LRModel(scoring.DEFAULT_LR_COEF, scoring.DEFAULT_LR_META)
+        names = BENIGN + DGAISH + ["", "x" * 80]
+        batch = lr.score(names)
+        single = np.array([lr.score([n])[0] for n in names])
+        np.testing.assert_allclose(single, batch, rtol=0, atol=1e-12)

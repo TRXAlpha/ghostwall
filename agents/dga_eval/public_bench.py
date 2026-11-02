@@ -22,7 +22,8 @@ Models (all trained here on the same names, except the shipped ones):
   shipped-trm / shipped-lr / shipped-mean   the models in ghostwall/models, as is
                                             (trained on DRIFT; a zero-shot reference)
   lr-v2      the shipped recipe: hashed 1-3-grams, 2^18 buckets
-  lr-v3      hashed 1-5-grams with start/end markers, 2^20 buckets
+  lr-v3      hashed 1-5-grams, 2^20 buckets (train_lr.py --v3)
+  lr-v3b     the same with start/end-of-label markers
   lstm       Woodbridge et al.: embedding 128, LSTM 128, dropout 0.5, sigmoid
 
     pip install numpy scikit-learn scipy torch onnx onnxruntime
@@ -63,9 +64,10 @@ SEED = 20261102
 N_BENIGN_TEST = 200_000
 N_BENIGN_TRAIN = 400_000
 LR_VARIANTS = {
+    # insertion order matters: it fixes the order the random generator is used in
     "lr-v2": {"ngram_max": 3, "boundary": False, "buckets": 1 << 18},
-    "lr-v3-noboundary": {"ngram_max": 5, "boundary": False, "buckets": 1 << 20},
-    "lr-v3": {"ngram_max": 5, "boundary": True, "buckets": 1 << 20},
+    "lr-v3": {"ngram_max": 5, "boundary": False, "buckets": 1 << 20},
+    "lr-v3b": {"ngram_max": 5, "boundary": True, "buckets": 1 << 20},
 }
 
 
@@ -289,32 +291,46 @@ def shipped_scorers():
 
 
 # --------------------------------------------------------------------------- speed
-def latency(fn, labels, reps=2000) -> float:
-    """Median-ish microseconds to score ONE name (batch of 1), as the resolver does."""
-    for lab in labels[:50]:
+SPEED_NAMES = ["google", "wikipedia", "xk2qv9zr7wpl3m", "brothernerveplace", "my-home-server",
+               "cloudflare", "a1b2c3d4e5f6g7", "weatherscript", "netflix", "qwkdjfhzmx"]
+
+def latency(fn, labels, reps=5000, rounds=5) -> float:
+    """Microseconds to score ONE name (batch of 1), as the resolver does: the best of
+    `rounds` runs, so other load on the machine doesn't count against a model."""
+    for lab in labels:
         fn([lab])
-    t = time.perf_counter()
-    for i in range(reps):
-        fn([labels[i % len(labels)]])
-    return (time.perf_counter() - t) / reps * 1e6
+    best = float("inf")
+    for _ in range(rounds):
+        t = time.perf_counter()
+        for i in range(reps):
+            fn([labels[i % len(labels)]])
+        best = min(best, (time.perf_counter() - t) / reps * 1e6)
+    return best
 
 
-def speed_table(lr_models: dict, lstm, workdir: str, labels) -> list[tuple]:
+def speed_table(workdir: str, labels) -> list[tuple]:
+    """Size and time per name of each model. Weights don't change either, so the
+    models are built with random weights: this needs no training and no data."""
     import onnxruntime as ort
     import torch
-    from scoring import DEFAULT_ONNX, TRMModel
+    from scoring import DEFAULT_ONNX, LRModel, TRMModel
     rows = []
     trm = TRMModel(DEFAULT_ONNX)
-    rows.append(("shipped-trm (ONNX)", os.path.getsize(DEFAULT_ONNX),
-                 latency(lambda b: trm.score(b), labels)))
-    for name, (coef, icpt, spec) in lr_models.items():
-        c16 = coef.astype(np.float16)  # how it would ship: half precision is plenty
-        rows.append((f"{name} (numpy)", c16.nbytes,
-                     latency(lambda b, c=coef, i=icpt, s=spec: score_lr(c, i, tokens(b), s), labels)))
+    rows.append(("shipped-trm (ONNX)", os.path.getsize(DEFAULT_ONNX), latency(trm.score, labels, reps=300)))
+    rng = np.random.default_rng(0)
+    for name, spec in LR_VARIANTS.items():
+        meta = os.path.join(workdir, f"{name}_meta.json")
+        coef = os.path.join(workdir, f"{name}_coef.npy")
+        np.save(coef, rng.normal(0, 0.1, spec["buckets"]).astype(np.float16))
+        with open(meta, "w") as f:
+            json.dump({"intercept": 0.0, **spec}, f)
+        lr = LRModel(coef, meta)  # the device scorer itself
+        rows.append((f"{name} (numpy)", os.path.getsize(coef) - 128, latency(lr.score, labels)))
     path = os.path.join(workdir, "lstm.onnx")
-    dummy = torch.ones((1, 16), dtype=torch.int64)
-    torch.onnx.export(lstm, dummy, path, input_names=["tokens"], output_names=["p"],
-                      dynamic_axes={"tokens": {0: "n", 1: "t"}}, dynamo=False)
+    torch.manual_seed(0)
+    lstm = lstm_model().eval()
+    torch.onnx.export(lstm, torch.ones((1, 16), dtype=torch.int64), path, input_names=["tokens"],
+                      output_names=["p"], dynamic_axes={"tokens": {0: "n", 1: "t"}}, dynamo=False)
     so = ort.SessionOptions()
     so.intra_op_num_threads = so.inter_op_num_threads = 1
     sess = ort.InferenceSession(path, so, providers=["CPUExecutionProvider"])
@@ -380,13 +396,13 @@ def run(args) -> dict:
 
     alphas: dict[str, float] = {}
 
-    def one_split(train_mask, test_mask, tag, keep_models=False):
+    def one_split(train_mask, test_mask, tag):
         tr_ben = ben_pool[rng.permutation(len(ben_pool))[:n_train]]
         Xtr = tokens(list(tr_ben) + list(dga[train_mask]))
         ytr = np.r_[np.zeros(len(tr_ben), np.int64), np.ones(int(train_mask.sum()), np.int64)]
         Xte = tokens(dga[test_mask])
         fte = fams[test_mask]
-        out, models = {}, {}
+        out = {}
         for name, sc in shipped.items():
             out[name] = (sc(t_ben_test), sc(Xte))
         out["shipped-mean"] = tuple((a + b) / 2 for a, b in zip(out["shipped-trm"], out["shipped-lr"]))
@@ -397,38 +413,35 @@ def run(args) -> dict:
                 print(f"  [{tag}] {name}: alpha {alphas[name]:g} (chosen on a validation slice)", flush=True)
             coef, icpt = train_lr(Xtr, ytr, spec, alpha=alphas[name])
             out[name] = (score_lr(coef, icpt, t_ben_test, spec), score_lr(coef, icpt, Xte, spec))
-            models[name] = (coef, icpt, spec)
             print(f"  [{tag}] {name} trained in {time.time() - t0:.0f}s", flush=True)
         t0 = time.time()
         lstm = train_lstm(Xtr, ytr, epochs=args.lstm_epochs)
         out["lstm"] = (score_lstm(lstm, t_ben_test), score_lstm(lstm, Xte))
         print(f"  [{tag}] lstm trained in {time.time() - t0:.0f}s", flush=True)
-        # the shipped architecture with the new n-gram model in it
+        # the shipped architecture (mean with the TRM) with an n-gram model retrained here
         sig = lambda z: 1 / (1 + np.exp(-np.clip(z, -500, 500)))  # noqa: E731
-        out["shipped-trm + lr-v3"] = tuple((a + sig(b)) / 2 for a, b in zip(out["shipped-trm"], out["lr-v3"]))
+        out["shipped-trm + lr-v3b"] = tuple((a + sig(b)) / 2 for a, b in zip(out["shipped-trm"], out["lr-v3b"]))
         res = {k: metrics(b, d, fte) for k, (b, d) in out.items()}
         for k, v in res.items():
             print(f"  [{tag}] {k:20s} auc {v['auc']:.4f}  tpr@1% {v['tpr@1%']:.3f}  tpr@0.1% {v['tpr@0.1%']:.3f}", flush=True)
-        return res, (models, lstm) if keep_models else None
+        return res
 
     # mixed: 80/20 inside every family
     test_mask = np.zeros(len(dga), bool)
     for f in family_list:
         idx = np.nonzero(fams == f)[0]
         test_mask[rng.permutation(idx)[: len(idx) // 5]] = True
-    results["mixed"], kept = one_split(~test_mask, test_mask, "mixed", keep_models=True)
+    results["mixed"] = one_split(~test_mask, test_mask, "mixed")
 
     # unseen: 5 folds of 5 families
     order = list(rng.permutation(family_list))
     folds = [order[i::5] for i in range(5)][: (1 if args.quick else 5)]
     for k, held in enumerate(folds):
         m = np.isin(fams, held)
-        res, _ = one_split(~m, m, f"unseen fold {k + 1}: {', '.join(sorted(held))}")
+        res = one_split(~m, m, f"unseen fold {k + 1}: {', '.join(sorted(held))}")
         results["unseen"][f"fold{k + 1}"] = {"families": sorted(held), "results": res}
 
-    lr_models, lstm = kept
-    results["speed"] = speed_table(lr_models, lstm, args.work, list(ben_test[:5000]))
-    np.save(os.path.join(args.work, "lr_v3_coef.npy"), lr_models["lr-v3"][0])
+    results["speed"] = speed_table(args.work, SPEED_NAMES)
     return results
 
 
@@ -445,6 +458,12 @@ def report(res: dict, quick: bool) -> str:
          "Tranco top-1M list V354N; 200,000 normal test names never used in training. "
          "Caught = share of DGA names scored above the threshold that flags 1% (or 0.1%) of "
          "the normal test names.",
+         "",
+         "Read with care: one seed, one dataset, and the LSTM is a reimplementation trained for "
+         "6 epochs without tuning (the n-gram regularisation was chosen on a validation slice). "
+         "These are not the DRIFT numbers in the README, and the shipped models were not "
+         "retrained here. Dictionary-word families (matsnu, suppobox, gozi, nymaim) stay mostly "
+         "uncaught by every model: their names are made of real words.",
          ""]
     L += ["## What the shipped models see", "",
           "The shipped models (trained on DRIFT, not retrained here) on every DGA name, scored "
@@ -458,8 +477,8 @@ def report(res: dict, quick: bool) -> str:
     L += ["", "Families caught worst before the fix (shipped mean, 1% FP): " +
           ", ".join(f"{f} {pct(v)} -> {pct(after['shipped-mean']['family@1%'][f])}" for f, v in worst), ""]
 
-    order = ["shipped-trm", "shipped-lr", "shipped-mean", "lr-v2", "lr-v3-noboundary", "lr-v3", "lstm",
-             "shipped-trm + lr-v3"]
+    order = ["shipped-trm", "shipped-lr", "shipped-mean", "lr-v2", "lr-v3", "lr-v3b", "lstm",
+             "shipped-trm + lr-v3b"]
     L += ["## Mixed split (80/20 inside every family)", "",
           "| Model | AUC | Caught at 1% FP | at 0.1% FP |", "|---|---|---|---|"]
     for m in order:
@@ -479,11 +498,12 @@ def report(res: dict, quick: bool) -> str:
         for fam in f["families"]:
             L.append(f"| {fam} | " + " | ".join(pct(f["results"][m]["family@1%"][fam]) for m in order) + " |")
     L += ["", "## Size and speed (one name at a time, one CPU thread, this machine)", "",
-          "| Model | Size on disk | Microseconds per name |", "|---|---|---|"]
+          "| Model | Size on disk | Microseconds per name (best of 5 runs) |", "|---|---|---|"]
     for name, size, us in res["speed"]:
         L.append(f"| {name} | {size / 1024:.0f} KB | {us:.0f} |")
-    L += ["", "Speed is from the machine that ran the benchmark, not a Raspberry Pi. "
-          "n-gram sizes assume float16 weights.", ""]
+    L += ["", "Speed is from the machine that ran the benchmark, not a Raspberry Pi, through the "
+          "same code the device runs (the n-gram rows use scoring.LRModel with float16 weights). "
+          "`--speed-only` remeasures this table alone.", ""]
     return "\n".join(L)
 
 
@@ -496,12 +516,23 @@ def main(argv=None) -> int:
     ap.add_argument("--json", default=None, help="also write the raw results here")
     ap.add_argument("--lstm-epochs", type=int, default=6)
     ap.add_argument("--quick", action="store_true", help="small sample and one fold, to try it out")
+    ap.add_argument("--from-json", help="re-render the report from a saved --json file")
+    ap.add_argument("--speed-only", action="store_true",
+                    help="with --from-json: remeasure the size and speed table (needs no data)")
     args = ap.parse_args(argv)
     args.work = args.work or args.data
-    res = run(args)
+    if args.from_json:
+        with open(args.from_json, encoding="utf-8") as f:
+            res = json.load(f)
+        if args.speed_only:
+            res["speed"] = speed_table(args.work, SPEED_NAMES)
+            with open(args.from_json, "w", encoding="utf-8") as f:
+                json.dump(res, f, indent=1, default=float)
+    else:
+        res = run(args)
     with open(args.out, "w", encoding="utf-8") as f:
         f.write(report(res, args.quick))
-    if args.json:
+    if args.json and not args.from_json:
         with open(args.json, "w", encoding="utf-8") as f:
             json.dump(res, f, indent=1, default=float)
     print(f"[bench] wrote {args.out}")

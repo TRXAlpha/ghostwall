@@ -101,8 +101,10 @@ out on purpose (their host names are machine-made and would be flagged).
 - **LR** (`lr_coef.npy`, `lr_meta.json`): hashed character 1–3-gram logistic
   regression, reimplemented in numpy so the Pi needs no scikit-learn. The features
   (`ngram.py`) are shared with the trainers; `lr_meta.json` can also select 1–5-grams
-  with start and end markers (`train_lr.py --v3`, compared in
-  [results_public.md](../agents/dga_eval/results_public.md)).
+  and start/end markers (`train_lr.py --v3`). On public data the 1–5-gram model catches
+  more than both shipped models and matches an Endgame-style LSTM
+  ([results_public.md](../agents/dga_eval/results_public.md)); it is not shipped until it
+  has been retrained and measured on DRIFT.
 
 If one model is missing the other is used; if both are, a lexical-entropy heuristic
 keeps the pipeline running.
