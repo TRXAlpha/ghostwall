@@ -32,7 +32,7 @@ import sys
 
 import dnsmsg
 import events as events_mod
-from detectors import RARE_TLDS, Detectors, is_internal, tld_of
+from detectors import RARE_TLDS, Detectors, abused_service, is_internal, tld_of
 from tokenizer import registrable_part
 
 
@@ -111,6 +111,13 @@ class Resolver:
         hit = self.det.doh.check(client_ip, domain)
         if hit:
             return Decision("recommend", hit.rule, self._emit_hit(dev, domain, hit))
+
+        # A device starting to use a service malware favours (bot APIs, paste sites,
+        # tunnels, file drops...). Checked before the allowlist: the starter list trusts
+        # discordapp.com and githubusercontent.com as a whole, which is where payloads sit.
+        svc = self._abused_service(client_ip, dev, domain)
+        if svc:
+            return svc
 
         if self.state.is_allowed(domain):
             return Decision("allow", "allowlist")
@@ -193,6 +200,25 @@ class Resolver:
             return Decision("recommend", "dga_corroborated", evt)
 
         return behaviour or Decision("allow", "clean")
+
+    def _abused_service(self, client_ip: str, dev, domain: str):
+        if client_ip in self.det.doh.ignore:          # this box itself (fw_bot uses Telegram)
+            return None
+        self.state.note_device(dev.name)
+        match = abused_service(domain)
+        if not match:
+            return None
+        host, label = match
+        if domain in self.state.allowlist or host in self.state.allowlist:
+            return None   # trusted by name (Trust button, `ghostwall allow`)
+        first = self.state.first_service_use(dev.name, host, float(self.cfg.get("service_baseline_days", 3)))
+        if not first:
+            return None   # used before, or still learning what this device normally does
+        evt = self._event(dev, domain, rule="abused_service", action="recommend", severity="warn",
+                          reasons=[f"first use of a {label} ({host}) by this device",
+                                   "malware uses these for commands, payloads or stolen data; "
+                                   "trust it if you know why this device started"])
+        return Decision("recommend", "abused_service", evt)
 
     def _emit_hit(self, dev, domain, hit) -> dict:
         return self._event(dev, domain, rule=hit.rule, action="recommend", severity=hit.severity,

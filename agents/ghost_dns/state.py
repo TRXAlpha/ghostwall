@@ -45,6 +45,8 @@ class GhostState:
         self.first_seen: dict[str, str] = {}
         self.confirmations: dict[str, int] = {}
         self.events: dict[str, dict] = {}
+        self.device_since: dict[str, str] = {}          # device -> first query (ISO)
+        self.device_services: dict[str, list] = {}      # device -> abused services it has used
         # note_seen() fires on every brand-new domain; persisting each one would
         # be a disk write per query, so it is throttled: mark dirty, flush at
         # most every _flush_interval seconds (and on explicit flush()/shutdown).
@@ -83,6 +85,8 @@ class GhostState:
         self.first_seen = dict(d.get("first_seen", {}))
         self.confirmations = dict(d.get("confirmations", {}))
         self.events = dict(d.get("events", {}))
+        self.device_since = dict(d.get("device_since", {}))
+        self.device_services = {k: list(v) for k, v in dict(d.get("device_services", {})).items()}
 
     def _save_locked(self) -> None:
         # Keep the persisted file bounded.
@@ -102,6 +106,8 @@ class GhostState:
             "first_seen": self.first_seen,
             "confirmations": self.confirmations,
             "events": self.events,
+            "device_since": self.device_since,
+            "device_services": self.device_services,
         }
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -159,6 +165,36 @@ class GhostState:
             self.first_seen[reg] = _now()
             self._touch_locked()
             return True
+
+    def first_service_use(self, device: str, service: str, baseline_days: float) -> bool | None:
+        """Record that `device` used `service`. True: first use after the device's
+        baseline (alert). False: seen before. None: still in the baseline (learned)."""
+        with self._lock:
+            now = datetime.now(timezone.utc)
+            since = self.device_since.get(device)
+            if since is None:
+                if len(self.device_since) >= 10000:   # a LAN has far fewer devices
+                    return False
+                self.device_since[device] = since = _now()
+                self._touch_locked()
+            used = self.device_services.setdefault(device, [])
+            if service in used:
+                return False
+            if len(used) < 200:
+                used.append(service)
+            self._touch_locked()
+            try:
+                age = (now - _parse_iso(since)).total_seconds() / 86400
+            except ValueError:
+                age = baseline_days
+            return True if age >= baseline_days else None
+
+    def note_device(self, device: str) -> None:
+        """Start a device's baseline on its first query."""
+        with self._lock:
+            if device not in self.device_since and len(self.device_since) < 10000:
+                self.device_since[device] = _now()
+                self._touch_locked()
 
     def is_new(self, domain: str, novelty_days: int) -> bool:
         """True if the registrable part was first seen within novelty_days."""

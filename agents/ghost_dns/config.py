@@ -72,6 +72,7 @@ DEFAULTS = {
     "burst_min_distinct": 5,          # ...and how many different ones from one device
     "tunnel_min_distinct": 30,        # distinct subdomains of one apex per 10 min
     "beacon_min_samples": 8,          # regular repeats of one name before alerting
+    "service_baseline_days": 3,       # abused_service: learn each device's normal services this long
     "beacon_min_dga": 0.5,            # ...and only if the name itself looks odd (apps poll on timers)
     "tunnel_min_long": 12,            # distinct 40+ char random subdomains of one apex per 10 min
     "threat_feed_path": os.path.join(HERE, "threat_feed.txt"),  # built by update_feed.py

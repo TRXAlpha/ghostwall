@@ -167,6 +167,41 @@ class DohDetector:
 
 
 # --------------------------------------------------------------------------
+# Services malware likes because everyone else uses them too: bot APIs and chat CDNs
+# for commands and payloads, paste sites, tunnels into home networks, anonymous file
+# drops, "what is my IP" lookups that bots run first. Each is harmless on its own; what
+# counts is a device that has never used one suddenly starting to.
+ABUSED_SERVICES = {
+    "Telegram bot API": "api.telegram.org",
+    "Discord CDN (file hosting)": "cdn.discordapp.com media.discordapp.net",
+    "Discord (webhooks)": "discord.com",
+    "paste site": "pastebin.com paste.ee hastebin.com rentry.co rentry.org pastes.io justpaste.it "
+                  "controlc.com dpaste.org ghostbin.co",
+    "tunnel into a home network": "ngrok.io ngrok.app ngrok-free.app ngrok-free.dev trycloudflare.com loca.lt "
+                                  "localtunnel.me serveo.net localhost.run lhr.life pinggy.io pinggy.link "
+                                  "bore.pub playit.gg portmap.io",
+    "anonymous file drop": "transfer.sh file.io gofile.io temp.sh catbox.moe pixeldrain.com anonfiles.com "
+                           "bashupload.com oshi.at 0x0.st filebin.net uguu.se tmpfiles.org",
+    "raw code download": "raw.githubusercontent.com gist.githubusercontent.com",
+    "public-IP lookup": "ipify.org ipinfo.io icanhazip.com ifconfig.me ifconfig.co ip-api.com "
+                        "checkip.amazonaws.com wtfismyip.com myexternalip.com ipecho.net ident.me api.ip.sb",
+    "Tor web gateway": "onion.ws onion.ly onion.pet tor2web.org",
+    "serverless relay": "workers.dev",
+}
+_SERVICE_OF = {host: label for label, hosts in ABUSED_SERVICES.items() for host in hosts.split()}
+
+
+def abused_service(host: str) -> tuple[str, str] | None:
+    """(matched service host, label) if host is one of ABUSED_SERVICES or under one."""
+    parts = host.split(".")
+    for i in range(len(parts) - 1):
+        cand = ".".join(parts[i:])
+        if cand in _SERVICE_OF:
+            return cand, _SERVICE_OF[cand]
+    return None
+
+
+# --------------------------------------------------------------------------
 class TunnelDetector:
     """DNS tunnelling/exfiltration looks like many distinct, long, random
     subdomains of ONE apex, usually via TXT/NULL/CNAME queries."""
