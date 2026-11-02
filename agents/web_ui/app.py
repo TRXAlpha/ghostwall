@@ -218,6 +218,8 @@ def make_handler(control_base: str, events_path: str, password: str | None = Non
     page, csp = page_and_csp()
 
     class Handler(BaseHTTPRequestHandler):
+        timeout = 30   # seconds a connection may sit idle; it holds one of the server's slots
+
         def _send(self, code: int, body: bytes, ctype: str, extra: dict | None = None) -> None:
             self.send_response(code)
             self.send_header("Content-Type", ctype)
@@ -363,6 +365,27 @@ class DashboardServer(ThreadingHTTPServer):
 
     daemon_threads = True
     tls: ssl.SSLContext | None = None
+    max_connections = 64   # one thread each: idle connections from the LAN must not exhaust a Pi
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self._slots = threading.BoundedSemaphore(self.max_connections)
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)   # too many at once: drop this one
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
 
     def finish_request(self, request, client_address):
         if self.tls is None:

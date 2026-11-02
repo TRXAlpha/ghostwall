@@ -241,3 +241,37 @@ class TlsTests(unittest.TestCase):
         r.read()
         self.assertEqual(r.getheader("Location"), "https://localhost/")
         c.close()
+
+
+class ConnectionCapTests(unittest.TestCase):
+    def test_idle_connection_times_out(self):
+        import socket
+        h = app.make_handler("http://127.0.0.1:9", "/nonexistent", None)
+        self.assertEqual(h.timeout, 30)
+        h.timeout = 0.5
+        srv = app.DashboardServer(("127.0.0.1", 0), h)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        c = socket.create_connection(("127.0.0.1", srv.server_address[1]))
+        c.settimeout(5)
+        self.assertEqual(c.recv(1), b"")             # closed by the server, not held forever
+        srv.shutdown()
+
+    def test_idle_connections_are_capped(self):
+        import socket, time
+        srv = app.DashboardServer(("127.0.0.1", 0), app.make_handler("http://127.0.0.1:9", "/nonexistent", None))
+        srv.max_connections = 3
+        srv._slots = threading.BoundedSemaphore(3)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        port = srv.server_address[1]
+        idle = [socket.create_connection(("127.0.0.1", port)) for _ in range(3)]   # never send a request
+        time.sleep(0.3)
+        extra = socket.create_connection(("127.0.0.1", port))
+        extra.settimeout(3)
+        self.assertEqual(extra.recv(1), b"")        # dropped at once
+        for s in idle:
+            s.close()
+        time.sleep(0.5)
+        r = Server.__new__(Server)
+        r.srv, r.port = srv, port
+        self.assertEqual(r.req("GET", "/api/events").status, 200)   # slots come back
+        srv.shutdown()
