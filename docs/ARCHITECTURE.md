@@ -66,20 +66,27 @@ For each query, in order. The first rule that returns wins.
    parent-domain match respects it. → `threat_feed`, high.
 2. **DoH lookup** (`DohDetector`): the name is a known DNS-over-HTTPS endpoint.
    → `doh_bypass`, warn.
-3. **Allowlist** (exact or parent). → allow, no event.
-4. **Internal names** (`is_internal`): single labels, `.local`, `.lan`, `.home.arpa`,
+3. **Abused service** (`detectors.abused_service`, `GhostState.first_service_use`): the
+   name is a service malware favours (Telegram bot API, Discord CDN, paste sites,
+   tunnels, file drops, raw GitHub, public-IP lookups, Tor gateways, workers.dev) and
+   this device, on the network for `service_baseline_days` (3) or more, has never used
+   it. Checked before the allowlist, because the starter list trusts `discordapp.com`
+   and `githubusercontent.com` as a whole; trusting the exact host silences it.
+   → `abused_service`, warn, once per device and service.
+4. **Allowlist** (exact or parent). → allow, no event.
+5. **Internal names** (`is_internal`): single labels, `.local`, `.lan`, `.home.arpa`,
    `.internal`, `.ts.net`, reverse lookups, `_service` records. → allow, never scored.
-5. **Blocklist** (confirmed blocks). → block (inline) or recommend (shadow).
-6. **Score** the registrable label and record novelty (`first_seen`).
-7. **Behaviour**: `TunnelDetector` (many distinct long high-entropy subdomains of one
+6. **Blocklist** (confirmed blocks). → block (inline) or recommend (shadow).
+7. **Score** the registrable label and record novelty (`first_seen`).
+8. **Behaviour**: `TunnelDetector` (many distinct long high-entropy subdomains of one
    apex in 10 minutes) and `BeaconDetector` (a name repeated on a near-constant
    interval, only if it scores ≥ 0.5 or uses a rare TLD, because apps poll on timers).
-8. **DGA burst** (`DgaBurst`): one device, ≥ 5 different names scoring ≥ 0.80 within
+9. **DGA burst** (`DgaBurst`): one device, ≥ 5 different names scoring ≥ 0.80 within
    10 minutes. This catches DGA malware even when each name is only moderately odd.
-9. **Single high score**: ≥ `block_threshold` (0.995) and new → `dga_high`; it blocks
+10. **Single high score**: ≥ `block_threshold` (0.995) and new → `dga_high`; it blocks
    only in inline mode with learning off. ≥ `recommend_threshold` (0.96) and new →
    `dga_suspect`.
-10. **Corroborated**: ≥ 0.80 on a rarely-legitimate TLD → `dga_corroborated`.
+11. **Corroborated**: ≥ 0.80 on a rarely-legitimate TLD → `dga_corroborated`.
 11. Otherwise allow.
 
 A score alone never blocks an established domain: blocking needs a new name (first
@@ -209,8 +216,9 @@ captures only `src host <device>`.
 
 - **ghost-flow** reads the first packet of each new forwarded flow from NFQUEUE 100
   (`queue ... bypass`, so traffic flows if the daemon is down). It flags a connection
-  to a public IP that ghost-dns never resolved (`raw_ip`), regular call-home
-  intervals (`beacon`), and attaches a JA4 TLS fingerprint. It accepts every packet
+  to a public IP that ghost-dns never resolved (`raw_ip`; `doh_ip` when that IP is a
+  public DNS-over-HTTPS/TLS resolver on 443/853, i.e. DoH built into the device),
+  regular call-home intervals (`beacon`), and attaches a JA4 TLS fingerprint. It accepts every packet
   unless enforcement, learning-off and `--autoblock` are all set, and even then drops
   only confirmed beacons.
 - **capture** keeps a 5-minute per-device pcap ring in RAM and, on a high-severity

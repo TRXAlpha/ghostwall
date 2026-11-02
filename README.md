@@ -7,11 +7,14 @@
 **Spots infected devices on your home network from their DNS lookups.** Ghostwall runs
 next to [AdGuard Home](https://github.com/AdguardTeam/AdGuardHome) or
 [Pi-hole](https://pi-hole.net) on a Raspberry Pi, a VM or any small Linux box. It reads
-your DNS server's query log, scores every lookup with two small on-device models and a
-set of behavioural rules, and tells you (dashboard or Telegram) when a device starts
-acting like it is infected. Your DNS traffic is never sent anywhere; the only thing
-Ghostwall downloads is a daily phishing list, and the only thing it sends out is the
-alerts themselves, if you turn on Telegram.
+your DNS server's query log and watches each device for the habits of malware: a device
+that suddenly starts using a bot API, a paste site or a tunnel service, skips your DNS
+filter, smuggles data through DNS, calls home on a timer, looks up known phishing
+domains, or a burst of random-looking names. Two small on-device models score how
+random a name looks; the behaviour rules do most of the work. Alerts go to a dashboard
+or Telegram. Your DNS traffic is never sent anywhere; the only thing Ghostwall downloads
+is a daily phishing list, and the only thing it sends out is the alerts themselves, if
+you turn on Telegram (domain names can be left out of those too).
 
 > **Status: a detector, with blocking as an experiment.** The recommended *shadow mode*
 > reads the query log and alerts; it cannot break DNS. It has run on the author's home
@@ -34,9 +37,10 @@ Keep them. Ghostwall runs on top and covers what a blocklist can't:
 | | AdGuard Home / Pi-hole | + Ghostwall |
 |---|---|---|
 | Known phishing domains | blocks them | also tells you which device tried |
-| Random-looking domains nobody has listed yet (DGA) | no | about 6 in 10, plus bursts of them |
+| A camera or TV that starts using Telegram's bot API, a paste site, ngrok, a file drop | no | flagged the first time (each device learns its normal services first) |
 | DNS tunnelling, timer-like beacons | no | yes |
-| A device using its own DNS-over-HTTPS | no | flagged, if it looks up a known DoH server by name |
+| A device using its own DNS-over-HTTPS | no | flagged if it looks the server up by name; by IP too in gateway mode |
+| Random-looking domains nobody has listed yet (DGA) | no | about 6 in 10 on [public data](agents/dga_eval/results_public.md), plus bursts of them |
 | Per-device "this looks infected" alerts | no | dashboard + Telegram |
 | Can break your DNS | it is your DNS | no (shadow mode only reads the log) |
 
@@ -49,8 +53,10 @@ Keep them. Ghostwall runs on top and covers what a blocklist can't:
 | `dga_high` / `dga_suspect` | a single very random-looking name that is new to your network | high / warn |
 | `dga_corroborated` | a fairly random name on a rarely-legitimate TLD (`.top`, `.xyz`, ...) | warn |
 | `doh_bypass` | a device looked up a known DNS-over-HTTPS server, so it may be skipping your filter | warn |
+| `abused_service` | a device that has been on your network for 3+ days starts using a service malware likes for commands, payloads or stolen data: Telegram's bot API, Discord's CDN, paste sites, ngrok and other tunnels, anonymous file drops, raw GitHub downloads, "what is my IP" lookups | warn |
 | `dns_tunnel` | many long random subdomains of one domain (data smuggled over DNS) | high |
 | `dns_beacon` | an odd-looking name queried on a fixed timer | warn |
+| `doh_ip`, `raw_ip`, `beacon` | gateway mode only (`ghost-flow`): a connection straight to a DNS-over-HTTPS server's IP, to an IP nobody looked up, or on a fixed timer | warn / high |
 
 An alert, as written to `events.jsonl` and sent to Telegram:
 
@@ -63,32 +69,37 @@ An alert, as written to `events.jsonl` and sent to Telegram:
 Internal names (`*.local`, `*.ts.net`, single labels, `_service` records) are never
 scored, and repeat alerts for the same device and domain are collapsed to one per day.
 
-**How well.** Trained on 2017–2019 and tested on 2024–2025, the models catch about 61%
-of algorithmically generated (DGA) domains when 1% of normal domains are flagged, and
-47% at 0.2%. Counting only normal names that never appeared in training, which are
-closer to what Ghostwall alerts on, the alert threshold flags about 2% of them and the
-block threshold 0.4%. That alone would be noisy, so a plain score only alerts for names
-new to your network, and the bursts, tunnels, beacons, phishing list and DoH rules do
-the rest.
-Replaying 12.9 days of the author's network (115,549 queries) gave 17 alerts: 4 test
-lookups the author made, 3 devices using DNS-over-HTTPS, 9 random-looking ad-redirect
-and pop-up style domains on the author's computers and phone, and 1 false positive (a
-weather script polling every 15 minutes). Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#detection).
+**How well, on data anyone can check.** [results_public.md](agents/dga_eval/results_public.md)
+uses only public data (25 DGA families from Netlab 360, the Tranco top 1M) and reproduces
+with `agents/dga_eval/public_bench.py`. There the shipped models catch 60.3% of DGA
+names when 1% of normal names are flagged (53.4% up to v0.2.0-beta.2, which did not
+look inside dynamic-DNS names such as `x7kq2v9w.ddns.net`). Dictionary-word DGAs
+(`brothernerveplace.com`) get through almost always: they look like normal names. A
+plain score therefore only alerts for names new to your network, and the behaviour
+rules above do the rest.
 
-**On public data.** The numbers above use DRIFT, which is not public.
-[results_public.md](agents/dga_eval/results_public.md) uses only data anyone can download
-(25 DGA families from Netlab 360, the Tranco top 1M) and reproduces with
-`agents/dga_eval/public_bench.py`. There the shipped models catch 60.3% of DGA names at 1%
-false positives (53.4% up to v0.2.0-beta.2, which did not look inside dynamic-DNS names such as
-`x7kq2v9w.ddns.net`). A 1–5-gram model retrained on that data catches 80.5% of names from
-known families and 64.8% from families it never saw, against 81.4% and 60.8% for an
-Endgame-style LSTM, at about 40 µs per name in plain numpy (x86, one thread; not yet
-measured on a Pi). A version trained on all of that data ships as an opt-in:
-`"models": "v3-public"` in `/etc/ghostwall/ghost_dns.json`, then
-`sudo systemctl restart ghostwall-dns`. It runs without onnxruntime (ghost-dns used 44 MB instead
-of 71 MB on the x86 test machine) and its thresholds are set to flag the same share of normal
-names as the defaults ([results_v3_public.md](agents/dga_eval/results_v3_public.md)). It is
-not the default because it has not been measured on DRIFT or on a real network yet.
+A 1-5-gram model retrained on the public data catches 80.5% of names from known families
+and 64.8% from families it never saw, against 81.4% and 60.8% for an Endgame-style LSTM
+(one dataset, one seed, an LSTM trained without tuning: a hint, not a verdict), at about
+40 µs per name in plain numpy (x86, one thread). A version trained on all of that data
+ships as an opt-in: `"models": "v3-public"` in `/etc/ghostwall/ghost_dns.json`, then
+`sudo systemctl restart ghostwall-dns`. It runs without onnxruntime (ghost-dns used 44 MB
+instead of 71 MB on the x86 test machine) and its thresholds flag the same share of
+normal names as the defaults ([results_v3_public.md](agents/dga_eval/results_v3_public.md)).
+It is not the default because it has not been measured on a real network yet. Either way,
+`sudo ghostwall calibrate` shows what the thresholds would flag on your own network.
+
+**On private data.** On DRIFT (a 2017-2025 dataset that is not in this repo), trained
+on 2017-2019 and tested on 2024-2025, the shipped models catch about 61% of DGA names
+at 1% false positives and 47% at 0.2%
+([results_shipped.md](agents/dga_eval/results_shipped.md); reproducing it needs the
+dataset). Replaying 12.9 days of the author's network (115,549 queries, before the
+dynamic-DNS fix and the behaviour rules added since) gave 17 alerts: 4 test lookups the
+author made, 3 devices using DNS-over-HTTPS, 9 random-looking ad-redirect and pop-up
+style domains on the author's computers and phone, and 1 false positive (a weather
+script polling every 15 minutes). That is one network: please
+[open an issue](https://github.com/TRXAlpha/ghostwall/issues) with what you see on yours.
+Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#detection).
 
 ## Install
 
@@ -233,7 +244,8 @@ on the missing model's empty score.)
 ## Limits
 
 - **Detection is name-based.** It sees what a device looks up, not what it does
-  afterwards. The models miss about 4 in 10 DGA domains. Malware that talks to shared
+  afterwards. The models miss about 4 in 10 DGA domains, and nearly all made of
+  dictionary words. Malware that talks to shared
   services (cloud storage, CDNs, chat apps) looks like everyone else, and a device with
   hardcoded DNS-over-HTTPS is invisible unless it looks the server up by name. Any web
   page can also make your browser look up random-looking names, so an alert means
