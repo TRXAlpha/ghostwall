@@ -53,7 +53,7 @@ against this schema (exit 1 on any invalid line).
 | `time` | yes | ISO 8601 UTC, e.g. `2026-10-20T21:04:05Z` |
 | `device` | yes | device name from `devices.json`, or the client IP |
 | `domain` | yes | lowercase, no trailing dot |
-| `rule` | yes | `threat_feed`, `dga_burst`, `dga_high`, `dga_suspect`, `dga_corroborated`, `doh_bypass`, `dns_tunnel`, `dns_beacon`, `blocklist`, `raw_ip`, `beacon` |
+| `rule` | yes | `threat_feed`, `dga_burst`, `dga_high`, `dga_suspect`, `dga_corroborated`, `doh_bypass`, `abused_service`, `dns_tunnel`, `dns_beacon`, `blocklist`, `raw_ip`, `doh_ip`, `beacon` |
 | `action` | yes | `block`, `recommend` or `allow` |
 | `event_id` | yes | `^[A-Za-z0-9_-]{1,64}$` |
 | `severity` | no | `info`, `warn` (default), `high`, `critical` |
@@ -95,6 +95,7 @@ overrides any of them. The most useful keys:
 | `burst_min_score`, `burst_min_distinct` | `0.80`, `5` | DGA burst: score and count per device in 10 min |
 | `tunnel_min_distinct`, `tunnel_min_long` | `30`, `12` | DNS tunnel thresholds per apex in 10 min |
 | `beacon_min_samples`, `beacon_min_dga` | `8`, `0.5` | DNS beacon thresholds |
+| `service_baseline_days` | `3` | `abused_service`: how long each device learns which of those services it normally uses |
 | `event_dedupe_seconds` | `86400` | one alert per device, domain and rule per day |
 | `alert_rate_per_device` | `30` | at most this many alerts per device per minute (`0`: no cap). Any web page can make a browser look up thousands of made-up names; blocks still happen, only their alerts are dropped |
 | `control_host`, `control_port` | `127.0.0.1`, `5380` | control API; must be loopback |

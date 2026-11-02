@@ -4,6 +4,9 @@ Sees every forwarded first-packet (via NFQUEUE on the Pi, or a replay source in
 tests), and raises recommendations for:
   * raw_ip  -- a new connection to a public IP ghost-dns never resolved
   * beacon  -- near-constant-interval repeat connections (C2 call-home)
+  * doh_ip  -- a connection straight to a public DNS resolver's IP on 443/853 that was
+               never looked up by name: hardcoded DNS-over-HTTPS/TLS, which ghost-dns
+               (reading DNS names) cannot see
 and enriches TLS flows with a JA4 fingerprint.
 
 Safety: the NFQUEUE verdict is ACCEPT for everything. ghost-flow NEVER drops a
@@ -29,8 +32,25 @@ GHOST_DNS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 sys.path.insert(0, GHOST_DNS)
 import events as events_mod          # noqa: E402
 
-_PSEUDO = {"raw_ip": "raw-ip.flow.ghostwall", "beacon": "beacon.flow.ghostwall"}
+_PSEUDO = {"raw_ip": "raw-ip.flow.ghostwall", "beacon": "beacon.flow.ghostwall",
+           "doh_ip": "doh-ip.flow.ghostwall"}
 _ALERT_COOLDOWN = 300.0  # seconds; don't re-raise the same (src,dst,rule)
+_COOLDOWN = {"doh_ip": 86400.0}  # a browser with DoH on connects all day: once a day is enough
+
+# Public resolvers that answer DNS-over-HTTPS (443) or DNS-over-TLS/QUIC (853) on these
+# addresses. A device reaching them without a lookup has DoH/DoT built in.
+DOH_IPS = frozenset("""
+1.1.1.1 1.0.0.1 1.1.1.2 1.0.0.2 1.1.1.3 1.0.0.3
+2606:4700:4700::1111 2606:4700:4700::1001 2606:4700:4700::1112 2606:4700:4700::1002
+8.8.8.8 8.8.4.4 2001:4860:4860::8888 2001:4860:4860::8844
+9.9.9.9 149.112.112.112 9.9.9.10 149.112.112.10 9.9.9.11 149.112.112.11
+2620:fe::fe 2620:fe::9 2620:fe::10 2620:fe::11
+208.67.222.222 208.67.220.220 2620:119:35::35 2620:119:53::53
+94.140.14.14 94.140.15.15 94.140.14.15 94.140.15.16 2a10:50c0::ad1:ff 2a10:50c0::ad2:ff
+45.90.28.0 45.90.30.0 185.228.168.9 185.228.169.9 194.242.2.2 194.242.2.3
+76.76.2.0 76.76.10.0 185.222.222.222 45.11.45.11 101.101.101.101 223.5.5.5 223.6.6.6
+""".split())
+DOH_PORTS = (443, 853)
 
 
 class Inspector:
@@ -49,7 +69,7 @@ class Inspector:
         self._ja4: dict[tuple, str] = {}
         self._last_alert: dict[tuple, float] = {}
         self.stats = {"packets": 0, "new_conns": 0, "raw_ip": 0, "beacon": 0,
-                      "tls": 0, "blocked": 0}
+                      "doh_ip": 0, "tls": 0, "blocked": 0}
 
     def inspect(self, raw: bytes, when: float | None = None) -> str:
         """Process one raw packet; return the NFQUEUE verdict ('accept'/'drop')."""
@@ -76,7 +96,12 @@ class Inspector:
         severity = "warn"
 
         raw_reason = self.rawip.check(pkt.dst)
-        if raw_reason:
+        if raw_reason and pkt.dst in DOH_IPS and pkt.dport in DOH_PORTS:
+            reasons.append(f"connected to public DNS resolver {pkt.dst}:{pkt.dport} without looking it up: "
+                           "built-in DNS-over-HTTPS/TLS that bypasses your DNS filter")
+            rule = "doh_ip"
+            self.stats["doh_ip"] += 1
+        elif raw_reason:
             reasons.append(raw_reason)
             rule = "raw_ip"
             self.stats["raw_ip"] += 1
@@ -93,7 +118,7 @@ class Inspector:
 
         key = (pkt.src, pkt.dst, rule)
         last = self._last_alert.get(key)
-        if last is not None and now - last < _ALERT_COOLDOWN:
+        if last is not None and now - last < _COOLDOWN.get(rule, _ALERT_COOLDOWN):
             return "accept"
         self._last_alert[key] = now
 
