@@ -153,7 +153,17 @@ fi
 # package on PyPI fails the install instead of running as part of Ghostwall.
 if ! "$DEST/.venv/bin/pip" install -q --disable-pip-version-check --require-hashes -r "$DEST/requirements.lock"; then
   # onnxruntime has no wheel for some platforms (32-bit ARM, brand-new Python): run on numpy alone.
-  "$DEST/.venv/bin/pip" install -q --disable-pip-version-check "numpy>=1.24,<3"
+  # numpy alone, still from the lock (pip picks the entry for this Python); if no locked
+  # file fits this platform either, the locked version without a hash check.
+  NPLOCK=$(mktemp)
+  awk '/^numpy==/{p=1} /^[a-z]/ && !/^numpy==/{p=0} p' "$DEST/requirements.lock" > "$NPLOCK"
+  if ! "$DEST/.venv/bin/pip" install -q --disable-pip-version-check --require-hashes -r "$NPLOCK"; then
+    NPV=$(sed -n 's/^numpy==\([0-9.]*\).*/\1/p' "$NPLOCK" | head -1)
+    say "   WARNING: no hash-checked numpy build fits this platform; installing numpy==${NPV:-2} unchecked"
+    "$DEST/.venv/bin/pip" install -q --disable-pip-version-check "numpy==${NPV:-2.2.6}" \
+      || "$DEST/.venv/bin/pip" install -q --disable-pip-version-check "numpy>=1.24,<3"
+  fi
+  rm -f "$NPLOCK"
   say "   onnxruntime is not available here: scoring uses the n-gram model only (catches fewer DGA names)"
 fi
 # The services can't write next to the code, so compile it once here.
