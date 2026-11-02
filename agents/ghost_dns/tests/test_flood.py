@@ -177,3 +177,30 @@ class UpstreamBlockedTests(unittest.TestCase):
         self.assertTrue(parse_adguard_entry(blocked)[3])
         self.assertFalse(parse_adguard_entry(rewritten)[3])
         self.assertFalse(parse_adguard_entry('{"QH":"z.example","IP":"10.0.0.2","Result":{}}')[3])
+
+
+class PiholeBlockedTests(unittest.TestCase):
+    def test_follower_pairs_query_with_its_block_line(self):
+        from shadow import QueryLogFollower
+
+        class Rec:
+            stats = {"queries": 0}
+
+            def __init__(self):
+                self.calls = []
+
+            def decide(self, ip, host, qtype, upstream_blocked=False):
+                self.calls.append((host, upstream_blocked))
+
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "pihole.log")
+        open(p, "w").close()
+        rec = Rec()
+        fo = QueryLogFollower(rec, p, fmt="pihole")
+        with open(p, "a") as f:
+            f.write("Nov  2 10:00:00 dnsmasq[812]: query[A] ads7kq2zx.example from 192.168.1.10\n"
+                    "Nov  2 10:00:00 dnsmasq[812]: gravity blocked ads7kq2zx.example is 0.0.0.0\n"
+                    "Nov  2 10:00:01 dnsmasq[812]: query[A] example.org from 192.168.1.10\n"
+                    "Nov  2 10:00:01 dnsmasq[812]: forwarded example.org to 127.0.0.1\n")
+        self.assertEqual(fo.poll_once(), 2)
+        self.assertEqual(rec.calls, [("ads7kq2zx.example", True), ("example.org", False)])

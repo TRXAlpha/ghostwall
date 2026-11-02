@@ -67,6 +67,17 @@ def parse_pihole_line(line: str):
     return m["ip"], m["host"].rstrip(".").lower(), m["qt"].upper()
 
 
+# Pi-hole logs its own block on the line after the query, e.g.
+#   dnsmasq[812]: gravity blocked ads.example.com is 0.0.0.0   (v6: "... denied")
+_PIHOLE_BLOCKED = re.compile(r"\]:\s+(?:\d+\s+\S+\s+)?(?:gravity blocked|exactly blacklisted|regex blacklisted|"
+                             r"exactly denied|regex denied|gravity denied)\s+(?P<host>\S+)\s+is\s")
+
+
+def pihole_blocked_host(line: str) -> str | None:
+    m = _PIHOLE_BLOCKED.search(line)
+    return m["host"].rstrip(".").lower() if m else None
+
+
 PARSERS = {"adguard": parse_adguard_line, "pihole": parse_pihole_line}
 # with "was it already blocked by the DNS server" (Pi-hole logs that on a later line: False)
 ENTRY_PARSERS = {"adguard": parse_adguard_entry,
@@ -143,24 +154,40 @@ class QueryLogFollower:
             self.offset = 0  # AdGuard rotated/truncated the log
             self._head = self._read_head()
         done = 0
+        pending: list[list] = []   # Pi-hole: queries waiting to see whether a "blocked" line follows
         with open(self.path, "rb") as f:
             f.seek(self.offset)
             for raw in f:
                 if not raw.endswith(b"\n"):
                     break  # partial line: wait for the rest
                 self.offset += len(raw)
-                parsed = self.parse(raw.decode("utf-8", "replace").strip())
+                line = raw.decode("utf-8", "replace").strip()
+                if self.fmt == "pihole":
+                    host = pihole_blocked_host(line)
+                    if host:
+                        for q in pending:
+                            if q[1] == host:
+                                q[3] = True
+                        continue
+                parsed = self.parse(line)
                 if not parsed:
                     continue
-                ip, host, qtype, blocked = parsed
-                try:
-                    self.resolver.decide(ip, host, qtype, upstream_blocked=blocked)
-                except Exception as exc:  # noqa: BLE001 - never die on one bad line
-                    print(f"[ghost-dns:shadow] decide failed for {host}: {exc!r}", file=sys.stderr, flush=True)
-                self.resolver.stats["queries"] += 1
-                done += 1
+                pending.append(list(parsed))
+                if self.fmt != "pihole" or len(pending) > 64:
+                    done += self._decide(pending.pop(0))
+        for q in pending:   # Pi-hole writes the query and its block in one go
+            done += self._decide(q)
         self.seen += done
         return done
+
+    def _decide(self, q) -> int:
+        ip, host, qtype, blocked = q
+        try:
+            self.resolver.decide(ip, host, qtype, upstream_blocked=blocked)
+        except Exception as exc:  # noqa: BLE001 - never die on one bad line
+            print(f"[ghost-dns:shadow] decide failed for {host}: {exc!r}", file=sys.stderr, flush=True)
+        self.resolver.stats["queries"] += 1
+        return 1
 
     def run(self) -> None:
         while not self._stop.is_set():
