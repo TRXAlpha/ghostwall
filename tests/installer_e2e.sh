@@ -44,11 +44,29 @@ tar -C "$REPO" --exclude=./.git -cf - . | docker exec -i "$NAME" bash -c 'userad
 ex() { docker exec "${ENVS[@]}" "$NAME" bash -c "$1"; }
 
 echo "== fake AdGuard Home"
+# A tiny DNS server standing in for AdGuard: answers A 192.0.2.10 for any name, on the
+# port its AdGuardHome.yaml names (so inline mode's port move is real).
+docker exec -i "$NAME" bash -c 'cat > /usr/local/bin/fake-adguard' <<'PY'
+import re, socket, struct
+port = int(re.search(r"^  port: (\d+)", open("/opt/AdGuardHome/AdGuardHome.yaml").read(), re.M).group(1))
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", port))
+while True:
+    q, addr = s.recvfrom(512)
+    end = 12
+    while q[end]:
+        end += q[end] + 1
+    end += 5
+    hdr = q[:2] + struct.pack(">HHHHH", 0x8180, 1, 1, 0, 0)
+    ans = struct.pack(">HHHIH", 0xC00C, 1, 1, 60, 4) + socket.inet_aton("192.0.2.10")
+    s.sendto(hdr + q[12:end] + ans, addr)
+PY
 ex 'mkdir -p /opt/AdGuardHome/data
 printf "dns:\n  port: 53\nquerylog:\n  dir_path: \"\"\n  size_memory: 1000\n  enabled: true\n" > /opt/AdGuardHome/AdGuardHome.yaml
 chmod 600 /opt/AdGuardHome/AdGuardHome.yaml; : > /opt/AdGuardHome/data/querylog.json
 chmod 700 /opt/AdGuardHome/data; chmod 600 /opt/AdGuardHome/data/querylog.json
-printf "[Service]\nExecStart=/bin/sleep infinity\n[Install]\nWantedBy=multi-user.target\n" > /etc/systemd/system/AdGuardHome.service
+printf "[Service]\nExecStart=/usr/bin/python3 /usr/local/bin/fake-adguard\n[Install]\nWantedBy=multi-user.target\n" > /etc/systemd/system/AdGuardHome.service
 systemctl daemon-reload; systemctl enable --now AdGuardHome >/dev/null 2>&1'
 
 echo "== install.sh"
@@ -93,6 +111,44 @@ ex 'cd /home/pi/ghostwall && ./install.sh' > "$WORK/update.log" 2>&1 || { cat "$
 [ "$PASS" = "$(ex 'ghostwall password' | awk '{print $4}')" ] || fail "password changed"
 ex 'grep -q example.org /var/lib/ghostwall/state.json' || fail "allowlist lost"
 ex 'grep -q "\"recommend_threshold\": 0.97" /etc/ghostwall/ghost_dns.json' || fail "update dropped a chosen threshold"
+
+echo "== inline mode (docs/OPERATIONS.md, 'Going inline')"
+docker exec -i "$NAME" bash -c 'cat > /usr/local/bin/dnsq' <<'PY'
+import socket, struct, sys
+name, port = sys.argv[1], int(sys.argv[2]) if len(sys.argv) > 2 else 53
+q = struct.pack(">HHHHHH", 0x4242, 0x0100, 1, 0, 0, 0) + b"".join(
+    bytes([len(p)]) + p.encode() for p in name.split(".")) + b"\0" + struct.pack(">HH", 1, 1)
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(6)
+s.sendto(q, ("127.0.0.1", port))
+r = s.recvfrom(512)[0]
+rcode, an = r[3] & 15, struct.unpack(">H", r[6:8])[0]
+print("rcode=%d" % rcode, socket.inet_ntoa(r[-4:]) if an and rcode == 0 else "-")
+PY
+ex 'sed -i "s/^  port: 53$/  port: 5300/" /opt/AdGuardHome/AdGuardHome.yaml && systemctl restart AdGuardHome && sleep 1'
+[ "$(ex 'python3 /usr/local/bin/dnsq example.com 5300')" = "rcode=0 192.0.2.10" ] || fail "fake AdGuard not on 5300"
+ex 'python3 - <<PY
+import json; p = "/etc/ghostwall/ghost_dns.json"; c = json.load(open(p))
+c.update({"shadow": False, "dns_host": "127.0.0.1", "dns_port": 53, "dns_host6": None,
+          "upstream": "127.0.0.1", "upstream_port": 5300, "upstream_fallbacks": [], "learning": True})
+json.dump(c, open(p, "w"), indent=2)
+PY
+systemctl restart ghostwall-dns'
+for _ in $(seq 20); do ex 'python3 /usr/local/bin/dnsq example.com' >/dev/null 2>&1 && break; sleep 1; done
+[ "$(ex 'python3 /usr/local/bin/dnsq example.com')" = "rcode=0 192.0.2.10" ] \
+  || fail "inline: ghost-dns (unprivileged, CAP_NET_BIND_SERVICE) does not answer on :53"
+[ "$(ex 'python3 /usr/local/bin/dnsq kjqwehdzxklqwpe.biz')" = "rcode=0 192.0.2.10" ] || fail "learning mode must not block"
+ex 'ghostwall alerts -n 3' | grep -q kjqwehdzxklqwpe.biz || fail "inline: no alert"
+ex 'ghostwall learning off' >/dev/null
+[ "$(ex 'python3 /usr/local/bin/dnsq bexmnvoqeiduwq.xyz')" = "rcode=0 0.0.0.0" ] || fail "inline: new DGA name not sinkholed"
+[ "$(ex 'python3 /usr/local/bin/dnsq example.com')" = "rcode=0 192.0.2.10" ] || fail "inline: normal name broken while blocking"
+ex 'ghostwall learning on' >/dev/null
+ex 'systemctl stop AdGuardHome'
+[ "$(ex 'python3 /usr/local/bin/dnsq example.org')" = "rcode=2 -" ] || fail "inline: dead upstream must give SERVFAIL, not hang"
+ex 'systemctl start AdGuardHome'
+echo "== back to shadow (go_shadow.sh moves AdGuard back to :53)"
+ex 'bash /opt/ghostwall/agents/ghost_dns/go_shadow.sh' > "$WORK/shadow.log" 2>&1 || { cat "$WORK/shadow.log"; fail "go_shadow.sh failed"; }
+[ "$(ex 'python3 /usr/local/bin/dnsq example.com')" = "rcode=0 192.0.2.10" ] || fail "AdGuard not back on :53"
+ex 'su pi -s /bin/sh -c "ghostwall status"' | grep -q "mode:     shadow" || fail "not back in shadow mode"
 
 echo "== uninstall"
 ex '/opt/ghostwall/uninstall.sh' >/dev/null 2>&1 || fail "uninstall failed"

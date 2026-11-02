@@ -22,8 +22,9 @@ turn on Telegram (domain names can be left out of those too).
 > reads the query log and alerts; it cannot break DNS. It has run on the author's home
 > network (Raspberry Pi 4 + AdGuard Home) since late October 2026, which is not long.
 > v0.2 added Pi-hole, x86_64 VMs, Docker and a dashboard password. *Inline mode*
-> (Ghostwall answers DNS and blocks) is implemented and unit-tested but not proven on a
-> real network. See [Limits](#limits).
+> (Ghostwall answers DNS and blocks) passes an end-to-end test in CI (a systemd
+> container with a stand-in AdGuard: forwarding, sinkholing, SERVFAIL when the upstream
+> dies, and the way back to shadow mode), but is not proven on a real network. See [Limits](#limits).
 
 ![Ghostwall dashboard](docs/img/dashboard.png)
 
@@ -257,7 +258,8 @@ on the missing model's empty score.)
   Pi-hole support and the Docker image are new in v0.2 and verified on Ubuntu 24.04
   (x86_64), a Pi 4, the official Pi-hole Docker image and in CI, not yet on many real setups. Expect
   to allowlist a few domains in the first week, and please open an issue with what you see.
-- **Inline mode and enforcement are unproven on a real network.** The first inline
+- **Inline mode and enforcement are unproven on a real network** (CI tests inline mode
+  end to end in a container). The first inline
   deployment broke a workstation's DNS; the resolver was hardened afterwards (TCP,
   IPv6, upstream fallback, fail-open), but run shadow mode for at least a week first.
   Inline mode needs AdGuard Home.
