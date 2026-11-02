@@ -95,6 +95,12 @@ if ex 'su pi -s /bin/sh -c "ghostwall allow example.org"' 2>/dev/null; then fail
 ex 'ghostwall allow example.org' >/dev/null || fail "root could not take an action"
 ex 'ghostwall trusted' | grep -qx example.org || fail "trusted list wrong"
 ex 'ghostwall allow undo.example && ghostwall untrust undo.example' >/dev/null || fail "untrust failed"
+ex 'ghostwall devices' | grep -q "192.168.1.20" || fail "unnamed client not listed"
+ex 'ghostwall name 192.168.1.20 laptop' >/dev/null || fail "naming failed"
+for _ in $(seq 20); do ex 'ghostwall devices' 2>/dev/null | grep -q "^  laptop " && break; sleep 1; done
+ex 'echo "{\"T\":\"2026-11-02T18:00:05Z\",\"QH\":\"q7zk2xv9wplmfa.top\",\"QT\":\"A\",\"IP\":\"192.168.1.20\"}" >> /opt/AdGuardHome/data/querylog.json'
+for _ in $(seq 30); do ex 'ghostwall alerts -n 1' 2>/dev/null | grep -q "laptop .*q7zk2xv9wplmfa.top" && break; sleep 1; done
+ex 'ghostwall alerts -n 1' | grep -q "laptop .*q7zk2xv9wplmfa.top" || fail "alert does not use the new name"
 PASS=$(ex 'ghostwall password' | awk '{print $4}')
 [ "$(ex "curl -sk -o /dev/null -w %{http_code} https://127.0.0.1:8088/")" = 401 ] || fail "https without password"
 [ "$(ex "curl -sk -o /dev/null -w %{http_code} -u ghostwall:$PASS https://127.0.0.1:8088/api/events")" = 200 ] || fail "https with password"

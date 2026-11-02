@@ -186,7 +186,11 @@ class ControlHandler(BaseHTTPRequestHandler):
                 "last_seen": seen.get(d.ip),
                 "blocked_domains": blocked,
             })
+        named = {d.ip for d in dmap.all()}
+        # clients seen but not named yet (for `ghostwall devices` / `ghostwall name`)
+        clients = sorted(((t, ip) for ip, t in seen.items() if ip not in named), reverse=True)[:50]
         out = {"ok": True, "devices": devices,
+               "clients": [{"ip": ip, "last_seen": t} for t, ip in clients],
                "lockdown": g.lockdown, "learning": g.learning,
                "shadow": bool(getattr(res, "shadow", False)),
                "source": getattr(res, "source", None),

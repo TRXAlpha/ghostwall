@@ -3,6 +3,8 @@
 
     ghostwall status                 mode, models, queries scored, feed, devices
     ghostwall alerts [-n 20]         the latest alerts, newest first
+    ghostwall devices                named devices, and addresses seen that have no name yet
+    ghostwall name IP NAME           name a device, so alerts say "laptop" instead of an address
     ghostwall allow DOMAIN           trust a domain network-wide (no more alerts for it)
     ghostwall trusted                what you have trusted;  ghostwall untrust DOMAIN  undoes one
     ghostwall unblock DOMAIN         take a domain off the blocklist (inline mode)
@@ -104,7 +106,8 @@ def cmd_status(_a) -> int:
     if feed:
         print(f"feed:     {feed.get('domains', 0):,} phishing domains, updated {_ago(feed.get('updated'))}")
     devs = st.get("devices") or []
-    print(f"devices:  {len(devs)} named" + ("" if devs else f" (add them to {ETC}/devices.json)"))
+    unnamed = len(st.get("clients") or [])
+    print(f"devices:  {len(devs)} named" + (f", {unnamed} unnamed (sudo ghostwall devices)" if unnamed else ""))
     for d in devs:
         iso = " ISOLATED" if d.get("isolated") else ""
         print(f"  {d.get('name'):<16} {d.get('ip'):<16} last query {_ago(d.get('last_seen'))}{iso}")
@@ -158,6 +161,63 @@ def _domain(d: str) -> str:
 def cmd_allow(a) -> int:
     r = control("/allow", {"domain": _domain(a.domain)})
     print(f"Trusted {r.get('domain')}: no more alerts for it or its subdomains.")
+    return 0
+
+
+def cmd_devices(_a) -> int:
+    st = control("/status")
+    for d in st.get("devices") or []:
+        print(f"  {d.get('name'):<16} {d.get('ip'):<40} last query {_ago(d.get('last_seen'))}")
+    clients = st.get("clients") or []
+    if clients:
+        print("Seen, no name yet (sudo ghostwall name IP NAME):")
+        for c in clients:
+            print(f"  {'?':<16} {c['ip']:<40} last query {_ago(c.get('last_seen'))}")
+    if not (st.get("devices") or clients):
+        print("No devices seen yet.")
+    return 0
+
+
+NAME_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def cmd_name(a) -> int:
+    import ipaddress
+    try:
+        ip = str(ipaddress.ip_address(a.ip.strip()))
+    except ValueError:
+        raise CliError(f"not an IP address: {a.ip!r}")
+    if not NAME_RE.fullmatch(a.name):
+        raise CliError("a name is letters, digits, '-' and '_' (up to 64), e.g. kids-tablet")
+    path = os.path.join(ETC, "devices.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        data = {"devices": [], "_pending": []}
+    except PermissionError:
+        raise CliError(f"can't read {path}: run this with sudo")
+    if isinstance(data, list):
+        data = {"devices": data, "_pending": []}
+    entries = list(data.get("devices", [])) + list(data.get("_pending", []))
+    for e in entries:
+        if e.get("name") == a.name and e.get("ip") != ip:
+            raise CliError(f"{a.name} is already the name of {e.get('ip')}")
+    for e in entries:
+        if e.get("ip") == ip:
+            old, e["name"] = e.get("name"), a.name
+            print(f"Renamed {ip}: {old} -> {a.name}")
+            break
+    else:
+        # _pending: named without a MAC, so netconf makes no DHCP lease for it
+        data.setdefault("_pending", []).append({"name": a.name, "ip": ip, "mac": None, "profile": "normal"})
+        print(f"Named {ip} {a.name}")
+    write_private(path, json.dumps(data, indent=2) + "\n")
+    if shutil_which("systemctl") and os.path.exists("/etc/systemd/system/ghostwall-dns.service"):
+        subprocess.run(["systemctl", "restart", "ghostwall-dns"], check=False)
+        print("Restarted ghostwall-dns: new alerts use the name.")
+    else:
+        print("Restart ghost-dns (Docker: docker compose restart ghostwall) to use the name.")
     return 0
 
 
@@ -432,6 +492,11 @@ def main(argv=None) -> int:
     p = sub.add_parser("allow", help="trust a domain")
     p.add_argument("domain")
     p.set_defaults(fn=cmd_allow)
+    sub.add_parser("devices", help="named devices and unnamed addresses seen").set_defaults(fn=cmd_devices)
+    p = sub.add_parser("name", help="name a device by its address")
+    p.add_argument("ip")
+    p.add_argument("name")
+    p.set_defaults(fn=cmd_name)
     sub.add_parser("trusted", help="domains you have trusted").set_defaults(fn=cmd_trusted)
     p = sub.add_parser("untrust", help="undo a trust")
     p.add_argument("domain")

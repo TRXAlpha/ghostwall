@@ -163,3 +163,29 @@ class CalibrateTests(unittest.TestCase):
             self.assertEqual(cli.main(["calibrate", "--querylog", log, "--apply"]), 0)
         with open(os.path.join(d, "ghost_dns.json")) as f:
             self.assertIn("recommend_threshold", json.load(f))
+
+
+class NameTests(unittest.TestCase):
+    def setUp(self):
+        self.etc = tempfile.mkdtemp()
+        cli.ETC = self.etc
+
+    def run_cli(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cli.main(list(argv))
+        return code, out.getvalue(), err.getvalue()
+
+    def test_name_creates_renames_and_validates(self):
+        self.assertEqual(self.run_cli("name", "192.168.1.20", "laptop")[0], 0)
+        self.assertEqual(self.run_cli("name", "192.168.1.20", "work-laptop")[0], 0)   # rename
+        self.assertEqual(self.run_cli("name", "192.168.1.21", "work-laptop")[0], 1)   # taken
+        self.assertEqual(self.run_cli("name", "not-an-ip", "x")[0], 1)
+        self.assertEqual(self.run_cli("name", "192.168.1.22", "bad name;")[0], 1)
+        with open(os.path.join(self.etc, "devices.json")) as f:
+            data = json.load(f)
+        self.assertEqual(data["_pending"], [{"name": "work-laptop", "ip": "192.168.1.20", "mac": None,
+                                             "profile": "normal"}])
+        sys.path.insert(0, HERE)
+        from devices import DeviceMap
+        self.assertEqual(DeviceMap.from_json(data).device_for_ip("192.168.1.20").name, "work-laptop")

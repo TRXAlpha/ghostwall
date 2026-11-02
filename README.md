@@ -208,9 +208,9 @@ sudo ghostwall calibrate          # after a few days: what each threshold would 
 - **Dashboard:** `https://<box>:8088` (plain `http://` redirects there), user `ghostwall`, password from
   `sudo ghostwall password`. To keep it to your tailnet or to the box itself, see
   [Dashboard access](docs/OPERATIONS.md#dashboard-access).
-- **Name your devices:** copy `agents/netconf/devices.example.json` to
-  `/etc/ghostwall/devices.json`, fill in your devices, and
-  `sudo systemctl restart ghostwall-dns`, so alerts say `laptop` instead of an IP.
+- **Name your devices:** `sudo ghostwall devices` lists the addresses it has seen;
+  `sudo ghostwall name 192.168.1.20 laptop` names one, so alerts say `laptop` instead of
+  an IP. (Or edit `/etc/ghostwall/devices.json`, as in `agents/netconf/devices.example.json`.)
 - **Telegram alerts and `/fw` commands:** `sudo ghostwall telegram`, or by hand:
   [docs/OPERATIONS.md](docs/OPERATIONS.md#telegram).
 - **Check it against your own history** (changes nothing):
