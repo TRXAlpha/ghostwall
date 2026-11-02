@@ -74,6 +74,13 @@ ex 'cd /home/pi/ghostwall && ./install.sh' > "$WORK/install.log" 2>&1 || { cat "
 grep -q "Installed." "$WORK/install.log" || { cat "$WORK/install.log"; fail "no success message"; }
 grep -q "size_memory: 10$" <(ex 'cat /opt/AdGuardHome/AdGuardHome.yaml') || fail "AdGuard buffer not lowered"
 
+echo "== threat feed (sandboxed service, real download)"
+if [ -n "${EXTRA_CA:-}" ]; then   # behind a TLS-intercepting proxy: let the service trust it too
+  ex 'mkdir -p /etc/systemd/system/ghostwall-feed.service.d && printf "[Service]\nEnvironment=SSL_CERT_FILE=/usr/local/share/extra-ca.pem\n" > /etc/systemd/system/ghostwall-feed.service.d/ca.conf && systemctl daemon-reload'
+fi
+ex 'systemctl start ghostwall-feed' || fail "feed service failed under its sandbox"
+[ "$(ex 'wc -l < /var/lib/ghostwall/threat_feed.txt')" -gt 1000 ] || fail "feed too small"
+
 echo "== services and sandbox"
 for s in ghostwall-dns ghostwall-web; do
   [ "$(ex "systemctl is-active $s")" = active ] || fail "$s not active"

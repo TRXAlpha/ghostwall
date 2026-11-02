@@ -119,7 +119,7 @@ overrides any of them. The most useful keys:
 | `ghostwall status \| version \| devices \| name IP NAME \| alerts \| allow D \| trusted \| untrust D \| unblock D \| learning on\|off \| password \| telegram \| calibrate [--target P] [--apply]` | everyday commands (`ghost_dns/ghostwall_cli.py`, on the PATH after install; actions need sudo) |
 | `ghost_dns/app.py --config FILE` | run ghost-dns; `--shadow --querylog FILE`, `--once` (build and exit), `--dns-port`, `--upstream`, `--enforce`, `--learning/--no-learning` |
 | `ghost_dns/go_shadow.sh` | switch to shadow mode safely (root) |
-| `ghost_dns/update_feed.py --out FILE [--feed URL ...]` | download threat feeds; keeps the old file on failure |
+| `ghost_dns/update_feed.py --out FILE [--feed URL ...]` | download threat feeds (https only; `GHOSTWALL_FEEDS` in `ghostwall.env`, space-separated, replaces the default list); keeps the old file if any feed fails |
 | `ghost_dns/replay_querylog.py --querylog FILE [--devices FILE]` | dry-run detection over real history (uses the installed phishing list and devices by default) |
 | `web_ui/demo.py` | the dashboard on demo data, no install needed |
 | `web_ui/make_demo.py` | regenerate the demo data by running the real detector over a scripted day |

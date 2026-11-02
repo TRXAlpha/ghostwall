@@ -61,7 +61,12 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     domains: set[str] = set()
-    for url in args.feed or DEFAULT_FEEDS:
+    feeds = args.feed or os.environ.get("GHOSTWALL_FEEDS", "").split() or DEFAULT_FEEDS
+    for url in feeds:
+        if not url.startswith("https://"):
+            print(f"[feed] refusing {url}: only https:// feeds (a list fetched in clear text could be swapped)",
+                  file=sys.stderr)
+            return 1
         try:
             got = parse_domains(fetch(url))
         except Exception as exc:  # noqa: BLE001
