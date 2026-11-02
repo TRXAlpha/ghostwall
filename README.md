@@ -71,6 +71,9 @@ An alert, as written to `events.jsonl` and sent to Telegram:
 
 Internal names (`*.local`, `*.ts.net`, single labels, `_service` records) are never
 scored, and repeat alerts for the same device and domain are collapsed to one per day.
+A random-looking name that AdGuard Home already blocked raises no alert of its own (no
+connection happened, and most of those are ad and tracker junk); it still counts toward a
+burst, and the other rules see it as usual.
 
 **How well, on data anyone can check.** [results_public.md](agents/dga_eval/results_public.md)
 uses only public data (25 DGA families from Netlab 360, the Tranco top 1M) and reproduces

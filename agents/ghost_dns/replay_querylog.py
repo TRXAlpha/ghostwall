@@ -29,7 +29,7 @@ from enforce import Enforcer, NullBackend
 from events import EventLog
 from resolver import Resolver
 from scoring import Scorer
-from shadow import detect_format, parse_adguard_line, parse_pihole_line
+from shadow import detect_format, parse_adguard_entry, parse_pihole_line
 from state import GhostState
 
 _FRAC = re.compile(r"(\.\d{6})\d+")
@@ -116,9 +116,10 @@ def main() -> int:
                 break
             if fmt == "pihole":
                 parsed = parse_pihole_line(line)
+                parsed = parsed + (False,) if parsed else None
                 ts = parse_syslog_time(line) if parsed else None
             else:
-                parsed = parse_adguard_line(line)
+                parsed = parse_adguard_entry(line)
                 if not parsed:
                     bad += 1
                     continue
@@ -128,9 +129,9 @@ def main() -> int:
             clock["t"] = ts
             first = first or ts
             last = ts
-            ip, host, qtype = parsed
+            ip, host, qtype, blocked = parsed
             try:
-                r.decide(ip, host, qtype)
+                r.decide(ip, host, qtype, upstream_blocked=blocked)
             except Exception as exc:  # noqa: BLE001
                 print("decide failed:", host, repr(exc), file=sys.stderr)
             n += 1

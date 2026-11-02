@@ -80,10 +80,13 @@ class Resolver:
         self.last_seen: dict[str, str] = {}  # client ip -> ISO time of its latest query
         self.stats = {"queries": 0, "blocked": 0, "recommended": 0, "suppressed": 0,
                       "forwarded": 0, "errors": 0, "fallbacks": 0, "failopen": 0,
-                      "rate_limited": 0}
+                      "rate_limited": 0, "blocked_upstream": 0}
 
     # -- policy (pure, no I/O except event log + state + enforcer) --------
-    def decide(self, client_ip: str, domain: str, qtype: str) -> Decision:
+    def decide(self, client_ip: str, domain: str, qtype: str, upstream_blocked: bool = False) -> Decision:
+        """upstream_blocked: the DNS server (AdGuard) already refused this name, so no
+        connection happened: a single random-looking score is then not worth an alert
+        (most of those are ad and tracker junk). Bursts and every other rule still count."""
         domain = domain.rstrip(".").lower()
         if not domain:
             return Decision("allow", "empty")
@@ -163,6 +166,9 @@ class Resolver:
 
         block_thr = float(self.cfg["block_threshold"])
         rec_thr = float(self.cfg["recommend_threshold"])
+        if upstream_blocked and dga >= min(rec_thr, float(self.cfg.get("corroborated_threshold", 0.80))):
+            self.stats["blocked_upstream"] += 1
+            return behaviour or Decision("allow", "blocked_upstream")
 
         if dga >= block_thr:
             can_block = (not self.state.learning) and is_new and not self.shadow

@@ -25,8 +25,9 @@ import threading
 import time
 
 
-def parse_adguard_line(line: str):
-    """AdGuard querylog line -> (client_ip, host, qtype) or None."""
+def parse_adguard_entry(line: str):
+    """AdGuard querylog line -> (client_ip, host, qtype, blocked_by_adguard) or None.
+    AdGuard marks what it blocked with Result.IsFiltered (rewrites don't set it)."""
     try:
         j = json.loads(line)
     except ValueError:
@@ -37,7 +38,15 @@ def parse_adguard_line(line: str):
     ip = j.get("IP")
     if not host or not ip:
         return None
-    return str(ip), str(host).rstrip(".").lower(), str(j.get("QT") or "A")
+    res = j.get("Result")
+    blocked = isinstance(res, dict) and res.get("IsFiltered") is True
+    return str(ip), str(host).rstrip(".").lower(), str(j.get("QT") or "A"), blocked
+
+
+def parse_adguard_line(line: str):
+    """AdGuard querylog line -> (client_ip, host, qtype) or None."""
+    e = parse_adguard_entry(line)
+    return e[:3] if e else None
 
 
 parse_line = parse_adguard_line  # older name, used by replay_querylog and tests
@@ -59,6 +68,9 @@ def parse_pihole_line(line: str):
 
 
 PARSERS = {"adguard": parse_adguard_line, "pihole": parse_pihole_line}
+# with "was it already blocked by the DNS server" (Pi-hole logs that on a later line: False)
+ENTRY_PARSERS = {"adguard": parse_adguard_entry,
+                 "pihole": lambda line: (lambda p: p + (False,) if p else None)(parse_pihole_line(line))}
 
 
 def detect_format(path: str) -> str:
@@ -85,7 +97,7 @@ class QueryLogFollower:
         self.fmt = detect_format(path) if fmt in (None, "", "auto") else fmt
         if self.fmt not in PARSERS:
             raise ValueError(f"querylog_format must be adguard, pihole or auto, not {fmt!r}")
-        self.parse = PARSERS[self.fmt]
+        self.parse = ENTRY_PARSERS[self.fmt]
         self.poll = poll_seconds
         self.offset = os.path.getsize(path) if os.path.exists(path) else 0
         self._head = self._read_head()
@@ -140,9 +152,9 @@ class QueryLogFollower:
                 parsed = self.parse(raw.decode("utf-8", "replace").strip())
                 if not parsed:
                     continue
-                ip, host, qtype = parsed
+                ip, host, qtype, blocked = parsed
                 try:
-                    self.resolver.decide(ip, host, qtype)
+                    self.resolver.decide(ip, host, qtype, upstream_blocked=blocked)
                 except Exception as exc:  # noqa: BLE001 - never die on one bad line
                     print(f"[ghost-dns:shadow] decide failed for {host}: {exc!r}", file=sys.stderr, flush=True)
                 self.resolver.stats["queries"] += 1

@@ -29,7 +29,7 @@ with `{"ok": false, "error": "..."}`. All endpoints take POST with a JSON body;
 
 | Endpoint | Body | Returns |
 |---|---|---|
-| `/status` | — | `devices` (name, ip, mac, isolated, last_seen, blocked_domains), `lockdown`, `learning`, `shadow`, `source` (`adguard` or `pihole` in shadow mode), `enforce` (`null` or `nft`), `models`, `feed` (`domains`, `updated`), `stats` (counters since start; `queries` rising means it is scoring; `suppressed` counts repeat alerts, `rate_limited` alerts dropped by `alert_rate_per_device`) |
+| `/status` | — | `devices` (name, ip, mac, isolated, last_seen, blocked_domains), `lockdown`, `learning`, `shadow`, `source` (`adguard` or `pihole` in shadow mode), `enforce` (`null` or `nft`), `models`, `feed` (`domains`, `updated`), `stats` (counters since start; `queries` rising means it is scoring; `suppressed` counts repeat alerts, `rate_limited` alerts dropped by `alert_rate_per_device`, `blocked_upstream` random-looking names AdGuard had already blocked) |
 | `/device` | `{"name": "laptop"}` | that device plus `last_seen` (its latest query since ghost-dns started, or null); 404 if unknown |
 | `/isolate` | `{"name": "laptop"}` | `{"name", "isolated": true}`: the device may only reach the Pi's DNS. 409 unless `enforce` is `nft` |
 | `/release` | `{"name": "laptop"}` | `{"name", "isolated": false}` |

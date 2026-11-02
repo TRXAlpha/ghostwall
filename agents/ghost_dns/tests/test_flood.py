@@ -146,3 +146,34 @@ class PresetTests(unittest.TestCase):
         self.assertEqual(s.backend, "lr")
         self.assertLess(s.score_one("wikipedia.org")["dga"], 0.5)
         self.assertGreater(s.score_one("kjqwehdzxklqwpe.biz")["dga"], cfg["recommend_threshold"])
+
+
+class UpstreamBlockedTests(unittest.TestCase):
+    """What AdGuard already blocked raises no single-score alert; bursts still do."""
+
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        self.cfg = config_mod.load_config(None, {
+            "state_path": os.path.join(d, "s.json"), "events_path": os.path.join(d, "e.jsonl"),
+            "query_log": None, "resolved_ips_path": None, "threat_feed_path": None, "allowlist_path": None})
+        self.r = Resolver(self.cfg, GhostState(self.cfg["state_path"]), Scorer(), Enforcer(NullBackend()),
+                          DeviceMap.from_json([]), EventLog(self.cfg["events_path"]))
+
+    def test_single_blocked_name_is_quiet(self):
+        d = self.r.decide("192.168.1.30", "ad7kq2zxv9.top", "A", upstream_blocked=True)
+        self.assertEqual(d.reason, "blocked_upstream")
+        self.assertIsNone(d.event)
+        self.assertEqual(self.r.decide("192.168.1.30", "zz9kq2xv7p.top", "A").reason, "dga_suspect")  # not blocked: alerts
+
+    def test_burst_of_blocked_names_still_alerts(self):
+        reasons = [self.r.decide("192.168.1.31", f"b{i}q7zxk2v9w.top", "A", upstream_blocked=True).reason
+                   for i in range(6)]
+        self.assertIn("dga_burst", reasons)
+
+    def test_parser_reads_adguards_block_flag(self):
+        from shadow import parse_adguard_entry
+        blocked = '{"QH":"x.example","IP":"10.0.0.2","QT":"A","Result":{"Rules":[{"Text":"||x.example^"}],"Reason":3,"IsFiltered":true}}'
+        rewritten = '{"QH":"y.example","IP":"10.0.0.2","QT":"A","Result":{"Reason":11}}'
+        self.assertTrue(parse_adguard_entry(blocked)[3])
+        self.assertFalse(parse_adguard_entry(rewritten)[3])
+        self.assertFalse(parse_adguard_entry('{"QH":"z.example","IP":"10.0.0.2","Result":{}}')[3])
