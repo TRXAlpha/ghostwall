@@ -3,7 +3,8 @@
 #   docker compose up -d --build
 #
 # 1. Open http://<host>:3000 and finish AdGuard's setup (keep its query log on).
-# 2. Restart AdGuard once so it picks up Ghostwall's faster log setting:
+# 2. About 10 s later, restart AdGuard once so it picks up the faster log setting
+#    (docker compose logs adguard-tune says when it is set):
 #      docker compose restart adguardhome
 # 3. Point your router's DNS (or one test device) at <host>.
 # 4. Dashboard: http://<host>:8088, user ghostwall, password from:

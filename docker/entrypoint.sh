@@ -31,13 +31,18 @@ tune_adguard() {  # lower AdGuard's query-log buffer; AdGuard applies it on its 
 
 # compose.yaml's adguard-tune service: only lower AdGuard's buffer, nothing else.
 if [ "${1:-}" = "tune-adguard" ]; then
-  echo "[ghostwall] adguard-tune: checking $YAML every 5 minutes"
+  echo "[ghostwall] adguard-tune: watching $YAML (every 10 s until AdGuard's setup is done, then every 5 min)"
   while :; do
     if [ -f "$YAML" ] && [ ! -w "$YAML" ]; then
       [ -n "${warned:-}" ] || echo "[ghostwall] adguard-tune: $YAML is not writable here; lower querylog.size_memory by hand"; warned=1
     fi
     tune_adguard
-    sleep 300
+    # quickly at first: people restart AdGuard right after its setup wizard
+    if [ -f "$YAML" ] && grep -Eq "^[[:space:]]+size_memory:[[:space:]]*([0-9]|10)$" "$YAML"; then
+      sleep 300
+    else
+      sleep 10
+    fi
   done
 fi
 

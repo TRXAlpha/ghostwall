@@ -126,7 +126,8 @@ docker compose up -d --build
 ```
 
 1. Finish AdGuard's setup at `http://<host>:3000` (keep the query log on).
-2. `docker compose restart adguardhome` once, so it picks up the faster log setting.
+2. Wait for `docker compose logs adguard-tune` to say it set the buffer (about 10 s),
+   then `docker compose restart adguardhome` once, so alerts arrive in seconds.
 3. Point your router's DNS (or one test device) at the host.
 4. Dashboard: `http://<host>:8088`, user `ghostwall`, password from
    `docker compose exec ghostwall cat /data/web_password`.

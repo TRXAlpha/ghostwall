@@ -100,7 +100,7 @@ def cmd_status(_a) -> int:
     if feed:
         print(f"feed:     {feed.get('domains', 0):,} phishing domains, updated {_ago(feed.get('updated'))}")
     devs = st.get("devices") or []
-    print(f"devices:  {len(devs)} named" + ("" if devs else " (add them to /etc/ghostwall/devices.json)"))
+    print(f"devices:  {len(devs)} named" + ("" if devs else f" (add them to {ETC}/devices.json)"))
     for d in devs:
         iso = " ISOLATED" if d.get("isolated") else ""
         print(f"  {d.get('name'):<16} {d.get('ip'):<16} last query {_ago(d.get('last_seen'))}{iso}")
