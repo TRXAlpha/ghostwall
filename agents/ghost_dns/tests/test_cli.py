@@ -138,3 +138,27 @@ class CliTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CalibrateTests(unittest.TestCase):
+    def test_calibrate_on_a_small_log(self):
+        d = tempfile.mkdtemp()
+        cli.ETC = d
+        log = os.path.join(d, "querylog.json")
+        normal = ["google.com", "netflix.com", "wikipedia.org", "github.com", "bbc.co.uk", "amazon.de",
+                  "spotify.com", "reddit.com", "weather.example", "my-printer.local"]
+        with open(log, "w") as f:
+            for i in range(300):
+                f.write(json.dumps({"QH": f"site{i}shop.example" if i % 3 else normal[i % len(normal)],
+                                    "IP": "192.168.1.5", "QT": "A"}) + "\n")
+            f.write(json.dumps({"QH": "xk2qv9zr7wpl3mfa.top", "IP": "192.168.1.5", "QT": "A"}) + "\n")
+        r = cli.calibrate(log, None)
+        self.assertGreater(r["names"], 100)
+        self.assertNotIn("my-printer.local", [reg for _, reg in r["top"]])        # internal names skipped
+        self.assertEqual(r["top"][0][1], "xk2qv9zr7wpl3mfa.top")                   # the odd one out first
+        self.assertTrue(all(0 < t < 1 for t in r["suggest"].values()))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(cli.main(["calibrate", "--querylog", log, "--apply"]), 0)
+        with open(os.path.join(d, "ghost_dns.json")) as f:
+            self.assertIn("recommend_threshold", json.load(f))

@@ -8,6 +8,7 @@
     ghostwall learning on|off        alerts only (on) or allow blocking (off, inline mode)
     ghostwall password               the dashboard password
     ghostwall telegram               set up Telegram alerts step by step
+    ghostwall calibrate [--apply]    thresholds from YOUR network's history, not a dataset's
 
 install.sh puts this on the PATH; actions need sudo (the control-API token and the
 alert log are readable only by the ghostwall user). In Docker:
@@ -278,6 +279,107 @@ def shutil_which(cmd: str) -> str | None:
     return shutil.which(cmd)
 
 
+# --------------------------------------------------------------------------- calibrate
+def _querylog_from_env() -> str | None:
+    env = os.path.join(ETC, "ghostwall.env")
+    src = _env_value(env, "DNS_SOURCE") or "adguard"
+    if src == "pihole":
+        return _env_value(env, "PIHOLE_LOG") or "/var/log/pihole/pihole.log"
+    return _env_value(env, "ADGUARD_QUERYLOG") or "/opt/AdGuardHome/data/querylog.json"
+
+
+def calibrate(querylog: str, cfg_path: str | None, targets=(0.002, 0.005, 0.01), top: int = 15) -> dict:
+    """Score every distinct name in a query log the way ghost-dns would and return the
+    share each threshold flags, plus suggested thresholds for the target shares."""
+    import config as config_mod
+    from detectors import is_internal
+    from scoring import Scorer
+    from shadow import PARSERS, detect_format
+    from tokenizer import registrable_label, registrable_part
+    cfg = config_mod.load_config(cfg_path)
+    allow = set()
+    if cfg.get("allowlist_path") and os.path.exists(cfg["allowlist_path"]):
+        with open(cfg["allowlist_path"], encoding="utf-8") as f:
+            allow = {ln.strip().lower() for ln in f if ln.strip() and not ln.startswith("#")}
+    parse = PARSERS[detect_format(querylog)]
+    labels: dict[str, str] = {}
+    paths = [p for p in (querylog + ".1", querylog) if os.path.exists(p)]
+    if not paths:
+        raise CliError(f"no query log at {querylog}")
+    for path in paths:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                got = parse(line.strip())
+                if not got:
+                    continue
+                host = got[1]
+                if not host or is_internal(host):
+                    continue
+                reg = registrable_part(host)
+                if host in allow or reg in allow:
+                    continue
+                labels.setdefault(registrable_label(host), reg)
+    if not labels:
+        raise CliError("no scorable names in the log yet; let it run for a day first")
+    sc = Scorer(cfg.get("onnx_model"), cfg.get("lr_coef"), cfg.get("lr_meta"))
+    scored = sorted(((sc.score_one(reg)["dga"], reg) for reg in labels.values()), reverse=True)
+    vals = [v for v, _ in scored]
+    n = len(vals)
+    current = {k: float(cfg[k]) for k in ("recommend_threshold", "block_threshold", "corroborated_threshold")}
+    flagged = {k: sum(v >= t for v in vals) for k, t in current.items()}
+    suggest = {}
+    for tgt in targets:
+        k = max(1, int(n * tgt))
+        suggest[tgt] = round(min(0.9999, vals[min(k, n - 1)] + 1e-4), 4) if n > k else 0.9999
+    return {"names": n, "models": sc.backend, "current": current, "flagged": flagged,
+            "suggest": suggest, "top": scored[:top]}
+
+
+def cmd_calibrate(a) -> int:
+    log = a.querylog or _querylog_from_env()
+    cfg_path = os.path.join(ETC, "ghost_dns.json")
+    target = a.target / 100.0
+    r = calibrate(log, cfg_path if os.path.exists(cfg_path) else None,
+                  targets=tuple(sorted({0.002, 0.005, 0.01, target})))
+    n = r["names"]
+    print(f"{n:,} distinct names from {log} (allowlisted and internal names left out), models {r['models']}\n")
+    print("Right now:")
+    for k, t in r["current"].items():
+        c = r["flagged"][k]
+        print(f"  {k:<24} {t:<7} would flag {c} of them ({100 * c / n:.2f}%)")
+    print("\nThresholds for a target share of your names (recommend_threshold):")
+    for tgt, thr in r["suggest"].items():
+        print(f"  {100 * tgt:.1f}%  ->  {thr}")
+    print(f"\nYour {len(r['top'])} highest-scoring names. Most are harmless (CDNs, trackers); a name you")
+    print("don't recognise from a device that shouldn't need it is worth a look:")
+    for v, reg in r["top"]:
+        print(f"  {v:.3f}  {reg}")
+    if n < 2000:
+        print(f"\nOnly {n} names: suggestions are rough until the log covers a week or so.")
+    if a.apply:
+        thr = r["suggest"][target]
+        cfg_path = os.path.join(ETC, "ghost_dns.json")
+        try:
+            with open(cfg_path, encoding="utf-8") as f:
+                cfg = json.load(f)
+        except FileNotFoundError:
+            cfg = {}
+        cfg["recommend_threshold"] = max(thr, float(r["current"]["corroborated_threshold"]))
+        tmp = cfg_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+        os.replace(tmp, cfg_path)
+        old = r["current"]["recommend_threshold"]
+        new = cfg["recommend_threshold"]
+        how = ("raised: fewer alerts" if new > old else "LOWERED: more alerts" if new < old else "unchanged")
+        print(f"\nSet recommend_threshold {old} -> {new} in {cfg_path} ({a.target:g}% of your names; {how}).")
+        print("Apply it: sudo systemctl restart ghostwall-dns")
+    else:
+        print(f"\nTo alert on about {a.target:g}% of your names: sudo ghostwall calibrate --apply"
+              + ("" if a.target == 0.5 else f" --target {a.target:g}"))
+    return 0
+
+
 # --------------------------------------------------------------------------- main
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="ghostwall", description="Everyday Ghostwall commands.")
@@ -296,6 +398,12 @@ def main(argv=None) -> int:
     p.add_argument("state", choices=["on", "off"])
     p.set_defaults(fn=cmd_learning)
     sub.add_parser("password", help="the dashboard password").set_defaults(fn=cmd_password)
+    p = sub.add_parser("calibrate", help="thresholds from your own network's query log")
+    p.add_argument("--querylog", help="default: the log in /etc/ghostwall/ghostwall.env")
+    p.add_argument("--target", type=float, default=0.5,
+                   help="share of your distinct names, in %%, that may raise a plain score alert (default 0.5)")
+    p.add_argument("--apply", action="store_true", help="write that recommend_threshold to ghost_dns.json")
+    p.set_defaults(fn=cmd_calibrate)
     p = sub.add_parser("telegram", help="set up Telegram alerts")
     p.add_argument("--wait", type=float, default=180.0, help="seconds to wait for your message")
     p.set_defaults(fn=cmd_telegram)

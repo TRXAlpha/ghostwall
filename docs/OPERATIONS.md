@@ -63,7 +63,9 @@ To update later: `git pull && sudo ./install.sh`.
   `/fw allow <domain>`, the dashboard box, or
   `curl -X POST http://127.0.0.1:5380/allow -H 'Content-Type: application/json' -H "Authorization: Bearer $(sudo cat /var/lib/ghostwall/control_token)" -d '{"domain":"example.com"}'`.
   Domains that should be trusted everywhere can go in `agents/ghost_dns/allowlist.txt`.
-- **Too noisy?** Raise `recommend_threshold` in `/etc/ghostwall/ghost_dns.json`
+- **Too noisy?** `sudo ghostwall calibrate` scores your own query log and shows what share
+  of your names each threshold flags, with your highest-scoring names;
+  `--target 0.2 --apply` sets the alert threshold for about 0.2% of them. Or raise `recommend_threshold` in `/etc/ghostwall/ghost_dns.json`
   (default 0.96) and restart `ghostwall-dns`. Replay your own history first to see the effect:
 
   ```bash

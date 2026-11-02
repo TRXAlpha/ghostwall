@@ -185,6 +185,7 @@ ghostwall status                  # is it scoring? ("queries" should keep rising
 sudo ghostwall alerts             # what it found, newest first
 sudo ghostwall telegram           # alerts on your phone: paste a bot token, message the bot, done
 sudo ghostwall allow example.com  # stop alerts for a domain you trust
+sudo ghostwall calibrate          # after a few days: what each threshold would flag on YOUR network
 ```
 
 - **Dashboard:** `https://<box>:8088` (plain `http://` redirects there), user `ghostwall`, password from
