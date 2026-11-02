@@ -105,3 +105,85 @@ class ValidateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HardeningTests(unittest.TestCase):
+    def test_page_has_csp_matching_its_script(self):
+        import hashlib, re
+        page, csp = app.page_and_csp()
+        script = re.search(rb"<script>(.*?)</script>", page, re.S).group(1)
+        h = base64.b64encode(hashlib.sha256(script).digest()).decode()
+        self.assertIn(f"'sha256-{h}'", csp)
+        self.assertNotIn("unsafe-inline' ;", csp)
+        self.assertIn("script-src 'sha256-", csp)
+        s = Server()
+        try:
+            r = s.req("GET", "/")
+            self.assertEqual(r.status, 200)
+            self.assertEqual(r.getheader("Content-Security-Policy"), csp)
+        finally:
+            s.close()
+
+    def test_password_guessing_is_limited_per_client(self):
+        t = [0.0]
+        lim = app.FailLimiter(limit=3, window=60, clock=lambda: t[0])
+        for _ in range(3):
+            self.assertFalse(lim.blocked("10.0.0.5"))
+            lim.fail("10.0.0.5")
+        self.assertTrue(lim.blocked("10.0.0.5"))
+        self.assertFalse(lim.blocked("10.0.0.6"))
+        t[0] = 61.0
+        self.assertFalse(lim.blocked("10.0.0.5"))
+
+    def test_wrong_passwords_get_429(self):
+        s = Server(password="right")
+        try:
+            codes = [s.req("GET", "/api/status", auth="ghostwall:wrong").status for _ in range(11)]
+            self.assertEqual(codes[:10], [401] * 10)
+            self.assertEqual(codes[10], 429)
+        finally:
+            s.close()
+
+
+class ControlTokenTests(unittest.TestCase):
+    """The dashboard forwards actions with ghost-dns's control token."""
+
+    def test_token_is_sent(self):
+        import json
+        from http.server import BaseHTTPRequestHandler
+        seen = []
+
+        class Ctl(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                seen.append(self.headers.get("Authorization"))
+                ok = self.headers.get("Authorization") == "Bearer tok123"
+                body = json.dumps({"ok": ok, "error": None if ok else "token"}).encode()
+                self.send_response(200 if ok else 401)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        ctl = ThreadingHTTPServer(("127.0.0.1", 0), Ctl)
+        threading.Thread(target=ctl.serve_forever, daemon=True).start()
+        d = tempfile.mkdtemp()
+        tok = os.path.join(d, "control_token")
+        with open(tok, "w") as f:
+            f.write("tok123\n")
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), app.make_handler(
+            f"http://127.0.0.1:{ctl.server_address[1]}", os.path.join(d, "e.jsonl"), None, tok))
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            port = srv.server_address[1]
+            c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            c.request("POST", "/api/action", body=json.dumps({"action": "learning", "params": {"enabled": True}}),
+                      headers={"Host": f"127.0.0.1:{port}", "Content-Type": "application/json"})
+            r = c.getresponse()
+            r.read()
+            self.assertEqual(r.status, 200)
+            self.assertEqual(seen, ["Bearer tok123"])
+        finally:
+            srv.shutdown(); ctl.shutdown()

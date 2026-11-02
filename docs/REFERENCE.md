@@ -6,10 +6,22 @@ flags.
 ## Control API
 
 HTTP/JSON on `127.0.0.1:5380`, served by `ghost-dns` (`control_api.py`), used by the
-dashboard and Telegram bot. No authentication: it must never listen beyond loopback.
-Because a web page in a browser on the same machine can reach loopback too, POSTs must
-send `Content-Type: application/json` (else 415) and every request must name a
-loopback `Host` such as `127.0.0.1:5380` (else 403, which stops DNS rebinding).
+dashboard and Telegram bot. It refuses to start on anything but a loopback address.
+Loopback is still shared by every local user and by web pages in a browser on the
+same machine, so:
+
+- every request must name a loopback `Host` such as `127.0.0.1:5380` (else 403, which
+  stops DNS rebinding);
+- POSTs must send `Content-Type: application/json` (else 415);
+- every endpoint except `/status` needs `Authorization: Bearer <token>` (else 401).
+  `ghost-dns` creates the token on first start in `control_token` next to `state.json`
+  (`/var/lib/ghostwall/control_token` when installed, `/data/control_token` in Docker),
+  readable only by the `ghostwall` user. The dashboard and the bot read it from there.
+
+```bash
+curl -X POST http://127.0.0.1:5380/allow -H 'Content-Type: application/json' \
+     -H "Authorization: Bearer $(sudo cat /var/lib/ghostwall/control_token)" -d '{"domain":"example.com"}'
+```
 
 Every response is a JSON object: `{"ok": true, ...}` on success, or a non-2xx status
 with `{"ok": false, "error": "..."}`. All endpoints take POST with a JSON body;
@@ -17,11 +29,11 @@ with `{"ok": false, "error": "..."}`. All endpoints take POST with a JSON body;
 
 | Endpoint | Body | Returns |
 |---|---|---|
-| `/status` | — | `devices` (name, ip, mac, isolated, last_seen, blocked_domains), `lockdown`, `learning`, `shadow`, `source` (`adguard` or `pihole` in shadow mode), `enforce` (`null` or `nft`), `models`, `feed` (`domains`, `updated`), `stats` (counters since start; `queries` rising means it is scoring) |
+| `/status` | — | `devices` (name, ip, mac, isolated, last_seen, blocked_domains), `lockdown`, `learning`, `shadow`, `source` (`adguard` or `pihole` in shadow mode), `enforce` (`null` or `nft`), `models`, `feed` (`domains`, `updated`), `stats` (counters since start; `queries` rising means it is scoring; `suppressed` counts repeat alerts, `rate_limited` alerts dropped by `alert_rate_per_device`) |
 | `/device` | `{"name": "laptop"}` | that device plus `last_seen` (its latest query since ghost-dns started, or null); 404 if unknown |
 | `/isolate` | `{"name": "laptop"}` | `{"name", "isolated": true}`: the device may only reach the Pi's DNS. 409 unless `enforce` is `nft` |
 | `/release` | `{"name": "laptop"}` | `{"name", "isolated": false}` |
-| `/allow` | `{"domain": "example.com"}` | `{"domain", "allowed": true}`: allowlisted network-wide |
+| `/allow` | `{"domain": "example.com"}` | `{"domain", "allowed": true}`: allowlisted network-wide. 400 unless it is a hostname |
 | `/lockdown` | `{}` | `{"lockdown": bool}`: toggles; drops forwarded traffic except to the Pi and tailnet. 409 unless `enforce` is `nft` and `pi_ip` is set |
 | `/learning` | `{"enabled": true\|false}` | `{"learning": bool}`: learning on means alerts only. Anything but a boolean is a 400 |
 | `/unblock` | `{"event_id": "...", "domain": "..."}` | `{"event_id", "unblocked": true}` (alert buttons) |
@@ -83,6 +95,9 @@ overrides any of them. The most useful keys:
 | `tunnel_min_distinct`, `tunnel_min_long` | `30`, `12` | DNS tunnel thresholds per apex in 10 min |
 | `beacon_min_samples`, `beacon_min_dga` | `8`, `0.5` | DNS beacon thresholds |
 | `event_dedupe_seconds` | `86400` | one alert per device, domain and rule per day |
+| `alert_rate_per_device` | `30` | at most this many alerts per device per minute (`0`: no cap). Any web page can make a browser look up thousands of made-up names; blocks still happen, only their alerts are dropped |
+| `control_host`, `control_port` | `127.0.0.1`, `5380` | control API; must be loopback |
+| `control_token_path` | `null` | `null`: `control_token` next to `state_path`; `""` turns the token off (not recommended) |
 | `threat_feed_path` | installer: `/var/lib/ghostwall/threat_feed.txt` | written by `update_feed.py` |
 | `allowlist_path` | `agents/ghost_dns/allowlist.txt` | starter allowlist |
 | `devices_json` | installer: `/etc/ghostwall/devices.json` | device names; unknown clients are named by IP |
@@ -106,5 +121,5 @@ overrides any of them. The most useful keys:
 | `ghost_dns/eval_detection.py` | before/after simulation on labelled data |
 | `fw_bot/fw_bot.py --owner-file FILE --follow EVENTS [--commands]` | Telegram alerts, optionally commands |
 | `fw_bot/validate_events.py FILE` | validate an events file |
-| `web_ui/app.py --bind ADDR --port 8088` | dashboard |
+| `web_ui/app.py --bind ADDR --port 8088 [--control-token-file FILE]` | dashboard (the token file defaults to `/var/lib/ghostwall/control_token`) |
 | `netconf/gen.py` | render gateway-mode configs into `netconf/out/` |

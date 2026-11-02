@@ -223,8 +223,9 @@ false-positive rate.
 - **`ghost-flow`** (raw-IP, beacon and JA4 connection checks) and **`capture`**
   (pcap freeze on alert) need gateway mode too. They are tested on recorded traffic only.
 - **The dashboard is plain HTTP with a password**, like AdGuard's and Pi-hole's own.
-  Fine on a home LAN or a tailnet; never expose it to the internet. The control API has
-  no authentication; it listens on loopback only and refuses requests from web pages.
+  Fine on a home LAN or a tailnet; never expose it to the internet. The control API
+  listens on loopback only, refuses requests from web pages, and takes actions only with
+  a token that only the `ghostwall` user can read.
 - **Telegram alerts go through Telegram's servers.** They name the device and domain.
 
 ## Tests

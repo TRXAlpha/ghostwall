@@ -5,19 +5,31 @@ one GhostState / Enforcer / DeviceMap with the resolver, so a change here takes
 effect on the resolver's next query. Every handler returns {"ok": true, ...} or
 a non-2xx {"ok": false, "error": ...}.
 
-No auth does not mean any caller: a web page in a browser on the same machine can
-reach loopback too. So a request must name a loopback Host (a DNS-rebinding page
-names its own domain), and a POST must be JSON (a cross-site form or a no-cors
-fetch cannot send that content type without a CORS preflight, which is never
-answered here).
+Loopback is not one caller, though: every local user and process on the box can
+reach it, and so can a web page in a browser there. So:
+  * a request must name a loopback Host (a DNS-rebinding page names its own domain);
+  * a POST must be JSON (a cross-site form or a no-cors fetch cannot send that
+    content type without a CORS preflight, which is never answered here);
+  * every action (anything but /status) needs `Authorization: Bearer <token>`. The
+    token is generated on first start into a file only the ghostwall user can read
+    (control_token_path, /var/lib/ghostwall/control_token when installed), so the
+    dashboard and the Telegram bot can act and other local users cannot.
 """
 from __future__ import annotations
 
+import hmac
 import ipaddress
 import json
+import os
+import re
+import secrets
 import urllib.parse
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+# A hostname: dot-separated labels of letters, digits, '-' and '_' (some real names
+# have it), 253 characters at most. Anything else can't be a name worth trusting.
+DOMAIN_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?)(\.[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?)*$")
 
 ENFORCEMENT_OFF = ('enforcement is off: isolation and lockdown need "enforce": "nft" and '
                    'gateway mode (docs/OPERATIONS.md)')
@@ -36,8 +48,37 @@ def loopback_host(host_header: str | None) -> bool:
         return False
 
 
+def ensure_token(path: str) -> str:
+    """Read the control token from path, creating it (mode 0600) on first use."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            tok = f.read().strip()
+        if tok:
+            return tok
+    except FileNotFoundError:
+        pass
+    tok = secrets.token_urlsafe(32)
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(tok + "\n")
+    os.replace(tmp, path)
+    return tok
+
+
+def token_path(cfg: dict) -> str | None:
+    """The configured token file; by default next to state.json. "" or false disables auth."""
+    p = cfg.get("control_token_path", None)
+    if p is None:
+        return os.path.join(os.path.dirname(os.path.abspath(cfg["state_path"])), "control_token")
+    return p or None
+
+
 class ControlHandler(BaseHTTPRequestHandler):
-    state = {}  # injected: {"gstate":.., "enforcer":.., "devices":.., "cfg":.., "resolver":..}
+    state = {}  # injected: {"gstate":.., "enforcer":.., "devices":.., "cfg":.., "resolver":.., "token":..}
 
     # -- helpers ----------------------------------------------------------
     def _send(self, code: int, obj: dict) -> None:
@@ -91,6 +132,10 @@ class ControlHandler(BaseHTTPRequestHandler):
         if body.get("__bad_json__"):
             self._send(400, {"ok": False, "error": "bad JSON"})
             return
+        if self.path != "/status" and not self._authorized():
+            self._send(401, {"ok": False, "error": "need Authorization: Bearer <token> "
+                             "(the token is in control_token next to state.json)"})
+            return
         routes = {
             "/status": self._status,
             "/device": lambda: self._device(body),
@@ -114,6 +159,15 @@ class ControlHandler(BaseHTTPRequestHandler):
             self._send(500, {"ok": False, "error": str(e)})
             return
         self._send(code, obj)
+
+    def _authorized(self) -> bool:
+        token = self.state.get("token")
+        if not token:
+            return True  # auth switched off (control_token_path: "")
+        given = self.headers.get("Authorization") or ""
+        if not given.startswith("Bearer "):
+            return False
+        return hmac.compare_digest(given[7:].strip().encode("utf-8"), token.encode("utf-8"))
 
     # -- endpoint implementations ----------------------------------------
     def _status(self) -> dict:
@@ -183,6 +237,8 @@ class ControlHandler(BaseHTTPRequestHandler):
         domain = str(body.get("domain", "")).strip().rstrip(".").lower()
         if not domain:
             raise _ApiError(400, "need domain")
+        if not DOMAIN_RE.match(domain):
+            raise _ApiError(400, "not a domain name")
         self.state["gstate"].allow(domain)
         return 200, {"ok": True, "domain": domain, "allowed": True}
 
@@ -213,6 +269,8 @@ class ControlHandler(BaseHTTPRequestHandler):
                 domain = evt["domain"]
         if not domain:
             raise _ApiError(400, "need domain or a known event_id")
+        if not DOMAIN_RE.match(domain):
+            raise _ApiError(400, "not a domain name")
         self.state["gstate"].unblock(domain)
         return 200, {"ok": True, "event_id": event_id, "domain": domain,
                      "unblocked": True}
@@ -233,9 +291,13 @@ class _ApiError(Exception):
 
 
 class ControlServer:
-    def __init__(self, cfg, gstate, enforcer, devices, resolver=None):
+    def __init__(self, cfg, gstate, enforcer, devices, resolver=None, token: str | None = None):
+        host = cfg["control_host"]
+        if not loopback_host(host if ":" not in host else f"[{host}]"):
+            # No TLS and one shared token: this API must never be reachable from the LAN.
+            raise ValueError(f"control_host must be a loopback address, not {host!r}")
         inject = {"cfg": cfg, "gstate": gstate, "enforcer": enforcer,
-                  "devices": devices, "resolver": resolver}
+                  "devices": devices, "resolver": resolver, "token": token}
         handler = type("H", (ControlHandler,), {"state": inject})
         self.httpd = ThreadingHTTPServer((cfg["control_host"], int(cfg["control_port"])),
                                          handler)

@@ -61,7 +61,8 @@ tune_adguard() {  # lower AdGuard's query-log buffer; AdGuard applies it on its 
 ( while :; do tune_adguard; sleep 300; done ) &
 
 python agents/ghost_dns/app.py --config "$D/ghost_dns.json" &
-python agents/web_ui/app.py --bind 0.0.0.0 --port 8088 --events "$D/events.jsonl" &
+python agents/web_ui/app.py --bind 0.0.0.0 --port 8088 --events "$D/events.jsonl" \
+  --control-token-file "$D/control_token" &
 # If either service exits, stop the container so Docker's restart policy brings it back.
 wait -n
 exit 1

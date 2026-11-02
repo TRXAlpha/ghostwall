@@ -15,10 +15,27 @@ ExecStart=/opt/ghostwall/.venv/bin/python app.py --bind ${GHOSTWALL_WEB_BIND} --
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true
+# Needs no capabilities and no devices; only the network and its own files.
+CapabilityBoundingSet=
 ProtectSystem=strict
 ProtectHome=true
-ReadOnlyPaths=/opt/ghostwall
 PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelLogs=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0027
 
 [Install]
 WantedBy=multi-user.target

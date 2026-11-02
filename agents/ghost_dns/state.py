@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -61,7 +62,18 @@ class GhostState:
         try:
             with open(self.path, "r", encoding="utf-8") as f:
                 d = json.load(f)
-        except (OSError, ValueError):
+            if not isinstance(d, dict):
+                raise ValueError("not a JSON object")
+        except (OSError, ValueError) as exc:
+            # Starting empty would silently drop the allowlist and isolations; keep the
+            # broken file for a look and say so.
+            bad = f"{self.path}.broken-{int(time.time())}"
+            try:
+                os.replace(self.path, bad)
+            except OSError:
+                bad = "(could not move it)"
+            print(f"[ghost-dns] WARNING {self.path} unreadable ({exc}); starting empty, kept as {bad}",
+                  file=sys.stderr, flush=True)
             return
         self.allowlist = set(d.get("allowlist", []))
         self.blocklist = set(d.get("blocklist", []))
@@ -94,6 +106,8 @@ class GhostState:
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f)
+            f.flush()
+            os.fsync(f.fileno())  # a Pi loses power; never leave a half-written state.json
         os.replace(tmp, self.path)
         self._dirty = False
         self._last_flush = time.monotonic()
@@ -128,6 +142,13 @@ class GhostState:
         with self._lock:
             return domain in self.blocklist or registrable_part(domain) in self.blocklist
 
+    def _touch_locked(self) -> None:
+        """Mark changed; write at most every _flush_interval seconds. For data that is
+        cheap to lose in a crash and can change once per query."""
+        self._dirty = True
+        if time.monotonic() - self._last_flush >= self._flush_interval:
+            self._save_locked()
+
     def note_seen(self, domain: str) -> bool:
         """Record a domain sighting. Returns True if this is the FIRST time the
         registrable part has ever been seen."""
@@ -136,9 +157,7 @@ class GhostState:
             if reg in self.first_seen:
                 return False
             self.first_seen[reg] = _now()
-            self._dirty = True
-            if time.monotonic() - self._last_flush >= self._flush_interval:
-                self._save_locked()
+            self._touch_locked()
             return True
 
     def is_new(self, domain: str, novelty_days: int) -> bool:
@@ -156,10 +175,12 @@ class GhostState:
 
     # -- mutations (persist) ---------------------------------------------
     def add_block(self, domain: str) -> None:
+        """Automatic (score-based) block. Throttled like note_seen: a device can produce
+        one per query, and the block is in force in memory at once either way."""
         with self._lock:
             self.blocklist.add(domain)
             self.allowlist.discard(domain)
-            self._save_locked()
+            self._touch_locked()
 
     def confirm_block(self, domain: str, threshold: int) -> bool:
         """Count a block confirmation; promote to the blocklist at threshold.
@@ -221,7 +242,8 @@ class GhostState:
                 "ip": event.get("ip"),
                 "time": event.get("time"),
             }
-            self._save_locked()
+            # One per alert, and alerts can come in floods; only Unblock buttons read it.
+            self._touch_locked()
 
     def event(self, event_id: str) -> dict | None:
         with self._lock:

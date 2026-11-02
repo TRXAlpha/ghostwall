@@ -43,8 +43,11 @@ def parse_adguard_line(line: str):
 parse_line = parse_adguard_line  # older name, used by replay_querylog and tests
 
 # `Oct 31 12:00:00 dnsmasq[123]: query[A] example.com from 192.168.1.10`, and the
-# log-queries=extra form with a serial and client/port before `query`.
-_PIHOLE_QUERY = re.compile(r"\bquery\[(?P<qt>[A-Za-z0-9]+)\]\s+(?P<host>\S+)\s+from\s+(?P<ip>[0-9A-Fa-f:.]+)")
+# log-queries=extra form with a serial and client/port before `query`. Anchored after
+# the `<process>[pid]:` tag and at the end of the line: the name is whatever a device
+# asked for, so a crafted one must not be able to name a different client.
+_PIHOLE_QUERY = re.compile(r"\]:\s+(?:\d+\s+\S+\s+)?query\[(?P<qt>[A-Za-z0-9]+)\]\s+"
+                           r"(?P<host>\S+)\s+from\s+(?P<ip>[0-9A-Fa-f:.]+)\s*$")
 
 
 def parse_pihole_line(line: str):

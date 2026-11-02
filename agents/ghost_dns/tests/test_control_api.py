@@ -238,3 +238,68 @@ class EnforcingControlApiTests(ControlApiTests):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ControlAuthTests(unittest.TestCase):
+    """Actions need the token from control_token; /status does not."""
+
+    def setUp(self):
+        from control_api import ensure_token, token_path
+        self.dir = tempfile.mkdtemp()
+        self.cfg = config_mod.load_config(None, {
+            "state_path": os.path.join(self.dir, "state.json"), "control_port": 0})
+        self.tpath = token_path(self.cfg)
+        self.token = ensure_token(self.tpath)
+        self.server = ControlServer(self.cfg, GhostState(self.cfg["state_path"]),
+                                    Enforcer(NullBackend()),
+                                    DeviceMap.from_json([{"name": "dell", "ip": "192.168.1.30"}]),
+                                    token=self.token)
+        self.port = self.server.httpd.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.server.shutdown()
+
+    def _post(self, path, body, auth=None, method="POST"):
+        h = {"Content-Type": "application/json"}
+        if auth:
+            h["Authorization"] = auth
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", method=method,
+                                     data=None if method == "GET" else json.dumps(body).encode(),
+                                     headers=h)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    def test_token_file_is_private_and_stable(self):
+        from control_api import ensure_token
+        self.assertEqual(os.stat(self.tpath).st_mode & 0o777, 0o600)
+        self.assertEqual(self.tpath, os.path.join(self.dir, "control_token"))
+        self.assertEqual(ensure_token(self.tpath), self.token)  # restarts keep the token
+        self.assertGreaterEqual(len(self.token), 40)
+
+    def test_actions_need_the_token(self):
+        for auth in (None, "Bearer wrong", "Basic " + self.token, self.token):
+            self.assertEqual(self._post("/allow", {"domain": "example.com"}, auth), 401, auth)
+        self.assertEqual(self._post("/allow", {"domain": "example.com"}, "Bearer " + self.token), 200)
+        self.assertEqual(self._post("/learning", {"enabled": False}, None), 401)
+
+    def test_status_stays_open(self):
+        self.assertEqual(self._post("/status", {}, None, method="GET"), 200)
+        self.assertEqual(self._post("/status", {}, None), 200)
+
+    def test_allow_rejects_non_domains(self):
+        ok = "Bearer " + self.token
+        for bad in ("<script>", "a b.com", "x" * 300, "..", "evil.com/path"):
+            self.assertEqual(self._post("/allow", {"domain": bad}, ok), 400, bad)
+
+    def test_token_off_with_empty_path(self):
+        from control_api import token_path
+        self.assertIsNone(token_path({"state_path": "/x/state.json", "control_token_path": ""}))
+
+    def test_refuses_non_loopback_bind(self):
+        cfg = dict(self.cfg, control_host="0.0.0.0")
+        with self.assertRaises(ValueError):
+            ControlServer(cfg, None, None, None)

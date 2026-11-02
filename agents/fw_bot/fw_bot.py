@@ -39,9 +39,8 @@ class FwBot:
             return self.callbacks.handle(update["callback_query"])
         msg = update.get("message") or {}
         chat_id = (msg.get("chat") or {}).get("id")
-        from_user = (msg.get("from") or {}).get("id")
         text = msg.get("text", "")
-        if not self.cfg.is_owner(chat_id):
+        if not self.cfg.is_owner_message(msg):
             return "ignored: not owner"
         if not text.startswith("/fw"):
             return "ignored: not a command"
@@ -182,7 +181,7 @@ class CommandRouter:
         msg = update.get("message") or {}
         chat_id = (msg.get("chat") or {}).get("id")
         text = msg.get("text", "")
-        if not self.cfg.is_owner(chat_id):
+        if not self.cfg.is_owner_message(msg):
             return "ignored: not owner"
         if not text.startswith("/fw"):
             return "ignored: not a command"

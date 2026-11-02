@@ -16,6 +16,7 @@ All paths assume the installer's layout (`/opt/ghostwall`).
 | `/etc/ghostwall/fw_bot.env`, `/etc/ghostwall/owner.json` | Telegram token, button-signing secret, your chat id |
 | `/var/lib/ghostwall/events.jsonl` | every alert, one JSON object per line |
 | `/var/lib/ghostwall/state.json` | allowlist, blocklist, novelty, learning and lockdown |
+| `/var/lib/ghostwall/control_token` | the control API token (created by ghost-dns; the dashboard and bot read it) |
 | `/var/lib/ghostwall/threat_feed.txt` | phishing list, refreshed daily |
 | `/opt/ghostwall` | the code and its Python venv; nothing you need to keep |
 
@@ -60,7 +61,7 @@ To update later: `git pull && sudo ./install.sh`.
 - **Watch:** the dashboard, Telegram, or `sudo tail -f /var/lib/ghostwall/events.jsonl`.
 - **Trust a domain** that keeps getting flagged: `/fw allow <domain>`, the dashboard
   box, or
-  `curl -X POST http://127.0.0.1:5380/allow -H 'Content-Type: application/json' -d '{"domain":"example.com"}'`.
+  `curl -X POST http://127.0.0.1:5380/allow -H 'Content-Type: application/json' -H "Authorization: Bearer $(sudo cat /var/lib/ghostwall/control_token)" -d '{"domain":"example.com"}'`.
   Domains that should be trusted everywhere can go in `agents/ghost_dns/allowlist.txt`.
 - **Too noisy?** Raise `recommend_threshold` in `/etc/ghostwall/ghost_dns.json`
   (default 0.96) and restart `ghostwall-dns`. Replay your own history first to see the effect:
@@ -89,8 +90,9 @@ To update later: `git pull && sudo ./install.sh`.
    sudo systemctl enable --now ghostwall-fw-bot
    ```
 
-Only your chat id can run commands or press alert buttons, and buttons are
-HMAC-signed. An alert starts with `ALERT · <device>` and offers **Trust domain** and
+Only you can run commands or press alert buttons, and buttons are HMAC-signed.
+Commands count only in your private chat with the bot: a message must come from your
+id and be sent in that chat, so other members of a group the bot is in can't use it. An alert starts with `ALERT · <device>` and offers **Trust domain** and
 **Details**; only a real block (inline mode, learning off) says `BLOCKED` and offers
 Unblock, Keep blocked and Isolate.
 

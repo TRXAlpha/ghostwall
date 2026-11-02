@@ -36,6 +36,16 @@ from detectors import RARE_TLDS, Detectors, is_internal, tld_of
 from tokenizer import registrable_part
 
 
+def _prune(d: dict, cutoff: float, cap: int) -> dict:
+    """Drop entries older than cutoff; if that is not enough, keep the newest half of cap.
+    (Filtering by age alone keeps everything during a flood, then re-filters on every
+    insert: quadratic.)"""
+    kept = {k: v for k, v in d.items() if v >= cutoff}
+    if len(kept) > cap // 2:
+        kept = dict(sorted(kept.items(), key=lambda kv: kv[1])[-(cap // 2):])
+    return kept
+
+
 @dataclass
 class Decision:
     action: str            # "allow" | "recommend" | "block"
@@ -58,6 +68,7 @@ class Resolver:
         self._recent_ip: dict[str, float] = {}   # ip -> monotonic last-written
         self._recent_events: dict[tuple, float] = {}  # (device, registrable) -> monotonic
         self._events_lock = threading.Lock()
+        self._alert_times: dict[str, list[float]] = {}  # device -> monotonic times of written alerts
         self._primary_down_until = 0.0   # monotonic; skip a dead primary upstream until then
         self._stop = threading.Event()
         self._socks: list = []
@@ -69,7 +80,8 @@ class Resolver:
         self.det = Detectors(cfg)            # threat feed, DoH, tunnel, beacon, DGA burst
         self.last_seen: dict[str, str] = {}  # client ip -> ISO time of its latest query
         self.stats = {"queries": 0, "blocked": 0, "recommended": 0, "suppressed": 0,
-                      "forwarded": 0, "errors": 0, "fallbacks": 0, "failopen": 0}
+                      "forwarded": 0, "errors": 0, "fallbacks": 0, "failopen": 0,
+                      "rate_limited": 0}
 
     # -- policy (pure, no I/O except event log + state + enforcer) --------
     def decide(self, client_ip: str, domain: str, qtype: str) -> Decision:
@@ -197,11 +209,18 @@ class Resolver:
             device=dev.name, ip=dev.ip, mac=dev.mac, domain=domain,
             rule=rule, action=action, severity=severity, scores=scores,
             reasons=reasons)
+        # Any web page can make a browser look up thousands of made-up names, so one
+        # device's alerts are capped per minute (a block still happens; only its alert
+        # is dropped). The flood itself still shows up as a dga_burst alert.
+        if self._over_rate(dev.name):
+            self.stats["rate_limited"] += 1
+            return evt
         # A device re-querying the same domain family is one finding, not fifty.
         # Blocks are always recorded; only repeat recommendations are suppressed.
         if action == "recommend" and self._is_repeat(dev.name, domain, rule):
             self.stats["suppressed"] += 1
             return evt
+        self._count_alert(dev.name)
         self.events.write(evt)
         self.state.record_event(evt)
         if action == "block":
@@ -210,6 +229,22 @@ class Resolver:
             self.stats["recommended"] += 1
         self._maybe_freeze(dev, evt)
         return evt
+
+    def _over_rate(self, device: str) -> bool:
+        limit = int(self.cfg.get("alert_rate_per_device", 30))
+        if limit <= 0:
+            return False
+        now = self.clock()
+        with self._events_lock:
+            times = [t for t in self._alert_times.get(device, []) if now - t < 60.0]
+            self._alert_times[device] = times
+            return len(times) >= limit
+
+    def _count_alert(self, device: str) -> None:
+        with self._events_lock:
+            if len(self._alert_times) > 10000:  # bound memory: a LAN has far fewer devices
+                self._alert_times.clear()
+            self._alert_times.setdefault(device, []).append(self.clock())
 
     def _is_repeat(self, device: str, domain: str, rule: str = "") -> bool:
         """True if this device already got this kind of alert for this registrable
@@ -225,8 +260,7 @@ class Resolver:
                 return True
             self._recent_events[key] = now
             if len(self._recent_events) > 20000:  # bound memory
-                cutoff = now - window
-                self._recent_events = {k: v for k, v in self._recent_events.items() if v >= cutoff}
+                self._recent_events = _prune(self._recent_events, now - window, 20000)
         return False
 
     def _maybe_freeze(self, dev, evt) -> None:
@@ -354,8 +388,7 @@ class Resolver:
                 self._recent_ip[ip] = now
                 fresh.append(ip)
             if len(self._recent_ip) > 50000:  # bound the dedupe map too
-                cutoff = now - window
-                self._recent_ip = {k: v for k, v in self._recent_ip.items() if v >= cutoff}
+                self._recent_ip = _prune(self._recent_ip, now - window, 50000)
             if not fresh:
                 return
             try:

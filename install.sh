@@ -129,8 +129,13 @@ say "2) copy to $DEST"
 if [ "$SRC" != "$DEST" ]; then
   mkdir -p "$DEST"
   tar -C "$SRC" --exclude=./.git --exclude=./.venv --exclude=./data --exclude=./runs \
-      -cf - . | tar -C "$DEST" -xf -
+      -cf - . | tar -C "$DEST" --no-same-owner --no-same-permissions -xf -
 fi
+# The code runs as the ghostwall user (with the right to read any file) and uninstall.sh
+# runs as root, so nobody but root may change it. A clone keeps the cloning user's
+# ownership, which would let that user (or anything running as them) edit it.
+chown -R root:root "$DEST"
+chmod -R u+rwX,go+rX,go-w "$DEST"
 
 say "3) python environment"
 if ! python3 -c 'import ensurepip' 2>/dev/null; then

@@ -318,6 +318,12 @@ class ShadowTests(Base):
         self.assertEqual(f.poll_once(), 1)
 
     def test_parse_pihole_line(self):
+        # A name crafted to look like the end of a line must not move the alert to
+        # another client, nor may a name sneak a second query[] into one line.
+        self.assertIsNone(parse_pihole_line(
+            "Oct 31 12:00:00 dnsmasq[812]: query[A] x.example from 192.168.1.66 from 192.168.1.10"))
+        self.assertIsNone(parse_pihole_line(
+            "Oct 31 12:00:00 dnsmasq[812]: reply query[A] x.example from 192.168.1.66 is 1.2.3.4"))
         self.assertEqual(parse_pihole_line("Oct 31 12:00:00 dnsmasq[812]: query[AAAA] Example.COM from 192.168.1.10"),
                          ("192.168.1.10", "example.com", "AAAA"))
         # log-queries=extra: serial and client/port before the query

@@ -220,11 +220,18 @@ Both are tested on crafted and recorded traffic only.
 - `ghost-flow` never drops by default; its queue rule uses `bypass`.
 - Everything is reversible: `go_shadow.sh` returns DNS to AdGuard, and
   `ghostwall-breakglass` removes the nftables table and restores sysctl.
+- A flood of made-up names (any web page can make a browser send one) is capped at
+  `alert_rate_per_device` alerts a minute, and state changes it causes are written
+  at most once a minute, so it can't fill the disk or wear out an SD card.
+- `/opt/ghostwall` is owned by root, so the user who cloned the repository can't
+  change code that the services or `uninstall.sh` later run.
 - Inputs that reach the kernel or the filesystem are validated: IPs before `nft`,
   event ids before capture writes, callback buttons by HMAC with a constant-time check.
-- The control API and capture API have no authentication by design and listen on
-  loopback only. The control API also refuses non-JSON POSTs and non-loopback Host
-  headers, so a web page in a browser on the same machine can't drive it. The dashboard needs a password (HTTP Basic, constant-time compare) on
+- The control API and capture API listen on loopback only and refuse non-JSON POSTs
+  and non-loopback Host headers, so a web page in a browser on the same machine can't
+  drive them. Control API actions also need a token from a file only the `ghostwall`
+  user can read, so other local users and processes can't either; the capture API
+  runs at most four freezes at a time. The dashboard needs a password (HTTP Basic, constant-time compare) on
   any address but loopback and refuses to start without one; it accepts actions only
   as JSON from its own origin, and without a password it answers only IP or
   `localhost` Host headers, which stops DNS rebinding.

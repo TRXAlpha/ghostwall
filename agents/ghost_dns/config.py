@@ -33,6 +33,7 @@ DEFAULTS = {
     "upstream_fallbacks": ["9.9.9.9"],
     "primary_retry_seconds": 10,    # skip a failed primary this long before retrying
     "event_dedupe_seconds": 86400,  # one alert per device per domain family per day
+    "alert_rate_per_device": 30,    # alerts per device per minute at most (0 = no cap)
     "workers": 16,                  # concurrent in-flight queries
     "resolved_dedupe_seconds": 300,  # min gap before re-logging a resolved IP
     "block_response": "sinkhole",   # "sinkhole" or "nxdomain"
@@ -40,8 +41,9 @@ DEFAULTS = {
     "sinkhole_ip6": "::",
 
     # --- control API (docs/REFERENCE.md) ---
-    "control_host": "127.0.0.1",
+    "control_host": "127.0.0.1",    # loopback only; anything else is refused
     "control_port": 5380,
+    "control_token_path": None,     # None: control_token next to state.json; "" turns auth off
 
     # --- models / scoring ---
     "onnx_model": os.path.join(ROOT, "ghostwall", "models", "trm_dga_v2.onnx"),

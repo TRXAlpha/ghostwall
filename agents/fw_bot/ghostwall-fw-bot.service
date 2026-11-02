@@ -17,9 +17,27 @@ StateDirectoryMode=0750
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
+# Needs no capabilities and no devices; only the network and its own files.
+CapabilityBoundingSet=
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelLogs=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0027
 
 [Install]
 WantedBy=multi-user.target

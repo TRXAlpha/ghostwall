@@ -36,8 +36,6 @@ class TestApi(unittest.TestCase):
 
         cls.results = results
         cls.srv = api_mod.FreezeServer(cfg, FakeMgr(), freeze_fn)
-        # expose the real state dict so we can inject result lookups
-        cls.srv.httpd.RequestHandlerClass.state["results"] = results
         cls.port = cls.srv.httpd.server_address[1]
         cls.t = threading.Thread(target=cls.srv.serve_forever, daemon=True)
         cls.t.start()
@@ -106,6 +104,50 @@ class TestApi(unittest.TestCase):
         self.assertEqual(obj["result"]["device"], "laptop")
         self.assertEqual(obj["result"]["dns_history_count"], 1) \
             if False else self.assertEqual(obj["result"]["device"], "laptop")
+
+    def _raw(self, method, path, body=b"", headers=None):
+        import http.client
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request(method, path, body=body, headers=headers or {})
+        r = c.getresponse()
+        out = r.status, json.loads(r.read())
+        c.close()
+        return out
+
+    def test_rebinding_host_refused(self):
+        # A DNS-rebinding page reaches 127.0.0.1 but names its own domain in Host.
+        code, _ = self._raw("GET", "/status", headers={"Host": "evil.example:5381"})
+        self.assertEqual(code, 403)
+        body = json.dumps({"device": "laptop", "event_id": "evtR"}).encode()
+        code, _ = self._raw("POST", "/freeze", body, {"Host": "evil.example:5381",
+                                                      "Content-Type": "application/json"})
+        self.assertEqual(code, 403)
+
+    def test_cross_site_form_post_refused(self):
+        # A page can POST text/plain to loopback without a CORS preflight.
+        body = json.dumps({"device": "laptop", "event_id": "evtF"}).encode()
+        code, _ = self._raw("POST", "/freeze", body, {"Content-Type": "text/plain"})
+        self.assertEqual(code, 415)
+        self.assertNotIn("evtF", self.results)
+
+    def test_concurrent_freezes_bounded(self):
+        slots = self.srv.httpd.RequestHandlerClass.state["slots"]
+        taken = 0
+        while slots.acquire(blocking=False):
+            taken += 1
+        try:
+            self.assertEqual(taken, api_mod.MAX_RUNNING)
+            body = json.dumps({"device": "laptop", "event_id": "evtB"}).encode()
+            code, _ = self._raw("POST", "/freeze", body, {"Content-Type": "application/json"})
+            self.assertEqual(code, 429)
+        finally:
+            for _ in range(taken):
+                slots.release()
+
+    def test_too_large_refused(self):
+        code, _ = self._raw("POST", "/freeze", b"x" * (api_mod.MAX_BODY + 1),
+                            {"Content-Type": "application/json"})
+        self.assertEqual(code, 413)
 
 
 if __name__ == "__main__":
