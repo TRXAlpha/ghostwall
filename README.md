@@ -276,8 +276,10 @@ on the missing model's empty score.)
   Inline mode needs AdGuard Home.
 - **Isolating a device and LAN lockdown need gateway mode** (the box routes your LAN's
   traffic). In the default setup the dashboard doesn't offer them and the API refuses.
-- **`ghost-flow`** (raw-IP, beacon and JA4 connection checks) and **`capture`**
-  (pcap freeze on alert) need gateway mode too. They are tested on recorded traffic only.
+- **`ghost-flow`** (raw-IP, DoH-by-IP, beacon and JA4 connection checks) and **`capture`**
+  (pcap freeze on alert) need gateway mode too. Both have run against a real kernel queue
+  and real tcpdump in a lab container (a device and a "wan" in network namespaces), not
+  yet on a real network.
 - **The dashboard is HTTPS with a self-signed certificate** (the installer makes it and
   prints its fingerprint; browsers warn once) and a password. Fine on a home LAN or a
   tailnet; never expose it to the internet. The control API

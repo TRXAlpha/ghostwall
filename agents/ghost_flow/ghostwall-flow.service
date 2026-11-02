@@ -11,7 +11,7 @@ WorkingDirectory=/opt/ghostwall/agents/ghost_flow
 # Binds nftables queue num 100 (the slot reserved in ghostwall.nft). Enable the
 # queue rule only once this service is running:
 #   nft add rule inet ghostwall forward iifname "eth0" ct state new \
-#       ct original proto-dst != 53 queue num 100 bypass
+#       meta l4proto { tcp, udp } th dport != 53 queue num 100 bypass
 # The `bypass` flag means traffic flows normally if this daemon is not bound.
 ExecStart=/opt/ghostwall/.venv/bin/python app.py --config /opt/ghostwall/agents/ghost_flow/ghost_flow.json
 Restart=on-failure

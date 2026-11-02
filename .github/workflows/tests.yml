@@ -31,7 +31,7 @@ jobs:
           done
           python agents/netconf/test_gen.py
       - name: shell scripts parse
-        run: for f in install.sh uninstall.sh agents/ghost_dns/go_shadow.sh docker/entrypoint.sh tests/installer_e2e.sh; do bash -n "$f"; done
+        run: for f in install.sh uninstall.sh agents/ghost_dns/go_shadow.sh docker/entrypoint.sh tests/installer_e2e.sh tests/gateway_e2e.sh; do bash -n "$f"; done
 
   installer:
     # install.sh for real, under systemd, as a user would run it. (Before this job, a
@@ -45,6 +45,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: tests/installer_e2e.sh "${{ matrix.image }}"
+
+  gateway:
+    # ghost-flow on a real kernel queue and capture with real tcpdump, in network namespaces.
+    name: gateway mode (ghost-flow + capture)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: tests/gateway_e2e.sh
 
   docker:
     name: docker image (${{ matrix.os }})

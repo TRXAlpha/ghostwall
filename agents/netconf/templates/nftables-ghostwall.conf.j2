@@ -154,7 +154,7 @@ table inet ghostwall {
         # Enable later with:
         #   nft add rule inet ghostwall forward \
         #       iifname "eth0" ct state new \
-        #       ct original proto-dst != 53 \
+        #       meta l4proto { tcp, udp } th dport != 53 \
         #       queue num 100 bypass
         # The `bypass` (queue ... bypass) flag means: if no userspace listener
         # is bound to queue 100, packets just continue through the normal

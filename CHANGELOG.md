@@ -30,6 +30,13 @@ Your settings, alerts, allowlist and thresholds are kept.
 - `/opt/ghostwall` kept the cloning user's ownership, so that user could change code that runs
   with more rights.
 
+- Gateway mode: the queue rule in OPERATIONS.md was invalid nftables syntax (`ct original
+  proto-dst != 53`), so ghost-flow never saw a packet; `ghost-capture.service` couldn't start
+  (`serve` rejected `--ring-dir`, and its tmpfs mount ran without the right to mount); and
+  tcpdump's `-W` with `-G` made the capture ring exit after one round (about 5 minutes), so
+  later freezes were empty. A freeze also skipped the last seconds before the alert. All
+  fixed and now tested on a real kernel queue with real tcpdump.
+
 ### Security
 
 Control API token; capture API browser checks and limits; owner-only Telegram commands;

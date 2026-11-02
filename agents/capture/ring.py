@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import time
 
-from config import per_device_files, ring_usage
+from config import per_device_files, ring_usage  # noqa: F401 (per_device_files kept for callers)
 
 _SAFE = re.compile(r"[^A-Za-z0-9_.-]")
 
@@ -28,17 +28,46 @@ class RingManager:
         self.count = per_device_files(cfg, len(devices))
 
     def tcpdump_args(self, dev: dict, out_dir: str) -> list:
+        """A new file every ring_seconds, named by time. No -W: with -G, tcpdump's -W
+        means "exit after W files", not "wrap around" (that's -C), so capture would
+        stop for good after one ring. Old files are deleted by prune() instead."""
         c = self.cfg
         return [
             self.tcpdump_cmd,
             "-i", c["interface"],
             "-s", str(c["snaplen"]),          # headers only
-            "-w", os.path.join(out_dir, "cap.pcap"),
-            "-G", str(c["ring_seconds"]),     # rotate every N seconds
-            "-W", str(self.count),            # wrap after count files
+            "-U",                              # write each packet at once: a freeze sees the last seconds
+            "-w", os.path.join(out_dir, "cap-%Y%m%d-%H%M%S.pcap"),
+            "-G", str(c["ring_seconds"]),     # a new file every N seconds
             "-n",                              # no DNS lookups
             "src", "host", dev["ip"],
         ]
+
+    def prune(self, now: float | None = None) -> int:
+        """Keep each device's ring to ring_keep_minutes (plus the file being written)
+        and to its share of total_ring_mb. Returns how many files were deleted."""
+        now = time.time() if now is None else now
+        keep_s = float(self.cfg.get("ring_keep_minutes", 5)) * 60 + float(self.cfg.get("ring_seconds", 30))
+        cap = float(self.cfg.get("total_ring_mb", 256)) * 2**20 / max(1, len(self.devices))
+        deleted = 0
+        for dev in self.devices:
+            d = os.path.join(self.cfg["ring_dir"], safe_name(dev["name"]))
+            try:
+                files = sorted((os.stat(os.path.join(d, f)).st_mtime, os.path.join(d, f))
+                               for f in os.listdir(d) if f.endswith(".pcap"))
+            except OSError:
+                continue
+            sizes = {p: os.path.getsize(p) for _, p in files}
+            total = sum(sizes.values())
+            for i, (mtime, p) in enumerate(files[:-1]):     # never the newest: tcpdump writes it
+                if now - mtime > keep_s or total > cap:
+                    try:
+                        os.remove(p)
+                        total -= sizes[p]
+                        deleted += 1
+                    except OSError:
+                        pass
+        return deleted
 
     def start_one(self, dev: dict) -> None:
         name = dev["name"]

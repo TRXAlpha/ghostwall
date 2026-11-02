@@ -52,17 +52,46 @@ class TestRing(unittest.TestCase):
             u = mgr.status()
             by = {r["name"]: r for r in u}
             self.assertTrue(by["laptop"]["capturing"])
-            self.assertGreaterEqual(by["laptop"]["ring_files"], 2)
-            self.assertLessEqual(by["laptop"]["ring_files"], 4)
+            self.assertGreaterEqual(by["laptop"]["ring_files"], 3)   # still rotating
             # argv recorded by the fake proves the real flags were passed
             argv = open(os.path.join(self.ring_dir, "laptop", "argv.txt")).read()
-            for flag in ("-s", "128", "-G", "1", "-W", "3",
-                         "src", "host", "192.168.1.51"):
+            for flag in ("-s", "128", "-U", "-G", "1", "src", "host", "192.168.1.51"):
                 self.assertIn(flag, argv)
+            self.assertNotIn("-W", argv.split())   # with -G it would make tcpdump exit
         finally:
             mgr.stop_all()
         self.assertFalse(mgr.alive("laptop"))
         self.assertEqual(mgr.procs, {})
+
+    def test_capture_outlives_one_ring_and_prune_keeps_the_window(self):
+        self.cfg["ring_keep_minutes"] = 2 / 60.0          # 2 s of history (+1 s rotation)
+        mgr = self._mgr()
+        try:
+            mgr.start_all()
+            time.sleep(5.5)
+            self.assertTrue(mgr.alive("laptop"))            # the real-tcpdump -W trap would have ended it
+            before = mgr.status()[0]["ring_files"]
+            self.assertGreaterEqual(before, 5)
+            self.assertGreater(mgr.prune(), 0)
+            after = mgr.status()[0]["ring_files"]
+            self.assertLessEqual(after, 4)
+            self.assertGreaterEqual(after, 1)               # the file being written stays
+        finally:
+            mgr.stop_all()
+
+    def test_prune_enforces_size_share(self):
+        mgr = self._mgr()
+        d = os.path.join(self.ring_dir, "laptop")
+        os.makedirs(d)
+        for i in range(5):
+            p = os.path.join(d, "cap-%d.pcap" % i)
+            with open(p, "wb") as f:
+                f.write(b"x" * 400_000)
+            os.utime(p, (time.time() + i, time.time() + i))
+        self.cfg["total_ring_mb"] = 2 * 1.0                 # 1 MB each for 2 devices
+        mgr.prune()
+        left = sorted(os.listdir(d))
+        self.assertEqual(left, ["cap-3.pcap", "cap-4.pcap"])   # newest kept, under 1 MB
 
     def test_filter_is_src_only(self):
         mgr = self._mgr()

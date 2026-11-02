@@ -134,8 +134,7 @@ def _copy_ring(cfg: dict, device: str, dest: str, ring_manager,
 
     - 'since': only copy files with mtime >= since (used for the post-wait
       pass so already-copied files are not merged twice).
-    - Skips the newest file if it is actively being written (mtime within one
-      ring interval of now): tcpdump holds it open and it may be partial.
+    - Includes the file tcpdump is still writing (see below).
     Returns the number of files copied."""
     src = os.path.join(cfg["ring_dir"], safe_name(device))
     if not os.path.isdir(src):
@@ -146,12 +145,9 @@ def _copy_ring(cfg: dict, device: str, dest: str, ring_manager,
     if since > 0:
         files = [f for f in files
                  if os.stat(f).st_mtime > since]
-    # Skip the newest file only if it is actively being written (mtime within
-    # one ring interval of now): tcpdump holds it open and it may be partial.
-    if ring_manager is not None and files:
-        newest_age = time.time() - os.stat(files[-1]).st_mtime
-        if newest_age < cfg.get("ring_seconds", 30) and len(files) > 1:
-            files = files[:-1]
+    # The newest file is still being written, but tcpdump runs with -U (whole packets
+    # only) and the merge drops a cut-off last record: copy it too. It holds the
+    # seconds right before the alert, which matter most.
     n = 0
     for p in files:
         dst = os.path.join(dest, os.path.basename(p))

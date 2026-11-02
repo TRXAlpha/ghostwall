@@ -210,15 +210,20 @@ whole network; read it fully first, and keep the router's admin page open.
 4. On the router: disable its DHCP server and IPv6 router advertisements. Renew a
    client's lease and check it gets an address in your DHCP range with the Pi as
    gateway and DNS.
-5. **ghost-flow:** `sudo apt install libnetfilter-queue-dev`,
-   `sudo /opt/ghostwall/.venv/bin/pip install NetfilterQueue`, copy
-   `agents/ghost_flow/ghost_flow.example.json` to `ghost_flow.json`, install and start
+5. **ghost-flow:** `sudo apt install libnetfilter-queue-dev build-essential python3-dev`,
+   `sudo /opt/ghostwall/.venv/bin/pip install --require-hashes -r /opt/ghostwall/requirements-gateway.lock`,
+   copy `agents/ghost_flow/ghost_flow.example.json` to `ghost_flow.json`, install and start
    `ghostwall-flow.service`, then add the queue rule:
-   `sudo nft add rule inet ghostwall forward iifname "eth0" ct state new ct original proto-dst != 53 queue num 100 bypass`.
+   `sudo nft add rule inet ghostwall forward iifname "eth0" ct state new meta l4proto '{ tcp, udp }' th dport != 53 queue num 100 bypass`.
+   (Versions before this one documented `ct original proto-dst != 53`, which nft rejects.)
+   `bypass` means traffic keeps flowing whenever ghost-flow isn't running.
    Leave it recommend-only (no `--autoblock`).
 6. **capture:** install `tcpdump`, copy `agents/capture/` to `/opt/ghostwall/capture`
-   with a `devices.json` using the same names, install `ghost-capture.service`, and set
-   `"capture_enabled": true` in `ghost_dns.json`.
+   with a `devices.json` using the same names, and a `capture_conf.json` there if your LAN
+   interface isn't `eth0` (`{"interface": "eth1"}`). Install `ghost-capture.service` and set
+   `"capture_enabled": true` in `ghost_dns.json`. Each device keeps the last 5 minutes
+   (`ring_keep_minutes`) in RAM; a high-severity alert freezes them plus 5 more minutes
+   into `/var/lib/ghostwall/incidents/<event_id>/`.
 
 ## Troubleshooting
 
