@@ -78,6 +78,7 @@ def token_path(cfg: dict) -> str | None:
 
 
 class ControlHandler(BaseHTTPRequestHandler):
+    timeout = 10  # an idle local connection must not hold a thread forever
     state = {}  # injected: {"gstate":.., "enforcer":.., "devices":.., "cfg":.., "resolver":.., "token":..}
 
     # -- helpers ----------------------------------------------------------

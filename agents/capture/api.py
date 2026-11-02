@@ -32,6 +32,7 @@ def loopback_host(host_header):
 
 
 class FreezeHandler(BaseHTTPRequestHandler):
+    timeout = 10  # an idle local connection must not hold a thread forever
     # injected by the server factory: {"ring_manager": ..., "cfg": ...}
     state = {}
 
