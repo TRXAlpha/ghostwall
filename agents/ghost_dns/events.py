@@ -66,7 +66,8 @@ def make_event(
     if ja4 is not None:
         evt["ja4"] = ja4
     if scores:
-        evt["scores"] = {k: round(float(v), 4) for k, v in scores.items()}
+        # a model that isn't loaded scores None (no onnxruntime: no "dga_trm"); leave it out
+        evt["scores"] = {k: round(float(v), 4) for k, v in scores.items() if v is not None}
     if reasons:
         evt["reasons"] = list(reasons)
     if capture is not None:

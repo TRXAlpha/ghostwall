@@ -83,7 +83,12 @@ false positives (53.4% up to v0.2.0-beta.2, which did not look inside dynamic-DN
 `x7kq2v9w.ddns.net`). A 1–5-gram model retrained on that data catches 80.5% of names from
 known families and 64.8% from families it never saw, against 81.4% and 60.8% for an
 Endgame-style LSTM, at about 40 µs per name in plain numpy (x86, one thread; not yet
-measured on a Pi). It is not shipped yet: it needs retraining and measuring on DRIFT first.
+measured on a Pi). A version trained on all of that data ships as an opt-in:
+`"models": "v3-public"` in `/etc/ghostwall/ghost_dns.json`, then
+`sudo systemctl restart ghostwall-dns`. It runs without onnxruntime (ghost-dns used 44 MB instead
+of 71 MB on the x86 test machine) and its thresholds are set to flag the same share of normal
+names as the defaults ([results_v3_public.md](agents/dga_eval/results_v3_public.md)). It is
+not the default because it has not been measured on DRIFT or on a real network yet.
 
 ## Install
 
@@ -219,7 +224,9 @@ config keys: [docs/REFERENCE.md](docs/REFERENCE.md).
 
 Without onnxruntime (no build for your platform, e.g. 32-bit ARM), scoring falls back
 to the n-gram model alone, which catches about 5 points fewer DGA names at the same
-false-positive rate.
+false-positive rate; `"models": "v3-public"` is made for that case. (Up to
+v0.2.0-beta.2 such installs wrote no score-based alerts at all: building the alert failed
+on the missing model's empty score.)
 
 ## Limits
 

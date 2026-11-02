@@ -46,6 +46,11 @@ DEFAULTS = {
     "control_token_path": None,     # None: control_token next to state.json; "" turns auth off
 
     # --- models / scoring ---
+    # "default": the shipped TRM + n-gram ensemble (measured on DRIFT).
+    # "v3-public": the 1-5-gram model trained on public data, alone (no onnxruntime, about
+    # 100 MB less RAM), with thresholds calibrated to the same false-positive rates;
+    # see agents/dga_eval/results_v3_public.md. Opt-in: never measured on DRIFT.
+    "models": "default",
     "onnx_model": os.path.join(ROOT, "ghostwall", "models", "trm_dga_v2.onnx"),
     "lr_coef": os.path.join(ROOT, "ghostwall", "models", "lr_coef.npy"),
     "lr_meta": os.path.join(ROOT, "ghostwall", "models", "lr_meta.json"),
@@ -97,11 +102,37 @@ DEFAULTS = {
 }
 
 
+V3_PUBLIC = {
+    "onnx_model": None,
+    "lr_coef": os.path.join(ROOT, "ghostwall", "models", "lr_v3_public.npy"),
+    "lr_meta": os.path.join(ROOT, "ghostwall", "models", "lr_v3_public.json"),
+}
+
+
 def load_config(path: str | None = None, overrides: dict | None = None) -> dict:
     cfg = dict(DEFAULTS)
+    mine: set = set()   # keys the user set; a model preset never overrides those
     if path and os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
-            cfg.update(json.load(f))
+            user = json.load(f)
+        cfg.update(user)
+        mine |= set(user)
     if overrides:
-        cfg.update({k: v for k, v in overrides.items() if v is not None})
+        given = {k: v for k, v in overrides.items() if v is not None}
+        cfg.update(given)
+        mine |= set(given)
+    if cfg.get("models") == "v3-public":
+        for k, v in V3_PUBLIC.items():
+            if k not in mine:
+                cfg[k] = v
+        try:
+            with open(cfg["lr_meta"], encoding="utf-8") as f:
+                calibrated = json.load(f).get("thresholds", {})
+        except (OSError, ValueError):
+            calibrated = {}
+        for k, v in calibrated.items():
+            if k in DEFAULTS and k not in mine:
+                cfg[k] = float(v)
+    elif cfg.get("models") not in (None, "default"):
+        raise ValueError(f'models must be "default" or "v3-public", not {cfg.get("models")!r}')
     return cfg

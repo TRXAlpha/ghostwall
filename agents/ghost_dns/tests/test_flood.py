@@ -95,3 +95,54 @@ class BrokenStateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NoOnnxTests(unittest.TestCase):
+    """Without onnxruntime the TRM score is None; alerts must still be written.
+    (Until this fix, every score-based alert raised TypeError there.)"""
+
+    def test_alert_with_one_model_missing(self):
+        d = tempfile.mkdtemp()
+        cfg = config_mod.load_config(None, {
+            "state_path": os.path.join(d, "s.json"), "events_path": os.path.join(d, "e.jsonl"),
+            "query_log": None, "resolved_ips_path": None, "threat_feed_path": None, "allowlist_path": None})
+
+        class LrOnly:
+            def score_one(self, domain):
+                return {"dga": 0.999, "dga_trm": None, "dga_lr": 0.999}
+
+        r = Resolver(cfg, GhostState(cfg["state_path"]), LrOnly(), Enforcer(NullBackend()),
+                     DeviceMap.from_json([]), EventLog(cfg["events_path"]))
+        dec = r.decide("192.168.1.30", "xk2qv9zr7wpl3mfa.top", "A")
+        self.assertEqual(dec.reason, "dga_high")
+        self.assertEqual(dec.event["scores"], {"dga": 0.999, "dga_lr": 0.999})
+
+
+class PresetTests(unittest.TestCase):
+    def test_v3_public_preset(self):
+        cfg = config_mod.load_config(None, {"models": "v3-public"})
+        self.assertIsNone(cfg["onnx_model"])
+        self.assertTrue(cfg["lr_coef"].endswith("lr_v3_public.npy"))
+        with open(cfg["lr_meta"]) as f:
+            thr = json.load(f)["thresholds"]
+        self.assertEqual(cfg["recommend_threshold"], thr["recommend_threshold"])
+
+    def test_preset_keeps_what_the_user_set(self):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "c.json")
+        with open(p, "w") as f:
+            json.dump({"models": "v3-public", "recommend_threshold": 0.99}, f)
+        cfg = config_mod.load_config(p)
+        self.assertEqual(cfg["recommend_threshold"], 0.99)
+
+    def test_unknown_preset_refused(self):
+        with self.assertRaises(ValueError):
+            config_mod.load_config(None, {"models": "v9"})
+
+    def test_shipped_v3_public_model_loads_and_ranks(self):
+        import scoring
+        cfg = config_mod.load_config(None, {"models": "v3-public"})
+        s = scoring.Scorer(cfg["onnx_model"], cfg["lr_coef"], cfg["lr_meta"])
+        self.assertEqual(s.backend, "lr")
+        self.assertLess(s.score_one("wikipedia.org")["dga"], 0.5)
+        self.assertGreater(s.score_one("kjqwehdzxklqwpe.biz")["dga"], cfg["recommend_threshold"])
