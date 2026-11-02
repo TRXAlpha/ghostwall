@@ -73,7 +73,12 @@ echo "== ghost-flow on queue 100"
 ex 'mkdir -p /var/lib/ghostwall /etc/ghostwall; : > /var/lib/ghostwall/resolved_ips.jsonl
 echo "[{\"name\": \"camera\", \"ip\": \"10.9.0.2\"}]" > /etc/ghostwall/devices.json
 python3 -c "import json; c = json.load(open(\"/opt/ghostwall/agents/ghost_flow/ghost_flow.example.json\")); c[\"capture_enabled\"] = False; json.dump(c, open(\"/etc/ghostwall/ghost_flow.json\", \"w\"))"
-cd /opt/ghostwall/agents/ghost_flow && (/opt/ghostwall/.venv/bin/python app.py --config /etc/ghostwall/ghost_flow.json > /tmp/flow.log 2>&1 &)
+# as ghostwall-flow.service runs it: the ghostwall user with CAP_NET_ADMIN only
+useradd --system --no-create-home ghostwall 2>/dev/null || true
+chown -R ghostwall:ghostwall /var/lib/ghostwall
+cd /opt/ghostwall/agents/ghost_flow && (setpriv --reuid=ghostwall --regid=ghostwall --init-groups \
+   --inh-caps=-all,+net_admin --ambient-caps=-all,+net_admin --bounding-set=-all,+net_admin \
+   /opt/ghostwall/.venv/bin/python app.py --config /etc/ghostwall/ghost_flow.json > /tmp/flow.log 2>&1 &)
 sleep 2'
 [ "$(get http://93.184.215.14/)" = 200 ] || fail "raw-IP traffic blocked through the queue"
 [ "$(get http://1.1.1.1:443/)" = 200 ] || fail "DoH-IP traffic blocked through the queue"
@@ -81,6 +86,7 @@ sleep 1
 ev=$(ex 'cat /var/lib/ghostwall/events.jsonl')
 echo "$ev" | grep -q '"rule":"raw_ip".*"device":"camera"\|"device":"camera".*"rule":"raw_ip"' || fail "no raw_ip event"
 echo "$ev" | grep -q '"rule":"doh_ip"' || fail "no doh_ip event"
+[ "$(ex 'stat -c %U /var/lib/ghostwall/events.jsonl')" = ghostwall ] || fail "events.jsonl not owned by ghostwall"
 ex 'for p in $(pgrep -f "[a]pp.py --config /etc/ghostwall/ghost_flow.json"); do kill $p; done; sleep 1'
 [ "$(get http://93.184.215.14/)" = 200 ] || fail "with ghost-flow stopped, traffic must still flow (bypass)"
 

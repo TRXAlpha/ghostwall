@@ -212,8 +212,10 @@ whole network; read it fully first, and keep the router's admin page open.
    gateway and DNS.
 5. **ghost-flow:** `sudo apt install libnetfilter-queue-dev build-essential python3-dev`,
    `sudo /opt/ghostwall/.venv/bin/pip install --require-hashes -r /opt/ghostwall/requirements-gateway.lock`,
-   copy `agents/ghost_flow/ghost_flow.example.json` to `ghost_flow.json`, install and start
-   `ghostwall-flow.service`, then add the queue rule:
+   `sudo install -m 640 -g ghostwall /opt/ghostwall/agents/ghost_flow/ghost_flow.example.json /etc/ghostwall/ghost_flow.json`,
+   `sudo install -m 644 /opt/ghostwall/agents/ghost_flow/ghostwall-flow.service /etc/systemd/system/`,
+   `sudo systemctl enable --now ghostwall-flow` (it runs as `ghostwall` with `CAP_NET_ADMIN` only),
+   then add the queue rule:
    `sudo nft add rule inet ghostwall forward iifname "eth0" ct state new meta l4proto '{ tcp, udp }' th dport != 53 queue num 100 bypass`.
    (Versions before this one documented `ct original proto-dst != 53`, which nft rejects.)
    `bypass` means traffic keeps flowing whenever ghost-flow isn't running.
