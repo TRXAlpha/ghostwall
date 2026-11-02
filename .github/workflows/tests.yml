@@ -73,6 +73,7 @@ jobs:
           PASS=$(sudo cat data/web_password)
           test "$(curl -sk -o /dev/null -w '%{http_code}' -u "ghostwall:$PASS" https://127.0.0.1:8088/api/events)" = 200
           if docker logs gw 2>&1 | grep -qF "$PASS"; then echo "password leaked into the logs"; exit 1; fi
+          docker exec gw ghostwall status | grep -q "1 queries"
       - name: adguard-tune sidecar (no network, as in compose.yaml) lowers AdGuard's buffer and keeps the file's owner
         run: |
           mkdir -p conf

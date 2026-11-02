@@ -16,7 +16,7 @@
 
 install.sh puts this on the PATH; actions need sudo (the control-API token and the
 alert log are readable only by the ghostwall user). In Docker:
-    docker compose exec ghostwall python agents/ghost_dns/ghostwall_cli.py status
+    docker compose exec ghostwall ghostwall status
 """
 from __future__ import annotations
 

@@ -14,7 +14,9 @@ COPY ghostwall/models ghostwall/models
 COPY agents/ghost_dns agents/ghost_dns
 COPY agents/web_ui agents/web_ui
 COPY docker/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh && rm -rf agents/*/tests
+RUN chmod +x /entrypoint.sh && rm -rf agents/*/tests \
+ && printf '#!/bin/sh\nexec python /opt/ghostwall/agents/ghost_dns/ghostwall_cli.py "$@"\n' > /usr/local/bin/ghostwall \
+ && chmod 755 /usr/local/bin/ghostwall
 
 # ORT_DISABLE_TELEMETRY: onnxruntime sends usage telemetry to Microsoft unless told not to.
 # GHOSTWALL_DATA/ETC: where `python agents/ghost_dns/ghostwall_cli.py` finds things here.

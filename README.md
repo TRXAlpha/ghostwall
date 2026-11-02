@@ -147,7 +147,8 @@ docker compose up -d --build
    then `docker compose restart adguardhome` once, so alerts arrive in seconds.
 3. Point your router's DNS (or one test device) at the host.
 4. Dashboard: `https://<host>:8088` (self-signed: the browser warns once), user `ghostwall`, password from
-   `docker compose exec ghostwall cat /data/web_password`.
+   `docker compose exec ghostwall ghostwall password`. The same `ghostwall` commands work
+   there (`docker compose exec ghostwall ghostwall status`, `... alerts`, `... name`).
 
 The Ghostwall container keeps one capability (`DAC_OVERRIDE`, to read AdGuard's log), a
 read-only filesystem and `no-new-privileges`, and sees AdGuard's files read-only. Only the
@@ -311,6 +312,8 @@ trm/                neural-net training code
 ```
 
 ## Contributing
+
+What changed between versions: [CHANGELOG.md](CHANGELOG.md).
 
 Bug reports with your setup (DNS server, how it is installed, OS, CPU) are the most
 useful thing right now. A false positive? Include the domain and the alert line. Pull
