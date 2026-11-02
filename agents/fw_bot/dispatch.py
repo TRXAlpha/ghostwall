@@ -93,7 +93,8 @@ def format_log(events: list[dict]) -> str:
     for e in events:
         score = (e.get("scores") or {}).get("dga")
         s = f" {score:.2f}" if isinstance(score, (int, float)) else ""
-        lines.append(f"{_ts(e)}  {e.get('device', '?')}  {e.get('domain', '?')}\n"
+        dom = "(domain hidden)" if alerts.minimal() else e.get("domain", "?")
+        lines.append(f"{_ts(e)}  {e.get('device', '?')}  {dom}\n"
                      f"    {e.get('action', '?')} · {e.get('rule', '?')}{s} · {e.get('severity', '?')}")
     return "\n".join(lines)
 
@@ -121,7 +122,7 @@ def format_summary(events: list[dict], now: datetime | None = None) -> str:
         f"actions: {', '.join(f'{k} {v}' for k, v in actions.items())}\n"
         f"rules: {top(rules)}\n"
         f"devices: {top(devices)}\n"
-        f"domains: {top(domains)}"
+        f"domains: {'(hidden: privacy mode)' if alerts.minimal() else top(domains)}"
     )
 
 

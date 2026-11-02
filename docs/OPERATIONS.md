@@ -94,7 +94,9 @@ files below with the right permissions and starts the bot. By hand:
    sudo systemctl enable --now ghostwall-fw-bot
    ```
 
-Only you can run commands or press alert buttons, and buttons are HMAC-signed.
+Only you can run commands or press alert buttons, and buttons are HMAC-signed. Add
+`FW_BOT_PRIVACY=minimal` to `fw_bot.env` (and restart `ghostwall-fw-bot`) to keep
+domains, IPs and MACs out of every message: Telegram's servers see them all.
 Commands count only in your private chat with the bot: a message must come from your
 id and be sent in that chat, so other members of a group the bot is in can't use it. An alert starts with `ALERT · <device>` and offers **Trust domain** and
 **Details**; only a real block (inline mode, learning off) says `BLOCKED` and offers
@@ -127,8 +129,14 @@ a generated password (`GHOSTWALL_WEB_PASSWORD`, user `ghostwall`); both are in
   (`tailscale ip -4`).
 - **Only from the box itself:** `127.0.0.1`, then `ssh -L 8088:127.0.0.1:8088 <box>`.
   Loopback is the only bind that may run without a password.
-- It is plain HTTP: fine on a home LAN or tailnet, never expose it to the internet.
-  Actions are accepted only as JSON from the dashboard's own origin.
+- It is HTTPS with a self-signed certificate in `/etc/ghostwall/tls/` (made by the
+  installer; plain `http://` on the same port redirects). The installer prints the
+  certificate's SHA-256 fingerprint; compare it with what the browser shows the first
+  time. Your own certificate: point `GHOSTWALL_WEB_TLS_CERT` and `GHOSTWALL_WEB_TLS_KEY`
+  at it. `GHOSTWALL_WEB_TLS=off` (then re-run the installer, or remove those two lines)
+  goes back to plain HTTP.
+- Fine on a home LAN or tailnet; never expose it to the internet. Actions are accepted
+  only as JSON from the dashboard's own origin.
 
 ## Going inline (Ghostwall answers DNS)
 

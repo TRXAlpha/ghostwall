@@ -62,6 +62,21 @@ else
   echo "[ghostwall] dashboard on port 8088, user ghostwall, password from GHOSTWALL_WEB_PASSWORD"
 fi
 
+# HTTPS with a self-signed certificate made on first start (GHOSTWALL_WEB_TLS=off: HTTP).
+if [ "${GHOSTWALL_WEB_TLS:-on}" != off ] && [ -z "${GHOSTWALL_WEB_TLS_CERT:-}" ]; then
+  if [ ! -s "$D/tls/cert.pem" ] && command -v openssl >/dev/null; then
+    mkdir -p "$D/tls"
+    (umask 077; openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=Ghostwall" \
+       -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
+       -keyout "$D/tls/key.pem" -out "$D/tls/cert.pem" >/dev/null 2>&1) || rm -f "$D/tls/cert.pem"
+  fi
+  if [ -s "$D/tls/cert.pem" ]; then
+    export GHOSTWALL_WEB_TLS_CERT="$D/tls/cert.pem" GHOSTWALL_WEB_TLS_KEY="$D/tls/key.pem"
+    echo "[ghostwall] dashboard is HTTPS (self-signed; SHA-256" \
+         "$(openssl x509 -noout -fingerprint -sha256 -in "$D/tls/cert.pem" | cut -d= -f2))"
+  fi
+fi
+
 # Config lives in /data so edits (thresholds, learning) survive image updates; the
 # container-specific keys are rewritten on every start.
 python - "$D" "$QUERYLOG" "$FORMAT" <<'PY'

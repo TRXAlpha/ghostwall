@@ -126,5 +126,5 @@ overrides any of them. The most useful keys:
 | `dga_eval/public_bench.py --data DIR --download` | public DGA benchmark (pinned data, ~2 h on 4 cores; needs scikit-learn, torch, onnx) → `results_public.md` |
 | `fw_bot/fw_bot.py --owner-file FILE --follow EVENTS [--commands]` | Telegram alerts, optionally commands |
 | `fw_bot/validate_events.py FILE` | validate an events file |
-| `web_ui/app.py --bind ADDR --port 8088 [--control-token-file FILE]` | dashboard (the token file defaults to `/var/lib/ghostwall/control_token`) |
+| `web_ui/app.py --bind ADDR --port 8088 [--tls-cert F --tls-key F] [--control-token-file FILE]` | dashboard (the token file defaults to `/var/lib/ghostwall/control_token`) |
 | `netconf/gen.py` | render gateway-mode configs into `netconf/out/` |

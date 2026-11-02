@@ -129,7 +129,7 @@ docker compose up -d --build
 2. Wait for `docker compose logs adguard-tune` to say it set the buffer (about 10 s),
    then `docker compose restart adguardhome` once, so alerts arrive in seconds.
 3. Point your router's DNS (or one test device) at the host.
-4. Dashboard: `http://<host>:8088`, user `ghostwall`, password from
+4. Dashboard: `https://<host>:8088` (self-signed: the browser warns once), user `ghostwall`, password from
    `docker compose exec ghostwall cat /data/web_password`.
 
 The Ghostwall container keeps one capability (`DAC_OVERRIDE`, to read AdGuard's log), a
@@ -187,7 +187,7 @@ sudo ghostwall telegram           # alerts on your phone: paste a bot token, mes
 sudo ghostwall allow example.com  # stop alerts for a domain you trust
 ```
 
-- **Dashboard:** `http://<box>:8088`, user `ghostwall`, password from
+- **Dashboard:** `https://<box>:8088` (plain `http://` redirects there), user `ghostwall`, password from
   `sudo ghostwall password`. To keep it to your tailnet or to the box itself, see
   [Dashboard access](docs/OPERATIONS.md#dashboard-access).
 - **Name your devices:** copy `agents/netconf/devices.example.json` to
@@ -250,11 +250,14 @@ on the missing model's empty score.)
   traffic). In the default setup the dashboard doesn't offer them and the API refuses.
 - **`ghost-flow`** (raw-IP, beacon and JA4 connection checks) and **`capture`**
   (pcap freeze on alert) need gateway mode too. They are tested on recorded traffic only.
-- **The dashboard is plain HTTP with a password**, like AdGuard's and Pi-hole's own.
-  Fine on a home LAN or a tailnet; never expose it to the internet. The control API
+- **The dashboard is HTTPS with a self-signed certificate** (the installer makes it and
+  prints its fingerprint; browsers warn once) and a password. Fine on a home LAN or a
+  tailnet; never expose it to the internet. The control API
   listens on loopback only, refuses requests from web pages, and takes actions only with
   a token that only the `ghostwall` user can read.
-- **Telegram alerts go through Telegram's servers.** They name the device and domain.
+- **Telegram alerts go through Telegram's servers.** They name the device and domain,
+  unless you set `FW_BOT_PRIVACY=minimal` in `/etc/ghostwall/fw_bot.env`: then they say
+  only which device and what kind of alert, and the rest stays on the dashboard.
 
 ## Tests
 

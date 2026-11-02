@@ -161,6 +161,28 @@ if ! grep -q '^GHOSTWALL_WEB_PASSWORD=.' "$ENVF"; then
   setenv GHOSTWALL_WEB_PASSWORD "$(python3 -c 'import secrets; print(secrets.token_urlsafe(12))')"
   [ "$FRESH" = 1 ] && setenv GHOSTWALL_WEB_BIND 0.0.0.0
 fi
+# HTTPS for the dashboard, so its password doesn't cross the network readable. The
+# certificate is self-signed: browsers warn once; the fingerprint printed at the end
+# lets you check it's really this box. GHOSTWALL_WEB_TLS=off in ghostwall.env keeps HTTP.
+TLS=/etc/ghostwall/tls
+if ! grep -q '^GHOSTWALL_WEB_TLS=off' "$ENVF" && command -v openssl >/dev/null \
+   && { [ ! -s "$TLS/cert.pem" ] || [ ! -s "$TLS/key.pem" ]; }; then
+  install -d -m 750 -o root -g ghostwall "$TLS"
+  HN=$(hostname)
+  SAN="DNS:$HN,DNS:$HN.local,DNS:localhost,IP:127.0.0.1"
+  for ip in $(hostname -I 2>/dev/null); do SAN="$SAN,IP:$ip"; done
+  if (umask 077; openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=$HN (Ghostwall)" \
+        -addext "subjectAltName=$SAN" -keyout "$TLS/key.pem" -out "$TLS/cert.pem" >/dev/null 2>&1); then
+    chown root:ghostwall "$TLS/key.pem" "$TLS/cert.pem"
+    chmod 640 "$TLS/key.pem"; chmod 644 "$TLS/cert.pem"
+  else
+    say "   could not make a TLS certificate; the dashboard stays on plain HTTP"
+  fi
+fi
+if [ -s "$TLS/cert.pem" ] && [ -s "$TLS/key.pem" ] && ! grep -q '^GHOSTWALL_WEB_TLS=off' "$ENVF"; then
+  setenv GHOSTWALL_WEB_TLS_CERT "$TLS/cert.pem"
+  setenv GHOSTWALL_WEB_TLS_KEY "$TLS/key.pem"
+fi
 chown root:ghostwall "$ENVF"
 chmod 640 "$ENVF"
 . "$ENVF"
@@ -200,12 +222,19 @@ if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active
   say "   ufw is on; to reach the dashboard from your network: sudo ufw allow 8088/tcp"
 fi
 
+SCHEME=http FPR=""
+if [ -n "${GHOSTWALL_WEB_TLS_CERT:-}" ] && [ -s "$GHOSTWALL_WEB_TLS_CERT" ]; then
+  SCHEME=https
+  FPR="
+              The browser will warn about the certificate once (it is this box's own).
+              Its SHA-256 fingerprint: $(openssl x509 -noout -fingerprint -sha256 -in "$GHOSTWALL_WEB_TLS_CERT" | cut -d= -f2)"
+fi
 cat <<EOF
 
 Installed. Ghostwall is watching your DNS server's query log; it cannot block anything.
 
-  Dashboard:  http://$HOST:8088   user: ghostwall   password: ${GHOSTWALL_WEB_PASSWORD:-(none, loopback only)}
-              (the password is GHOSTWALL_WEB_PASSWORD in $ENVF)
+  Dashboard:  $SCHEME://$HOST:8088   user: ghostwall   password: ${GHOSTWALL_WEB_PASSWORD:-(none, loopback only)}
+              (again later: sudo ghostwall password)$FPR
   Alerts:     sudo tail -f /var/lib/ghostwall/events.jsonl
   Health:     curl -s http://127.0.0.1:5380/status   ("stats.queries" should keep going up)
 

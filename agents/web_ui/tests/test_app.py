@@ -187,3 +187,57 @@ class ControlTokenTests(unittest.TestCase):
             self.assertEqual(seen, ["Bearer tok123"])
         finally:
             srv.shutdown(); ctl.shutdown()
+
+
+@unittest.skipUnless(__import__("shutil").which("openssl"), "needs the openssl command")
+class TlsTests(unittest.TestCase):
+    """HTTPS on the dashboard port, and plain HTTP there redirected to it."""
+
+    @classmethod
+    def setUpClass(cls):
+        import subprocess
+        d = tempfile.mkdtemp()
+        cls.cert, cls.key = os.path.join(d, "cert.pem"), os.path.join(d, "key.pem")
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
+                        "-subj", "/CN=localhost", "-keyout", cls.key, "-out", cls.cert],
+                       check=True, capture_output=True)
+        cls.srv = app.DashboardServer(("127.0.0.1", 0), app.make_handler(
+            "http://127.0.0.1:9", os.path.join(d, "events.jsonl"), "pw"))
+        cls.srv.tls = app.tls_context(cls.cert, cls.key)
+        cls.port = cls.srv.server_address[1]
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+
+    def test_https_works_and_still_needs_the_password(self):
+        import ssl
+        ctx = ssl.create_default_context(cafile=self.cert)
+        ctx.check_hostname = False
+        c = http.client.HTTPSConnection("127.0.0.1", self.port, timeout=5, context=ctx)
+        c.request("GET", "/api/status")
+        r = c.getresponse()
+        r.read()
+        self.assertEqual(r.status, 401)
+        c.close()
+
+    def test_plain_http_is_redirected(self):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request("GET", "/api/events?limit=5", headers={"Host": f"gw.example:{self.port}"})
+        r = c.getresponse()
+        r.read()
+        self.assertEqual(r.status, 301)
+        self.assertEqual(r.getheader("Location"), f"https://gw.example:{self.port}/api/events?limit=5")
+        c.close()
+
+    def test_garbage_host_is_not_reflected(self):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.putrequest("GET", "/", skip_host=True)
+        c.putheader("Host", "evil.example/\\r\\nX: y")
+        c.endheaders()
+        r = c.getresponse()
+        r.read()
+        self.assertEqual(r.getheader("Location"), "https://localhost/")
+        c.close()

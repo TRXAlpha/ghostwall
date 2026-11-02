@@ -27,6 +27,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import socket
+import ssl
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -334,12 +336,73 @@ def make_handler(control_base: str, events_path: str, password: str | None = Non
     return Handler
 
 
+class RedirectToHttps(BaseHTTPRequestHandler):
+    """Plain HTTP on the HTTPS port: send the browser to https:// (old bookmarks)."""
+
+    def _go(self):
+        host = self.headers.get("Host") or ""
+        if not re.fullmatch(r"[A-Za-z0-9.\-\[\]:]{1,300}", host):
+            host = "localhost"
+        self.send_response(301)
+        self.send_header("Location", f"https://{host}{self.path if self.path.startswith('/') else '/'}")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    do_GET = do_POST = do_HEAD = _go
+
+    def log_message(self, fmt, *args):
+        pass
+
+
+class DashboardServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer that speaks HTTPS when given a TLS context, and answers plain
+    HTTP on the same port with a redirect. The TLS handshake happens in the request's
+    own thread, so a slow client can't stall the others."""
+
+    daemon_threads = True
+    tls: ssl.SSLContext | None = None
+
+    def finish_request(self, request, client_address):
+        if self.tls is None:
+            return super().finish_request(request, client_address)
+        request.settimeout(10)
+        try:
+            first = request.recv(1, socket.MSG_PEEK)
+        except OSError:
+            return
+        if first != b"\x16":   # not a TLS handshake: plain HTTP
+            RedirectToHttps(request, client_address, self)
+            return
+        try:
+            conn = self.tls.wrap_socket(request, server_side=True)
+        except (ssl.SSLError, OSError):
+            return
+        try:
+            self.RequestHandlerClass(conn, client_address, self)
+        finally:
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+
+def tls_context(cert: str, key: str) -> ssl.SSLContext:
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    ctx.load_cert_chain(cert, key)
+    return ctx
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Ghostwall web UI (password: GHOSTWALL_WEB_PASSWORD env var)")
     ap.add_argument("--bind", default="127.0.0.1", help="bind address; anything but loopback needs a password")
     ap.add_argument("--port", type=int, default=8088)
     ap.add_argument("--control", default=DEFAULT_CONTROL)
     ap.add_argument("--events", default=DEFAULT_EVENTS)
+    ap.add_argument("--tls-cert", default=os.environ.get("GHOSTWALL_WEB_TLS_CERT") or None,
+                    help="serve HTTPS with this certificate (env GHOSTWALL_WEB_TLS_CERT)")
+    ap.add_argument("--tls-key", default=os.environ.get("GHOSTWALL_WEB_TLS_KEY") or None,
+                    help="its private key (env GHOSTWALL_WEB_TLS_KEY)")
     ap.add_argument("--control-token-file", default=None,
                     help="ghost-dns control-API token (default: /var/lib/ghostwall/control_token if present, "
                          "else next to ghost_dns/state.json; env GHOSTWALL_CONTROL_TOKEN_FILE)")
@@ -350,10 +413,16 @@ def main(argv=None):
         print(f"[web-ui] refusing to listen on {args.bind} without a password: set GHOSTWALL_WEB_PASSWORD "
               "(install.sh puts one in /etc/ghostwall/ghostwall.env), or bind 127.0.0.1", file=sys.stderr, flush=True)
         return 2
-    srv = ThreadingHTTPServer((args.bind, args.port), make_handler(args.control, args.events, password,
-                                                                   args.control_token_file or default_token_path()))
-    srv.daemon_threads = True
-    print(f"[web-ui] http://{args.bind}:{args.port}  password={'on' if password else 'off'}  "
+    srv = DashboardServer((args.bind, args.port), make_handler(args.control, args.events, password,
+                                                               args.control_token_file or default_token_path()))
+    scheme = "http"
+    if args.tls_cert and args.tls_key:
+        srv.tls = tls_context(args.tls_cert, args.tls_key)
+        scheme = "https"
+    elif not is_loopback(args.bind):
+        print("[web-ui] note: plain HTTP; the password crosses your network readable "
+              "(GHOSTWALL_WEB_TLS_CERT/KEY turn on HTTPS)", file=sys.stderr, flush=True)
+    print(f"[web-ui] {scheme}://{args.bind}:{args.port}  password={'on' if password else 'off'}  "
           f"control={args.control}  events={args.events}", flush=True)
     try:
         srv.serve_forever()

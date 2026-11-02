@@ -1,6 +1,7 @@
 """Parsing and replies for /fw commands. Stdlib only."""
 from __future__ import annotations
 
+from alerts import minimal
 from control_client import ControlClient, ControlError
 
 
@@ -26,12 +27,19 @@ def _fmt_status(res: dict) -> str:
     for d in res.get("devices", []):
         iso = " [ISOLATED]" if d.get("isolated") else ""
         blocked = f", blocked: {', '.join(d.get('blocked_domains', []))}" if d.get("blocked_domains") else ""
+        if minimal():
+            lines.append(f"- {d.get('name', '?')}{iso}")
+            continue
         lines.append(f"- {d.get('name', '?')} ({d.get('ip', '?')}){iso}{blocked}")
     return "\n".join(lines)
 
 
 def _fmt_device(res: dict) -> str:
     iso = "yes" if res.get("isolated") else "no"
+    if minimal():
+        return (f"{res.get('name', '?')}:\nisolated: {iso}\n"
+                f"last query: {res.get('last_seen') or 'none since ghost-dns started'}\n"
+                "privacy mode: IP, MAC and domains are on the dashboard only")
     blocked = ", ".join(res.get("blocked_domains", [])) or "none"
     return (
         f"{res.get('name', '?')}:\n"
