@@ -80,6 +80,11 @@ if [ "$n" = "ERR" ] || [ "$n" -lt 1 ]; then
 else
   echo "   DNS answers on :53 ($n records for google.com)"
 fi
+if [ "$SOURCE" = adguard ] && [ -f "$YAML" ]; then
+  "$PY" /opt/ghostwall/agents/ghost_dns/adguard_conf.py "$YAML" --check | while IFS= read -r p; do
+    [ -n "$p" ] && echo "   WARNING: $p" >&2
+  done
+fi
 if [ ! -f "$QUERYLOG" ]; then
   if [ "$SOURCE" = pihole ]; then
     echo "   WARNING: $QUERYLOG not found yet. Check PIHOLE_LOG in /etc/ghostwall/ghostwall.env." >&2

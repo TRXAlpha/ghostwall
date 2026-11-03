@@ -57,6 +57,9 @@ Your settings, alerts, allowlist and thresholds are kept.
   link shorteners and apps as a whole (on 2026-11-03: `hubs.ly`, `dub.sh`, `sider.ai`, ...), so that
   meant permanent false alarms. Trusting the listed name now works; a listed subdomain of a
   trusted name still alerts, and every feed alert says how to trust it.
+- Three AdGuard settings broke Ghostwall without a word: the query log off, kept in memory
+  only (no file), or *Anonymize client IP* on (every device then looked like one). The
+  installer now names each, and ghost-dns warns when client addresses arrive anonymized.
 - Shadow mode skipped the queries written in the last moments before AdGuard rotated its
   query log (or Pi-hole's logrotate truncated `pihole.log`); it reads them from the `.1`
   file first now.

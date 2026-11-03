@@ -68,7 +68,7 @@ while True:
     s.sendto(hdr + q[12:end] + ans, addr)
 PY
 ex 'mkdir -p /opt/AdGuardHome/data
-printf "dns:\n  port: 53\nquerylog:\n  dir_path: \"\"\n  size_memory: 1000\n  enabled: true\n" > /opt/AdGuardHome/AdGuardHome.yaml
+printf "dns:\n  port: 53\n  anonymize_client_ip: true\nquerylog:\n  dir_path: \"\"\n  size_memory: 1000\n  enabled: true\n" > /opt/AdGuardHome/AdGuardHome.yaml
 chmod 600 /opt/AdGuardHome/AdGuardHome.yaml; : > /opt/AdGuardHome/data/querylog.json
 chmod 700 /opt/AdGuardHome/data; chmod 600 /opt/AdGuardHome/data/querylog.json
 printf "[Service]\nExecStart=/usr/bin/python3 /usr/local/bin/fake-adguard\n[Install]\nWantedBy=multi-user.target\n" > /etc/systemd/system/AdGuardHome.service
@@ -96,6 +96,7 @@ echo "== install.sh"
 ex 'cd /home/pi/ghostwall && ./install.sh' > "$WORK/install.log" 2>&1 || { cat "$WORK/install.log"; fail "install.sh exited non-zero"; }
 grep -q "Installed." "$WORK/install.log" || { cat "$WORK/install.log"; fail "no success message"; }
 grep -q "size_memory: 10$" <(ex 'cat /opt/AdGuardHome/AdGuardHome.yaml') || fail "AdGuard buffer not lowered"
+grep -q "WARNING: AdGuard anonymizes client IPs" "$WORK/install.log" || { cat "$WORK/install.log"; fail "anonymized client IPs not reported"; }
 if [ -n "${FROM_REF:-}" ]; then
   echo "== what $FROM_REF left behind survived the upgrade"
   for _ in $(seq 20); do ex 'ghostwall trusted' >/dev/null 2>&1 && break; sleep 1; done

@@ -6,6 +6,8 @@
               memory before writing querylog.json (default 1000), which on a home
               network can delay Ghostwall's alerts by hours.
 --port-back   move `dns.port` from 5300 back to 53 (undoes inline mode).
+--check       print (one per line) any setting that leaves Ghostwall blind or makes every
+              device look the same; changes nothing.
 
 Prints what changed ("port", "flush:<old value>"), or nothing. The file is rewritten
 atomically and only if something changed. AdGuard reads its YAML at startup, so restart
@@ -38,14 +40,41 @@ def edit(text: str, flush: int = 0, port_back: bool = False) -> tuple[str, list[
     return "\n".join(lines), changes
 
 
+def problems(text: str) -> list[str]:
+    """AdGuard settings Ghostwall can't work with, in plain words."""
+    block, found = None, []
+    for line in text.split("\n"):
+        if re.match(r"^\S", line):
+            block = line.rstrip().rstrip(":")
+        m = re.match(r"^  (\w+):\s*(\S+)\s*$", line)
+        if not m:
+            continue
+        key, val = m.group(1), m.group(2).lower()
+        if block == "querylog" and key == "enabled" and val == "false":
+            found.append("AdGuard's query log is off (querylog.enabled: false): Ghostwall sees nothing. "
+                         "Turn it on: Settings > General settings > Logs configuration.")
+        elif block == "querylog" and key == "file_enabled" and val == "false":
+            found.append("AdGuard keeps its query log in memory only (querylog.file_enabled: false): "
+                         "no file is written, so Ghostwall sees nothing. Set it to true.")
+        elif block == "dns" and key == "anonymize_client_ip" and val == "true":
+            found.append("AdGuard anonymizes client IPs (dns.anonymize_client_ip: true): every device "
+                         "then looks like the same one to Ghostwall. Turn it off: Settings > General "
+                         "settings > Logs > Anonymize client IP.")
+    return found
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("yaml")
     ap.add_argument("--flush", type=int, default=0)
     ap.add_argument("--port-back", action="store_true")
+    ap.add_argument("--check", action="store_true")
     a = ap.parse_args(argv)
     with open(a.yaml, encoding="utf-8") as f:
         text = f.read()
+    if a.check:
+        print("\n".join(problems(text)))
+        return 0
     new, changes = edit(text, a.flush, a.port_back)
     if changes:
         fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(a.yaml)), prefix=".AdGuardHome-")

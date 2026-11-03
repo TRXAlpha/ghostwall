@@ -367,6 +367,15 @@ class ShadowTests(Base):
         self._write({"IP": "127.0.0.1", "QH": "q.example", "QT": "A"})
         self.assertEqual(f.poll_once(), 1)
 
+    def test_anonymized_client_ips_are_said_once(self):
+        f = QueryLogFollower(self.r, self.log)
+        self._write({"IP": "192.168.1.0", "QH": "a.example", "QT": "A"},
+                    {"IP": "192.168.1.0", "QH": "b.example", "QT": "A"})
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            f.poll_once()
+        self.assertEqual(err.getvalue().count("Anonymize client IP"), 1)
+
     def test_an_unreadable_log_is_said_once_not_silently_skipped(self):
         import shutil
         f = QueryLogFollower(self.r, self.log)

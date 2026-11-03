@@ -46,7 +46,9 @@ sudo DNS_SOURCE=adguard ADGUARD_YAML=/srv/adguard/conf/AdGuardHome.yaml \
 sudo DNS_SOURCE=pihole PIHOLE_LOG=/srv/pihole/log/pihole.log ./install.sh
 ```
 
-**AdGuard Home:** the query log must be on (Settings → General settings → Query logs).
+**AdGuard Home:** the query log must be on and written to a file, and *Anonymize client IP*
+off (otherwise every device looks like the same one): Settings → General settings → Logs
+configuration. The installer and ghost-dns both warn about each of these.
 AdGuard keeps `querylog.size_memory` queries in memory before writing them (1,000 by
 default), which delayed alerts by hours on a home network. The installer lowers it to
 10 (`ADGUARD_FLUSH_EVERY` in `ghostwall.env`; `0` leaves it alone), keeps a backup of

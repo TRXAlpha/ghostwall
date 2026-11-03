@@ -116,6 +116,7 @@ class QueryLogFollower:
         self.seen = 0
         self.missing = False  # True while the querylog can't be seen; warned once per outage
         self.unreadable = False  # True while it exists but can't be opened (permissions)
+        self.said_anonymized = False
 
     def _read_head(self) -> bytes:
         try:
@@ -213,6 +214,13 @@ class QueryLogFollower:
 
     def _decide(self, q) -> int:
         ip, host, qtype, blocked = q
+        if not self.said_anonymized and self.fmt == "adguard" and str(ip).endswith(".0") and str(ip).count(".") == 3:
+            # AdGuard's "Anonymize client IP" zeroes the last part of every address:
+            # each /24 of devices then looks like one device here.
+            print(f"[ghost-dns:shadow] WARNING client {ip} ends in .0: AdGuard's 'Anonymize client IP' "
+                  "looks on (dns.anonymize_client_ip), so every device looks like the same one. "
+                  "Turn it off: Settings > General settings > Logs configuration", file=sys.stderr, flush=True)
+            self.said_anonymized = True
         try:
             self.resolver.decide(ip, host, qtype, upstream_blocked=blocked)
         except Exception as exc:  # noqa: BLE001 - never die on one bad line

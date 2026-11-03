@@ -98,5 +98,34 @@ class EditTests(unittest.TestCase):
         self.assertEqual(os.listdir(d), ["AdGuardHome.yaml"])  # temp file removed
 
 
+class CheckTests(unittest.TestCase):
+    """Settings that leave Ghostwall blind, or make every device look the same."""
+
+    def test_a_good_config_has_no_problems(self):
+        self.assertEqual(adguard_conf.problems(YAML), [])
+
+    def test_each_problem_is_named(self):
+        bad = (YAML.replace("  enabled: true\n  file_enabled: true", "  enabled: false\n  file_enabled: false")
+                   .replace("  port: 5300\n", "  port: 5300\n  anonymize_client_ip: true\n"))
+        found = " ".join(adguard_conf.problems(bad))
+        for words in ("query log is off", "in memory only", "anonymizes client IPs"):
+            self.assertIn(words, found)
+
+    def test_same_keys_elsewhere_are_not_mistaken(self):
+        other = YAML.replace("statistics:\n  interval: 24h", "statistics:\n  enabled: false\n  interval: 24h")
+        self.assertEqual(adguard_conf.problems(other), [])
+
+    def test_check_flag_changes_nothing(self):
+        p = os.path.join(tempfile.mkdtemp(), "AdGuardHome.yaml")
+        with open(p, "w") as f:
+            f.write(YAML.replace("  enabled: true\n", "  enabled: false\n", 1))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(adguard_conf.main([p, "--check"]), 0)
+        self.assertIn("query log is off", out.getvalue())
+        with open(p) as f:
+            self.assertIn("  enabled: false", f.read())
+
+
 if __name__ == "__main__":
     unittest.main()
