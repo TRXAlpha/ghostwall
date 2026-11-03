@@ -251,6 +251,20 @@ class ResolverWiringTests(unittest.TestCase):
         self.assertEqual(r.decide("192.168.1.30", "bad.cdn.example", "A").reason, "threat_feed")
         self.assertEqual(r.decide("192.168.1.30", "x.partner.test", "A").action, "allow")
 
+    def test_trusting_the_listed_name_itself_silences_it(self):
+        # The list names some link shorteners and apps as a whole. `ghostwall allow` on
+        # exactly that name must work (it used to say "no more alerts" and change nothing),
+        # also when blocking; a listed child of it still alerts.
+        r = self.build(["short.example", "bad.short.example"], allow=["short.example"], learning=False)
+        self.state.set_learning(False)
+        self.assertEqual(r.decide("192.168.1.30", "short.example", "A").action, "allow")
+        self.assertEqual(r.decide("192.168.1.30", "x.short.example", "A").action, "allow")
+        self.assertEqual(r.decide("192.168.1.30", "bad.short.example", "A").action, "block")
+
+    def test_feed_alert_says_how_to_trust_it(self):
+        r = self.build(["evil.example"])
+        self.assertIn("sudo ghostwall allow evil.example", " ".join(r.decide("192.168.1.30", "x.evil.example", "A").event["reasons"]))
+
     def test_doh_bypass_alert(self):
         r = self.build()
         d = r.decide("192.168.1.30", "dns.google", "A")

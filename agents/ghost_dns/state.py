@@ -193,6 +193,11 @@ class GhostState:
         with self._lock:
             return domain in self.allowlist or registrable_part(domain) in self.allowlist
 
+    def trusts(self, domain: str) -> bool:
+        """True if exactly this name was trusted (not only a parent of it)."""
+        with self._lock:
+            return domain in self.allowlist
+
     def is_blocked(self, domain: str) -> bool:
         with self._lock:
             return domain in self.blocklist or registrable_part(domain) in self.blocklist

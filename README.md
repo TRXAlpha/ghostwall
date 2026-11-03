@@ -60,7 +60,7 @@ Keep them. Ghostwall runs on top and covers what a blocklist can't:
 
 | Rule | Meaning | Severity |
 |---|---|---|
-| `threat_feed` | the name is on the phishing list ([Phishing Army](https://phishing.army), ~150k domains, refreshed daily) | high |
+| `threat_feed` | the name is on the phishing list ([Phishing Army](https://phishing.army), ~150k domains, refreshed daily). It lists some link shorteners and apps as a whole, because phishing runs through them: if one you use alerts, `sudo ghostwall allow <name>` (deliberately no one-tap Trust for these) | high |
 | `dga_burst` | one device looked up 5+ different random-looking domains within 10 minutes | high |
 | `dga_high` / `dga_suspect` | a single very random-looking name that is new to your network | high / warn |
 | `dga_corroborated` | a fairly random name on a rarely-legitimate TLD (`.top`, `.xyz`, ...) | warn |

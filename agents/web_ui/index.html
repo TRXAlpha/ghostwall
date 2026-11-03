@@ -184,7 +184,8 @@ const RULES = {
   abused_service: "started using a service malware favours", doh_ip: "connected to a DNS-over-HTTPS server directly",
   blocklist: "on your blocklist", raw_ip: "connected to a raw IP", beacon: "connects on a fixed timer",
 };
-// No Trust button: a feed hit stays flagged anyway, and a burst is many different names.
+// No Trust button: a phishing-list hit is trusted with a typed `ghostwall allow` (its alert
+// says so), not one click; a burst is many different names.
 const NO_TRUST = new Set(["threat_feed", "dga_burst"]);
 let cur = { learning: null, lockdown: null };
 

@@ -102,13 +102,16 @@ class Resolver:
             self.current_ip[dev.name] = client_ip
 
         # Evidence that is checked BEFORE the allowlist: a known-bad host (an exact
-        # feed match wins even over a trusted parent domain) and DoH bypass.
+        # feed match wins even over a trusted parent domain) and DoH bypass. Trusting the
+        # listed name itself does count: the list names some shorteners and apps as a
+        # whole (phishing runs through them), and you must be able to say "not for me".
         feed = self.det.threat_feed.match(domain, now)
-        if feed and (feed[1] or not self.state.is_allowed(domain)):
+        if feed and not self.state.trusts(feed[0]) and (feed[1] or not self.state.is_allowed(domain)):
             listed, exact = feed
             enforce = (not self.state.learning) and not self.shadow
             why = [f"{listed} is on the threat feed"
-                   + ("" if exact else f" (parent of {domain})")]
+                   + ("" if exact else f" (parent of {domain})"),
+                   f"a service you know? sudo ghostwall allow {listed}"]
             if not enforce:
                 why.append("not blocked (" + ("shadow mode" if self.shadow else "learning mode") + ")")
             evt = self._event(dev, domain, rule="threat_feed",

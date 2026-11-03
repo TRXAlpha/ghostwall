@@ -39,6 +39,11 @@ Your settings, alerts, allowlist and thresholds are kept.
   query alerted again; it now trusts the zone (the event's new `trust` field). A
   `dga_burst` alert no longer offers Trust at all: it is many different names, and
   trusting the one shown changed nothing. `ghostwall alerts` prints local time, not UTC.
+- A name on the phishing list could not be trusted: `ghostwall allow` said "no more alerts"
+  and the next lookup alerted again (in inline mode: stayed blocked). The list names some
+  link shorteners and apps as a whole (on 2026-11-03: `hubs.ly`, `dub.sh`, `sider.ai`, ...), so that
+  meant permanent false alarms. Trusting the listed name now works; a listed subdomain of a
+  trusted name still alerts, and every feed alert says how to trust it.
 - Shadow mode skipped the queries written in the last moments before AdGuard rotated its
   query log (or Pi-hole's logrotate truncated `pihole.log`); it reads them from the `.1`
   file first now.

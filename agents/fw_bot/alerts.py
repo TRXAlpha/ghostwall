@@ -91,7 +91,8 @@ def inline_keyboard(event: dict, secret: bytes) -> list[list[dict]]:
         }
 
     if not is_block(event):
-        # On the phishing list: trusting it would not stick. A burst is many different
+        # On the phishing list: trusting one takes a typed `ghostwall allow` (the alert
+        # says so), not one tap on a phone. A burst is many different
         # random names: trusting the one in the alert would change nothing.
         if event.get("rule") in ("threat_feed", "dga_burst"):
             return [[btn("Details", "details")]]
