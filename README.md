@@ -30,6 +30,11 @@ of those too).
 > blocks) passes an end-to-end test in CI (a systemd container with a stand-in AdGuard:
 > forwarding, sinkholing, SERVFAIL when the upstream dies, and the way back to shadow
 > mode), but is not proven on a real network. See [Limits](#limits).
+>
+> **Current release: v0.3.0-beta.1** (HTTPS dashboard, a token for the control API, two new
+> detectors, names that follow devices, Telegram alerts that survive outages, Docker
+> without capabilities): [CHANGELOG](CHANGELOG.md). Already installed? `git pull && sudo
+> ./install.sh` upgrades and keeps your settings, alerts, trusted domains and names.
 
 **Try it** on the box that runs AdGuard Home or Pi-hole:
 
