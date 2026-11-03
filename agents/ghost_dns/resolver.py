@@ -21,6 +21,7 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import os
+import queue
 import socket
 import threading
 import time
@@ -72,6 +73,8 @@ class Resolver:
         self._primary_down_until = 0.0   # monotonic; skip a dead primary upstream until then
         self._stop = threading.Event()
         self._socks: list = []
+        self._later: queue.Queue | None = None   # inline + learning: scored after the answer
+        self._later_lock = threading.Lock()
         # Shadow mode: scoring a log of queries someone else already answered.
         # Nothing here can block, so decisions are only ever recommendations.
         self.shadow = bool(cfg.get("shadow", False))
@@ -313,13 +316,16 @@ class Resolver:
             up = self._forward(packet, tcp)
             return up if up is not None else packet
         self._log_query(client_ip, q)
-        try:
-            decision = self.decide(client_ip, q.name, q.qtype_name)
-        except Exception as exc:  # noqa: BLE001
-            # FAIL OPEN: a bug in scoring/state must never take DNS down.
-            self.stats["failopen"] += 1
-            print(f"[ghost-dns] decide() failed for {q.name}: {exc!r}; forwarding", file=sys.stderr, flush=True)
-            decision = Decision("allow", "failopen")
+        if self._score_after_answer(client_ip, q):
+            decision = Decision("allow", "scored after the answer")
+        else:
+            try:
+                decision = self.decide(client_ip, q.name, q.qtype_name)
+            except Exception as exc:  # noqa: BLE001
+                # FAIL OPEN: a bug in scoring/state must never take DNS down.
+                self.stats["failopen"] += 1
+                print(f"[ghost-dns] decide() failed for {q.name}: {exc!r}; forwarding", file=sys.stderr, flush=True)
+                decision = Decision("allow", "failopen")
         if decision.action == "block":
             if self.cfg.get("block_response") == "nxdomain":
                 return dnsmsg.build_nxdomain(packet, q.end)
@@ -332,6 +338,43 @@ class Resolver:
         self.stats["forwarded"] += 1
         self._record_resolved(client_ip, q.name, up)
         return up
+
+    def _score_after_answer(self, client_ip: str, q) -> bool:
+        """Learning mode (alerts only) can block nothing but names on the confirmed
+        blocklist, a set lookup. So a new name doesn't wait for the models (milliseconds
+        each, more on a Pi) before its answer: it is queued and scored right after, and
+        alerts come out the same. Returns False (score now) when blocking is on, for a
+        blocklisted name, with score_after_answer off, or when the queue is full."""
+        if self.shadow or not self.cfg.get("score_after_answer", True) or not self.state.learning:
+            return False
+        if self.state.is_blocked(q.name.rstrip(".").lower()):
+            return False
+        if self._later is None:
+            with self._later_lock:
+                if self._later is None:
+                    self._later = queue.Queue(maxsize=4096)
+                    threading.Thread(target=self._score_worker, name="ghost-dns-score", daemon=True).start()
+        try:
+            self._later.put_nowait((client_ip, q.name, q.qtype_name))
+        except queue.Full:   # a flood: score in line again, slower answers but no lost alerts
+            return False
+        return True
+
+    def _score_worker(self) -> None:
+        while True:
+            client_ip, name, qtype = self._later.get()
+            try:
+                self.decide(client_ip, name, qtype)
+            except Exception as exc:  # noqa: BLE001 (the answer went out; say why no alert)
+                self.stats["failopen"] += 1
+                print(f"[ghost-dns] decide() failed for {name}: {exc!r}", file=sys.stderr, flush=True)
+            finally:
+                self._later.task_done()
+
+    def drain(self) -> None:
+        """Wait until every query answered before scoring has been scored."""
+        if self._later is not None:
+            self._later.join()
 
     def _upstreams(self) -> list[tuple[str, int]]:
         """Primary first, then fallbacks. A primary that just failed is skipped

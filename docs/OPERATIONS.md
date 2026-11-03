@@ -163,7 +163,11 @@ also means DNS depends on it.
    nothing.
 2. In `/etc/ghostwall/ghost_dns.json` set `"shadow": false`, `"dns_host": "0.0.0.0"`,
    `"dns_port": 53`, `"upstream": "127.0.0.1"`, `"upstream_port": 5300`. Keep
-   `"learning": true`.
+   `"learning": true`: then answers never wait for the models (a new name is scored right
+   after it is answered). With learning off, every name not seen before waits for its score
+   (about 6 ms each on an x86 VM, several times that on a Pi; `agents/ghost_dns/bench_latency.py`
+   measures your box) because the score decides
+   whether it is blocked.
 3. `sudo systemctl restart ghostwall-dns`, then from a client:
    `dig @<pi-ip> google.com` (answers) and `dig @<pi-ip> kjqwehdzxklqw.biz`
    (answers, plus a `recommend` event).

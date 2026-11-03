@@ -152,6 +152,8 @@ for _ in $(seq 20); do ex 'python3 /usr/local/bin/dnsq example.com' >/dev/null 2
 [ "$(ex 'python3 /usr/local/bin/dnsq example.com')" = "rcode=0 192.0.2.10" ] \
   || fail "inline: ghost-dns (unprivileged, CAP_NET_BIND_SERVICE) does not answer on :53"
 [ "$(ex 'python3 /usr/local/bin/dnsq kjqwehdzxklqwpe.biz')" = "rcode=0 192.0.2.10" ] || fail "learning mode must not block"
+# learning mode answers first and scores right after: the alert follows within moments
+for _ in $(seq 10); do ex 'ghostwall alerts -n 3' | grep -q kjqwehdzxklqwpe.biz && break; sleep 1; done
 ex 'ghostwall alerts -n 3' | grep -q kjqwehdzxklqwpe.biz || fail "inline: no alert"
 ex 'ghostwall learning off' >/dev/null
 [ "$(ex 'python3 /usr/local/bin/dnsq bexmnvoqeiduwq.xyz')" = "rcode=0 0.0.0.0" ] || fail "inline: new DGA name not sinkholed"

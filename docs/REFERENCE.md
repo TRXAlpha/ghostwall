@@ -87,6 +87,7 @@ overrides any of them. The most useful keys:
 | `querylog` | `/opt/AdGuardHome/data/querylog.json` | the log followed in shadow mode: AdGuard's `querylog.json` or Pi-hole's `pihole.log` |
 | `querylog_format` | `"auto"` | `"adguard"`, `"pihole"`, or `"auto"` (from the file's first line, else its name) |
 | `learning` | `true` | alerts only; nothing is blocked |
+| `score_after_answer` | `true` | inline mode with `learning` on: answer a query first and score it right after, so a new name doesn't wait for the models (they can't change the answer then; the confirmed blocklist is still checked first). With `learning` off the score decides the answer, so it always comes first |
 | `models` | `"default"` | `"v3-public"`: the opt-in 1-5-gram model alone (no onnxruntime), with the calibrated thresholds from `lr_v3_public.json` for any threshold you haven't set yourself |
 | `enforce` | `"null"` | `"nft"` lets isolate and lockdown change nftables |
 | `dns_host`, `dns_port` | `127.0.0.1`, `53` | inline listener (IPv4); `dns_host6` `"::"` for IPv6, `null` to disable |
@@ -129,6 +130,7 @@ overrides any of them. The most useful keys:
 | `web_ui/demo.py` | the dashboard on demo data, no install needed |
 | `web_ui/make_demo.py` | regenerate the demo data by running the real detector over a scripted day |
 | `ghost_dns/eval_detection.py` | before/after simulation on labelled data |
+| `ghost_dns/bench_latency.py [-n 200]` | inline-mode answer time for never-seen names, scoring before vs after the answer |
 | `dga_eval/fair_lstm.py --data DIR` | 1-5-gram model vs an early-stopped LSTM, 3 seeds × 5 unseen-family folds → `results_lstm_fair.md` |
 | `dga_eval/train_public.py --data DIR` | retrain the opt-in `v3-public` model and its thresholds → `results_v3_public.md` |
 | `dga_eval/public_bench.py --data DIR --download` | public DGA benchmark (pinned data, ~2 h on 4 cores; needs scikit-learn, torch, onnx) → `results_public.md` |

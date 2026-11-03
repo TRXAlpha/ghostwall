@@ -39,6 +39,11 @@ Your settings, alerts, allowlist and thresholds are kept.
   query alerted again; it now trusts the zone (the event's new `trust` field). A
   `dga_burst` alert no longer offers Trust at all: it is many different names, and
   trusting the one shown changed nothing. `ghostwall alerts` prints local time, not UTC.
+- Inline mode made every never-seen name wait for the models before answering, even with
+  learning on, where the score can't change the answer. It now answers first and scores
+  right after: about 6 ms → 0.1 ms median per new name on an x86 VM (more saved on a Pi;
+  `agents/ghost_dns/bench_latency.py` measures it).
+  With learning off the score still comes first, as it decides the block.
 - A name on the phishing list could not be trusted: `ghostwall allow` said "no more alerts"
   and the next lookup alerted again (in inline mode: stayed blocked). The list names some
   link shorteners and apps as a whole (on 2026-11-03: `hubs.ly`, `dub.sh`, `sider.ai`, ...), so that

@@ -237,9 +237,59 @@ class FailoverTests(Base):
             raise RuntimeError("model crashed")
 
         self.r.scorer.score_one = boom
-        reply = self.r.handle_packet("127.0.0.1", build_query("example.com"))
+        reply = self.r.handle_packet("127.0.0.1", build_query("example.com"))   # learning: scored after
         self.assertEqual(struct.unpack(">H", reply[6:8])[0], 1, "must still resolve")
+        self.r.drain()
         self.assertEqual(self.r.stats["failopen"], 1)
+        self.state.set_learning(False)                                          # blocking: scored first
+        reply = self.r.handle_packet("127.0.0.1", build_query("example.org"))
+        self.assertEqual(struct.unpack(">H", reply[6:8])[0], 1, "must still resolve")
+        self.assertEqual(self.r.stats["failopen"], 2)
+
+
+class ScoreAfterAnswerTests(Base):
+    """Learning mode can block only confirmed-blocklist names, so a new name's answer
+    must not wait for the models; blocking mode must (the score decides the answer)."""
+
+    def setUp(self):
+        self.up = FakeUpstream(free_port())
+        self.addCleanup(self.up.close)
+        self.build(self.up.port, free_port())
+
+        class Slow(FakeScorer):
+            def score_one(self, name):
+                time.sleep(0.4)
+                return {"dga": 0.95, "dga_trm": 0.95, "dga_lr": 0.95}
+        self.r.scorer = Slow()
+
+    def answers(self, reply):
+        return struct.unpack(">H", reply[6:8])[0]
+
+    def test_learning_answers_first_and_still_alerts(self):
+        t = time.time()
+        reply = self.r.handle_packet("127.0.0.1", build_query("kq7zx2wvplm.example"))
+        self.assertLess(time.time() - t, 0.3, "the answer waited for the model")
+        self.assertEqual(self.answers(reply), 1)
+        self.r.drain()
+        self.assertEqual([e["domain"] for e in self.read_events()], ["kq7zx2wvplm.example"])
+
+    def test_blocklist_still_blocks_at_once_in_learning(self):
+        self.state.add_block("bad.example")
+        reply = self.r.handle_packet("127.0.0.1", build_query("bad.example"))
+        self.assertEqual(reply[-4:], socket.inet_aton(self.cfg["sinkhole_ip4"]))
+
+    def test_blocking_mode_scores_before_answering(self):
+        self.state.set_learning(False)
+        t = time.time()
+        reply = self.r.handle_packet("127.0.0.1", build_query("kq7zx2wvplm.example"))
+        self.assertGreaterEqual(time.time() - t, 0.4)
+        self.assertEqual(reply[-4:], socket.inet_aton(self.cfg["sinkhole_ip4"]))   # 0.95 >= block 0.90
+
+    def test_can_be_turned_off(self):
+        self.cfg["score_after_answer"] = False
+        t = time.time()
+        self.r.handle_packet("127.0.0.1", build_query("kq7zx2wvplm.example"))
+        self.assertGreaterEqual(time.time() - t, 0.4)
 
 
 class DedupeTests(Base):
