@@ -92,8 +92,8 @@ DEFAULTS = {
     "events_path": os.path.join(HERE, "events.jsonl"),
     "query_log": None,         # inline mode: a text log of every query (your DNS server keeps one already)
     "devices_json": os.path.join(os.path.dirname(HERE), "netconf", "devices.json"),
-    # The kernel's ARP table: lets a device's name follow its MAC to a new IPv4
-    # address (devices.py). "" turns that off: names then stay with addresses.
+    # The kernel's neighbour table (netlink; IPv4 and IPv6): lets a device's name follow
+    # its MAC to a new address (devices.py). "" turns that off: names stay with addresses.
     "neighbours_path": "/proc/net/arp",
     "allowlist_path": os.path.join(HERE, "allowlist.txt"),
     "resolved_ips_path": os.path.join(HERE, "resolved_ips.jsonl"),  # inline mode, read by ghost-flow

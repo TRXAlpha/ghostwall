@@ -6,7 +6,7 @@
 #
 #   tests/gateway_e2e.sh                     EXTRA_CA=/path/ca.pem behind a TLS-intercepting proxy
 #
-# Checks: the documented queue rule loads; ghost-flow raises doh_ip and raw_ip for the
+# Checks: device addresses (IPv4 and IPv6) map to the device's MAC; the documented queue rule loads; ghost-flow raises doh_ip and raw_ip for the
 # device and lets the traffic through; with ghost-flow stopped traffic still flows
 # (queue bypass); capture keeps rotating past one ring, prunes to its window, and a
 # freeze holds the packets from right before the alert.
@@ -56,6 +56,33 @@ ip netns exec wan sh -c "python3 -m http.server 443 >/dev/null 2>&1 &"
 sleep 1'
 get() { ex "ip netns exec lan curl -s -o /dev/null -w %{http_code} --connect-timeout 4 $1"; }
 [ "$(get http://93.184.215.14/)" = 200 ] || fail "lab routing broken"
+
+echo "== device names follow MACs: the kernel's neighbour table over netlink, IPv6 included"
+ex 'set -e
+mac=$(ip -n lan -j link show lan0 | python3 -c "import json, sys; print(json.load(sys.stdin)[0][\"address\"])")
+# Docker turns IPv6 off inside containers; turn it on for the two test interfaces.
+if sysctl -qw net.ipv6.conf.gw0.disable_ipv6=0 2>/dev/null && ip addr add fd00:9::1/64 dev gw0 nodad 2>/dev/null; then
+  ip netns exec lan sysctl -qw net.ipv6.conf.lan0.disable_ipv6=0
+  ip -n lan addr add fd00:9::2/64 dev lan0 nodad
+  ip -n lan addr add fd00:9::beef/64 dev lan0 nodad   # a second (privacy-style) address, same device
+  for a in fd00:9::2 fd00:9::beef; do
+    ip netns exec lan python3 -c "import socket, sys; s = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM); s.bind((sys.argv[1], 0)); s.sendto(b\"x\", (\"fd00:9::1\", 9))" $a
+  done
+  sleep 1
+  addrs="10.9.0.2 fd00:9::2 fd00:9::beef"
+else
+  echo "   this kernel has no IPv6: checking IPv4 only"
+  addrs="10.9.0.2"
+fi
+cd /opt/ghostwall/agents/ghost_dns && python3 - "$mac" $addrs <<PY
+import sys
+from neighbours import Neighbours, read_netlink
+read_netlink()   # netlink itself must work (no silent fallback to /proc/net/arp)
+n = Neighbours()
+for a in sys.argv[2:]:
+    assert n.mac(a) == sys.argv[1], (a, n.mac(a), sys.argv[1])
+print("   " + ", ".join(sys.argv[2:]) + " map to the device MAC " + sys.argv[1])
+PY' || fail "the neighbour table (netlink) does not map the device's addresses to its MAC"
 
 echo "== the generated gateway firewall (netconf/gen.py) loads, reloads and breaks glass"
 ex 'set -e; cd /opt/ghostwall/agents/netconf

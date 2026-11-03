@@ -110,7 +110,7 @@ overrides any of them. The most useful keys:
 | `threat_feed_path` | installer: `/var/lib/ghostwall/threat_feed.txt` | written by `update_feed.py` |
 | `allowlist_path` | `agents/ghost_dns/allowlist.txt` | starter allowlist |
 | `devices_json` | installer: `/etc/ghostwall/devices.json` | device names; unknown clients are named by IP. An entry with a `mac` is known by it: its name follows it to a new IPv4 address, and its old address loses the name once another device has it |
-| `neighbours_path` | `/proc/net/arp` | the kernel's ARP table, read to see which MAC is at an address (IPv4 on this network only: IPv6 clients and Docker's bridge network keep names on addresses); `""` turns it off |
+| `neighbours_path` | `/proc/net/arp` | which MAC is at an address: this default means the kernel's neighbour table (IPv4 and IPv6, read over netlink like `ip neigh`; `/proc/net/arp`, IPv4 only, if netlink isn't available); another path is read as a file in `/proc/net/arp`'s format. Only devices on this box's own network are in it (Docker's bridge network: none, so names stay on addresses). `""` turns it off |
 | `state_path`, `events_path` | installer: `/var/lib/ghostwall/state.json`, `.../events.jsonl` | persistent state and the alert log. The log starts a new file past 32 MiB and keeps one `events.jsonl.1`; the dashboard and bot read across both |
 | `query_log` | `null` (off) | inline mode: a text log of every query |
 | `resolved_ips_path` | installer: `/var/lib/ghostwall/resolved_ips.jsonl` | inline mode: answered IPs, read by ghost-flow |

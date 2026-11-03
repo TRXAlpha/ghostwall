@@ -196,7 +196,7 @@ sudo ghostwall calibrate          # after a few days: what each threshold would 
 - **Name your devices:** `sudo ghostwall devices` lists the addresses it has seen;
   `sudo ghostwall name 192.168.1.20 laptop` names one, so alerts say `laptop` instead of
   an IP. It records the device's MAC, so the name follows it when DHCP hands out a new
-  address (IPv4; an IPv6-only client keeps its name by address). (Or edit `/etc/ghostwall/devices.json`, as in `agents/netconf/devices.example.json`.)
+  address, IPv6 privacy addresses included. (Or edit `/etc/ghostwall/devices.json`, as in `agents/netconf/devices.example.json`.)
 - **Telegram alerts and `/fw` commands:** `sudo ghostwall telegram`, or by hand:
   [docs/OPERATIONS.md](docs/OPERATIONS.md#telegram).
 - **Check it against your own history** (changes nothing):

@@ -218,8 +218,8 @@ def cmd_name(a) -> int:
         raise CliError(f"can't read {path}: run this with sudo")
     if isinstance(data, list):
         data = {"devices": data, "_pending": []}
-    from neighbours import normalize_mac, read_arp
-    mac = read_arp(ARP).get(ip)   # the device at that address now (IPv4, this network)
+    from neighbours import canonical_ip, normalize_mac, read_neighbours
+    mac = {canonical_ip(k): v for k, v in read_neighbours(ARP).items()}.get(ip)   # who has it now
     pending = data.setdefault("_pending", [])
     entries = list(data.get("devices", [])) + list(pending)
     target = next((e for e in entries if e.get("ip") == ip), None)
@@ -246,7 +246,8 @@ def cmd_name(a) -> int:
     if mac:
         print(f"The name follows its MAC ({mac}) if the address changes.")
     else:
-        print(f"No MAC known for {ip} right now (offline, or IPv6): the name stays with the address.")
+        print(f"No MAC known for {ip} right now (offline, or not on this network): the name stays "
+              "with the address. Name it again while it is online to pin it.")
     write_private(path, json.dumps(data, indent=2) + "\n")
     if shutil_which("systemctl") and os.path.exists("/etc/systemd/system/ghostwall-dns.service"):
         subprocess.run(["systemctl", "restart", "ghostwall-dns"], check=False)

@@ -58,8 +58,9 @@ Your settings, alerts, allowlist and thresholds are kept.
   reaches a stand-in Telegram from the locked-down container.
 - Device names stuck to addresses: once DHCP gave the laptop's old address to the TV,
   the TV's alerts said `laptop` and "isolate laptop" cut off the TV. `ghostwall name` now
-  records the MAC, ghost-dns reads the ARP table, and a name follows its MAC (IPv4):
-  alerts, the device list and isolation use where the device is now, and an old address
+  records the MAC, ghost-dns reads the kernel's neighbour table, and a name follows its MAC,
+  IPv6 privacy addresses included (a phone used to show up as a new unnamed client every
+  day): alerts, the device list and isolation use where the device is now, and an old address
   shows as an address. Names given before this, without a MAC, work as before; name them
   again while the device is online to pin them.
 - `/opt/ghostwall` kept the cloning user's ownership, so that user could change code that runs
