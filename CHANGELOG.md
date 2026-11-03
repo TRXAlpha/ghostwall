@@ -74,6 +74,8 @@ per-device alert rate cap and throttled state writes (a web page can make a brow
 thousands of names); fsync'd state; anchored Pi-hole parser; dashboard CSP and a limit on wrong
 passwords; `state.json` keeps "first seen" domains as keyed hashes instead of a readable list of
 every site your household visits (converted on the first start); tighter systemd sandboxes; hash-locked Python dependencies; `events.jsonl` rotates.
+Pins no longer rot silently: Dependabot proposes action and image bumps weekly, and a weekly
+CI job looks up every locked Python version in the OSV vulnerability database.
 
 ### New
 

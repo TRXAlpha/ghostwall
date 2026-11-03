@@ -1,0 +1,25 @@
+# Everything here is pinned (actions by commit SHA, images by digest), so nothing moves by
+# itself: Dependabot proposes the bumps, once a week, and CI tests each one.
+# The Python lock files are not .txt files Dependabot reads; .github/workflows/deps.yml
+# checks them for known vulnerabilities instead (regenerate with the command at their top).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: docker          # the Dockerfile's python base image
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker-compose  # AdGuard Home in compose.yaml
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: ghostwall     # built locally (build: .), not pulled

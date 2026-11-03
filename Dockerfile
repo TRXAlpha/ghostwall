@@ -1,9 +1,9 @@
 # Ghostwall: ghost-dns in shadow mode + the dashboard (+ Telegram alerts once set up). See compose.yaml.
-# Pinned by digest: the same base image on every build (bump it deliberately). Rate-limited
-# by Docker Hub? The same digest from a mirror works too:
-#   docker build --build-arg BASE=mirror.gcr.io/library/python@sha256:e697c818... .
-ARG BASE=python:3.12.16-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337
-FROM ${BASE}
+# Pinned by digest: the same base image on every build. Dependabot proposes bumps
+# (.github/dependabot.yml; it reads a literal FROM, not one built from an ARG).
+# Rate-limited by Docker Hub? Use Google's mirror of it for every pull: add
+# "registry-mirrors": ["https://mirror.gcr.io"] to /etc/docker/daemon.json.
+FROM python:3.12.16-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337
 
 WORKDIR /opt/ghostwall
 COPY requirements.lock .
