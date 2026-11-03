@@ -67,7 +67,12 @@ class GhostState:
         # first_seen stores keyed hashes, not names: novelty needs "seen before, and when",
         # and state.json should not be a readable history of every site the household uses.
         self._nkey_secret = self._load_secret(os.path.join(os.path.dirname(os.path.abspath(path)), "novelty_key"))
+        self._legacy_names = False
         self._load()
+        if self._legacy_names:
+            # Rewrite at once: waiting for the next save could leave the readable list of
+            # every site on disk for as long as the network stays quiet.
+            self.save()
 
     @staticmethod
     def _load_secret(path: str) -> bytes:
@@ -128,7 +133,10 @@ class GhostState:
         self.first_seen = {}
         for k, v in dict(d.get("first_seen", {})).items():
             # older versions stored the names themselves: hash them on the way in
-            self.first_seen[self._nkey(k) if "." in k else k] = v
+            if "." in k:
+                self._legacy_names = True
+                k = self._nkey(k)
+            self.first_seen[k] = v
         self.confirmations = dict(d.get("confirmations", {}))
         self.events = dict(d.get("events", {}))
         self.device_since = dict(d.get("device_since", {}))

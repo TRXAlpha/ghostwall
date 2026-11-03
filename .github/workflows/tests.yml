@@ -60,6 +60,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - run: tests/installer_e2e.sh "${{ matrix.image }}"
 
+  upgrade:
+    # What every existing install runs: `git pull && sudo ./install.sh` over the last release,
+    # with history to keep (an alert, a trusted domain, a named device, a threshold), then all
+    # the installer checks on the upgraded box. (v0.2.0-beta.2's installer needs Python 3.12+.)
+    name: upgrade from v0.2.0-beta.2 (ubuntu:24.04, systemd)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - run: FROM_REF=v0.2.0-beta.2 tests/installer_e2e.sh ubuntu:24.04
+
   gateway:
     # ghost-flow on a real kernel queue and capture with real tcpdump, in network namespaces.
     name: gateway mode (ghost-flow + capture)

@@ -6,6 +6,11 @@
 # uninstall cleans up.
 #
 #   tests/installer_e2e.sh [IMAGE]          IMAGE: debian:bookworm (default), ubuntu:22.04, ...
+#   FROM_REF=v0.2.0-beta.2 tests/installer_e2e.sh ubuntu:24.04
+#                                           an upgrade: that release first, with some history
+#                                           (an alert, a trusted domain, a named device, a
+#                                           threshold), then this tree over it, as `git pull`
+#                                           would; checks the history survived, then the rest.
 #
 # Needs Docker that can run a privileged container. EXTRA_CA=/path/ca.pem trusts an extra
 # CA inside the container (for networks behind a TLS-intercepting proxy).
@@ -69,10 +74,39 @@ chmod 700 /opt/AdGuardHome/data; chmod 600 /opt/AdGuardHome/data/querylog.json
 printf "[Service]\nExecStart=/usr/bin/python3 /usr/local/bin/fake-adguard\n[Install]\nWantedBy=multi-user.target\n" > /etc/systemd/system/AdGuardHome.service
 systemctl daemon-reload; systemctl enable --now AdGuardHome >/dev/null 2>&1'
 
+if [ -n "${FROM_REF:-}" ]; then
+  echo "== $FROM_REF first, with some history"
+  git -C "$REPO" rev-parse -q --verify "$FROM_REF^{commit}" >/dev/null || git -C "$REPO" fetch -q --depth 1 origin tag "$FROM_REF"
+  docker exec "$NAME" bash -c 'mv /home/pi/ghostwall /home/pi/ghostwall.new && mkdir /home/pi/ghostwall'
+  git -C "$REPO" archive "$FROM_REF" | docker exec -i "$NAME" bash -c 'tar -C /home/pi/ghostwall -xf - && chown -R pi:pi /home/pi/ghostwall'
+  ex 'cd /home/pi/ghostwall && ./install.sh' > "$WORK/old.log" 2>&1 || { cat "$WORK/old.log"; fail "$FROM_REF did not install"; }
+  ex 'echo "{\"T\":\"2026-11-01T10:00:00Z\",\"QH\":\"oldalertxkq9zv7.top\",\"QT\":\"A\",\"IP\":\"192.168.1.30\"}" >> /opt/AdGuardHome/data/querylog.json'
+  for _ in $(seq 30); do ex 'grep -q oldalertxkq9zv7.top /var/lib/ghostwall/events.jsonl' 2>/dev/null && break; sleep 1; done
+  ex 'grep -q oldalertxkq9zv7.top /var/lib/ghostwall/events.jsonl' || fail "$FROM_REF: no alert to keep"
+  ex 'curl -sf -X POST -H "Content-Type: application/json" -d "{\"domain\": \"kept.example\"}" http://127.0.0.1:5380/allow >/dev/null' \
+    || fail "$FROM_REF: could not trust a domain"
+  ex 'echo "{\"devices\": [], \"_pending\": [{\"name\": \"oldlaptop\", \"ip\": \"192.168.1.30\", \"mac\": null}]}" > /etc/ghostwall/devices.json
+python3 -c "import json; p = \"/etc/ghostwall/ghost_dns.json\"; c = json.load(open(p)); c[\"recommend_threshold\"] = 0.975; json.dump(c, open(p, \"w\"), indent=2)"
+systemctl restart ghostwall-dns; sleep 2'
+  echo "== this tree over it (as git pull would)"
+  docker exec "$NAME" bash -c 'rm -rf /home/pi/ghostwall && mv /home/pi/ghostwall.new /home/pi/ghostwall'
+fi
+
 echo "== install.sh"
 ex 'cd /home/pi/ghostwall && ./install.sh' > "$WORK/install.log" 2>&1 || { cat "$WORK/install.log"; fail "install.sh exited non-zero"; }
 grep -q "Installed." "$WORK/install.log" || { cat "$WORK/install.log"; fail "no success message"; }
 grep -q "size_memory: 10$" <(ex 'cat /opt/AdGuardHome/AdGuardHome.yaml') || fail "AdGuard buffer not lowered"
+if [ -n "${FROM_REF:-}" ]; then
+  echo "== what $FROM_REF left behind survived the upgrade"
+  for _ in $(seq 20); do ex 'ghostwall trusted' >/dev/null 2>&1 && break; sleep 1; done
+  ex 'ghostwall alerts -n 50' | grep -q oldalertxkq9zv7.top || fail "upgrade: old alert gone"
+  ex 'ghostwall trusted' | grep -qx kept.example || fail "upgrade: trusted domain gone"
+  ex 'python3 -c "import json; c = json.load(open(\"/etc/ghostwall/ghost_dns.json\")); assert c.get(\"recommend_threshold\") == 0.975, c"' \
+    || fail "upgrade: the threshold you set was reset"
+  ex 'ghostwall devices' | grep -q "^  oldlaptop " || fail "upgrade: device name gone"
+  ex 'python3 -c "import json; s = json.load(open(\"/var/lib/ghostwall/state.json\")); assert not any(\".\" in k for k in s[\"first_seen\"]), list(s[\"first_seen\"])[:3]"' \
+    || fail "upgrade: state.json still lists every domain in the clear"
+fi
 
 echo "== threat feed (sandboxed service, real download)"
 if [ -n "${EXTRA_CA:-}" ]; then   # behind a TLS-intercepting proxy: let the service trust it too

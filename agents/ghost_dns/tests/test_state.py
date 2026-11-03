@@ -113,8 +113,7 @@ class NoveltyPrivacyTests(unittest.TestCase):
         with open(p, "w") as f:
             json.dump({"first_seen": {"old.example": "2020-01-01T00:00:00Z"}}, f)
         s = GhostState(p)
+        with open(p) as f:                        # on disk at once, not at some later save
+            self.assertNotIn("old.example", f.read())
         self.assertTrue(s.was_seen("www.old.example"))
         self.assertFalse(s.is_new("old.example", 7))
-        s.save()
-        with open(p) as f:
-            self.assertNotIn("old.example", f.read())

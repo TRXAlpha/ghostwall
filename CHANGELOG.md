@@ -92,7 +92,7 @@ Control API token; capture API browser checks and limits; owner-only Telegram co
 per-device alert rate cap and throttled state writes (a web page can make a browser look up
 thousands of names); fsync'd state; anchored Pi-hole parser; dashboard CSP and a limit on wrong
 passwords; `state.json` keeps "first seen" domains as keyed hashes instead of a readable list of
-every site your household visits (converted on the first start); tighter systemd sandboxes; hash-locked Python dependencies; `events.jsonl` rotates.
+every site your household visits (converted, and the file rewritten, on the first start); tighter systemd sandboxes; hash-locked Python dependencies; `events.jsonl` rotates.
 Pins no longer rot silently: Dependabot proposes action and image bumps weekly, and a weekly
 CI job looks up every locked Python version in the OSV vulnerability database.
 
@@ -113,5 +113,8 @@ CI job looks up every locked Python version in the OSV vulnerability database.
   positives, against 60.3% for the shipped models).
 - CI installs Ghostwall for real under systemd (Debian 12 and 13, Ubuntu 22.04, 24.04 and
   26.04), inline mode included.
+- CI upgrades a v0.2.0-beta.2 install with history in it (an alert, a trusted domain, a
+  named device, a threshold) and checks it all survives. Its first run found the readable
+  list of visited domains left in `state.json` after the upgrade until a new domain came.
 - CI lints the code (pyflakes, pinned). Its first run found a gateway test (the LAN
   interface setting) that had never run, and two tests that checked nothing; all fixed.
