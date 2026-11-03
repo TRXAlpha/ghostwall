@@ -30,9 +30,13 @@ class Fake(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/status":
-            self._reply({"ok": True, "shadow": True, "models": "trm+lr", "stats": {"queries": 1234},
-                         "feed": {"domains": 150000, "updated": None},
-                         "devices": [{"name": "laptop", "ip": "192.168.1.10", "last_seen": None}]})
+            st = {"ok": True, "shadow": True, "models": "trm+lr", "stats": {"queries": 1234},
+                  "feed": {"domains": 150000, "updated": None}, "named_devices": 1, "unnamed_clients": 0}
+            if self.headers.get("Authorization") == "Bearer tok-example":
+                st["devices"] = [{"name": "laptop", "ip": "192.168.1.10", "last_seen": None}]
+            else:   # as ghost-dns answers without the token
+                st["devices_hidden"] = True
+            self._reply(st)
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
@@ -75,6 +79,19 @@ class CliTests(unittest.TestCase):
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = cli.main(list(argv))
         return code, out.getvalue(), err.getvalue()
+
+    def test_status_without_sudo_is_a_summary(self):
+        os.chmod(os.path.join(self.data, "control_token"), 0)   # what a normal user meets
+        if os.access(os.path.join(self.data, "control_token"), os.R_OK):
+            os.remove(os.path.join(self.data, "control_token"))  # (root reads anything)
+        code, out, _ = self.run_cli("status")
+        self.assertEqual(code, 0)
+        self.assertIn("1,234 queries", out)
+        self.assertIn("1 named (sudo ghostwall status lists them)", out)
+        self.assertNotIn("192.168.1.10", out)
+        code, _, err = self.run_cli("devices")
+        self.assertNotEqual(code, 0)
+        self.assertIn("sudo", err)
 
     def test_status(self):
         code, out, _ = self.run_cli("status")

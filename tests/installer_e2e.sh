@@ -103,6 +103,8 @@ ex 'ghostwall allow example.org' >/dev/null || fail "root could not take an acti
 ex 'ghostwall trusted' | grep -qx example.org || fail "trusted list wrong"
 ex 'ghostwall allow undo.example && ghostwall untrust undo.example' >/dev/null || fail "untrust failed"
 ex 'ghostwall devices' | grep -q "192.168.1.20" || fail "unnamed client not listed"
+if ex 'su pi -s /bin/sh -c "curl -s http://127.0.0.1:5380/status"' | grep -q "192.168.1.20"; then
+  fail "any local user can read the device list"; fi
 ex 'ghostwall name 192.168.1.20 laptop' >/dev/null || fail "naming failed"
 for _ in $(seq 20); do ex 'ghostwall devices' 2>/dev/null | grep -q "^  laptop " && break; sleep 1; done
 ex 'echo "{\"T\":\"2026-11-02T18:00:05Z\",\"QH\":\"q7zk2xv9wplmfa.top\",\"QT\":\"A\",\"IP\":\"192.168.1.20\"}" >> /opt/AdGuardHome/data/querylog.json'

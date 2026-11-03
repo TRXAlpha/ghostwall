@@ -225,9 +225,10 @@ function renderStatus(st) {
   const stats = st.stats || {};
   $("queries").textContent = fmt(stats.queries);
   const devs = st.devices || [];
-  $("devCount").textContent = devs.length;
+  $("devCount").textContent = st.devices_hidden ? fmt(st.named_devices) : devs.length;
   const iso = devs.filter(d => d.isolated).length;
-  $("devSub").innerHTML = iso ? `<span class="red">${iso} isolated</span>` : "named in devices.json";
+  $("devSub").innerHTML = st.devices_hidden ? '<span class="amber">list hidden: the dashboard can\'t read the control token</span>'
+    : iso ? `<span class="red">${iso} isolated</span>` : "named in devices.json";
   if (enforcing) {
     $("k5").textContent = "Lockdown";
     $("v5").innerHTML = st.lockdown ? '<span class="red">on</span>' : "off";

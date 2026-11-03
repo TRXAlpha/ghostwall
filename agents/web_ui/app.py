@@ -281,7 +281,10 @@ def make_handler(control_base: str, events_path: str, password: str | None = Non
                            {"Content-Security-Policy": csp, "Referrer-Policy": "no-referrer"})
             elif self.path == "/api/status":
                 try:
-                    st = control_call(control_base, "/status", timeout=3)
+                    st = control_call(control_base, "/status", timeout=3, token=tokens.get())
+                    if st.get("devices_hidden"):   # the token file was replaced: read it again once
+                        tokens.reset()
+                        st = control_call(control_base, "/status", timeout=3, token=tokens.get())
                     self._json(200, {"ok": True, "resolver": st})
                 except (urllib.error.URLError, OSError, ValueError) as e:
                     self._json(503, {"ok": False, "error": f"resolver unreachable: {e}"})

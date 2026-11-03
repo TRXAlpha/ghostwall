@@ -44,23 +44,26 @@ class CliError(Exception):
 
 
 # --------------------------------------------------------------------------- control API
-def _token() -> str | None:
+def _token(required: bool = True) -> str | None:
     path = os.path.join(DATA, "control_token")
     try:
         with open(path, encoding="utf-8") as f:
             return f.read().strip() or None
     except PermissionError:
+        if not required:
+            return None
         raise CliError(f"can't read {path}: run this with sudo")
     except FileNotFoundError:
         return None
 
 
 def control(path: str, body: dict | None = None) -> dict:
+    """POST body to path (an action: needs the token), or GET path. A GET sends the token
+    when it is readable (sudo): /status then includes the device list."""
     headers = {"Content-Type": "application/json"}
-    if body is not None:
-        tok = _token()
-        if tok:
-            headers["Authorization"] = f"Bearer {tok}"
+    tok = _token(required=body is not None)
+    if tok:
+        headers["Authorization"] = f"Bearer {tok}"
     req = urllib.request.Request(CONTROL + path, method="GET" if body is None else "POST",
                                  data=None if body is None else json.dumps(body).encode(), headers=headers)
     try:
@@ -106,8 +109,9 @@ def cmd_status(_a) -> int:
     if feed:
         print(f"feed:     {feed.get('domains', 0):,} phishing domains, updated {_ago(feed.get('updated'))}")
     devs = st.get("devices") or []
-    unnamed = len(st.get("clients") or [])
-    print(f"devices:  {len(devs)} named" + (f", {unnamed} unnamed (sudo ghostwall devices)" if unnamed else ""))
+    named, unnamed = st.get("named_devices", len(devs)), st.get("unnamed_clients", len(st.get("clients") or []))
+    print(f"devices:  {named} named" + (f", {unnamed} unnamed (sudo ghostwall devices)" if unnamed else "")
+          + (" (sudo ghostwall status lists them)" if st.get("devices_hidden") and named else ""))
     for d in devs:
         iso = " ISOLATED" if d.get("isolated") else ""
         print(f"  {d.get('name'):<16} {d.get('ip'):<16} last query {_ago(d.get('last_seen'))}{iso}")
@@ -166,6 +170,8 @@ def cmd_allow(a) -> int:
 
 def cmd_devices(_a) -> int:
     st = control("/status")
+    if st.get("devices_hidden"):
+        raise CliError("the device list needs the control token: run this with sudo")
     for d in st.get("devices") or []:
         print(f"  {d.get('name'):<16} {d.get('ip'):<40} last query {_ago(d.get('last_seen'))}")
     clients = st.get("clients") or []

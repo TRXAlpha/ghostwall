@@ -13,7 +13,9 @@ reach it, and so can a web page in a browser there. So:
   * every action (anything but /status) needs `Authorization: Bearer <token>`. The
     token is generated on first start into a file only the ghostwall user can read
     (control_token_path, /var/lib/ghostwall/control_token when installed), so the
-    dashboard and the Telegram bot can act and other local users cannot.
+    dashboard and the Telegram bot can act and other local users cannot;
+  * /status without the token is a summary (mode, counters, how many devices): the
+    device list (names, IPs, MACs, when each was last online) needs the token too.
 """
 from __future__ import annotations
 
@@ -115,7 +117,7 @@ class ControlHandler(BaseHTTPRequestHandler):
         if not loopback_host(self.headers.get("Host")):
             self._send(403, {"ok": False, "error": "use 127.0.0.1"})
         elif self.path == "/status":
-            self._send(200, self._status())
+            self._send(200, self._status(full=self._authorized()))
         else:
             self._send(404, {"ok": False, "error": "not found"})
 
@@ -133,12 +135,15 @@ class ControlHandler(BaseHTTPRequestHandler):
         if body.get("__bad_json__"):
             self._send(400, {"ok": False, "error": "bad JSON"})
             return
-        if self.path != "/status" and not self._authorized():
+        if self.path == "/status" and not self._authorized():
+            self._send(200, self._status(full=False))
+            return
+        if not self._authorized():
             self._send(401, {"ok": False, "error": "need Authorization: Bearer <token> "
                              "(the token is in control_token next to state.json)"})
             return
         routes = {
-            "/status": self._status,
+            "/status": lambda: self._status(full=True),   # (unauthorized: answered below)
             "/device": lambda: self._device(body),
             "/isolate": lambda: self._isolate(body),
             "/release": lambda: self._release(body),
@@ -173,7 +178,9 @@ class ControlHandler(BaseHTTPRequestHandler):
         return hmac.compare_digest(given[7:].strip().encode("utf-8"), token.encode("utf-8"))
 
     # -- endpoint implementations ----------------------------------------
-    def _status(self) -> dict:
+    def _status(self, full: bool = True) -> dict:
+        """full: with the device list (needs the token). Without it, anyone on the box
+        could learn every device's name, IP and MAC and when each was last online."""
         g = self.state["gstate"]
         dmap = self.state["devices"]
         res = self.state.get("resolver")
@@ -190,8 +197,7 @@ class ControlHandler(BaseHTTPRequestHandler):
         named = {d.ip for d in dmap.all()}
         # clients seen but not named yet (for `ghostwall devices` / `ghostwall name`)
         clients = sorted(((t, ip) for ip, t in seen.items() if ip not in named), reverse=True)[:50]
-        out = {"ok": True, "devices": devices,
-               "clients": [{"ip": ip, "last_seen": t} for t, ip in clients],
+        out = {"ok": True, "named_devices": len(devices), "unnamed_clients": len(clients),
                "lockdown": g.lockdown, "learning": g.learning,
                "shadow": bool(getattr(res, "shadow", False)),
                "source": getattr(res, "source", None),
@@ -206,6 +212,11 @@ class ControlHandler(BaseHTTPRequestHandler):
             n, mtime = feed.info()
             out["feed"] = {"domains": n, "updated": datetime.fromtimestamp(mtime, timezone.utc)
                            .strftime("%Y-%m-%dT%H:%M:%SZ") if mtime else None}
+        if full:
+            out["devices"] = devices
+            out["clients"] = [{"ip": ip, "last_seen": t} for t, ip in clients]
+        else:
+            out["devices_hidden"] = True   # "send the token to see them", not "no devices"
         return out
 
     def _device(self, body):

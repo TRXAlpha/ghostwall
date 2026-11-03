@@ -290,6 +290,36 @@ class ControlAuthTests(unittest.TestCase):
         self.assertEqual(self._post("/status", {}, None, method="GET"), 200)
         self.assertEqual(self._post("/status", {}, None), 200)
 
+    def _status_body(self, auth=None, method="GET"):
+        h = {"Content-Type": "application/json"}
+        if auth:
+            h["Authorization"] = auth
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/status", method=method,
+                                     data=None if method == "GET" else b"{}", headers=h)
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return json.loads(r.read())
+
+    def test_status_without_the_token_names_no_device(self):
+        # Any local user or process can reach this port: the household's device list
+        # (names, IPs, MACs, who was online when) needs the token like any action.
+        self.server.httpd.RequestHandlerClass.state["resolver"] = type("R", (), {"last_seen": {
+            "192.168.1.30": "2026-11-03T10:00:00Z", "192.168.1.77": "2026-11-03T10:01:00Z"}})()
+        for method in ("GET", "POST"):
+            for auth in (None, "Bearer wrong"):
+                st = self._status_body(auth, method)
+                raw = json.dumps(st)
+                self.assertTrue(st["devices_hidden"], (method, auth))
+                self.assertNotIn("devices", st)
+                self.assertNotIn("clients", st)
+                for leak in ("dell", "192.168.1.30", "192.168.1.77"):
+                    self.assertNotIn(leak, raw, (method, auth))
+                self.assertEqual((st["named_devices"], st["unnamed_clients"]), (1, 1))
+                self.assertIn("stats", st)                     # health checks still work
+            full = self._status_body("Bearer " + self.token, method)
+            self.assertNotIn("devices_hidden", full)
+            self.assertEqual([d["name"] for d in full["devices"]], ["dell"])
+            self.assertEqual([c["ip"] for c in full["clients"]], ["192.168.1.77"])
+
     def test_allow_rejects_non_domains(self):
         ok = "Bearer " + self.token
         for bad in ("<script>", "a b.com", "x" * 300, "..", "evil.com/path"):

@@ -13,7 +13,10 @@ same machine, so:
 - every request must name a loopback `Host` such as `127.0.0.1:5380` (else 403, which
   stops DNS rebinding);
 - POSTs must send `Content-Type: application/json` (else 415);
-- every endpoint except `/status` needs `Authorization: Bearer <token>` (else 401).
+- every endpoint except `/status` needs `Authorization: Bearer <token>` (else 401). `/status`
+  answers without it too, but then as a summary: no `devices` or `clients`, `"devices_hidden": true`
+  instead (any local user or process can reach the port, and the list names every device,
+  its IP and MAC and when it was last online).
   `ghost-dns` creates the token on first start in `control_token` next to `state.json`
   (`/var/lib/ghostwall/control_token` when installed, `/data/control_token` in Docker),
   readable only by the `ghostwall` user. The dashboard and the bot read it from there.
@@ -29,7 +32,7 @@ with `{"ok": false, "error": "..."}`. All endpoints take POST with a JSON body;
 
 | Endpoint | Body | Returns |
 |---|---|---|
-| `/status` | — | `devices` (name, ip, mac, isolated, last_seen, blocked_domains), `clients` (unnamed addresses seen, newest first, up to 50), `lockdown`, `learning`, `shadow`, `source` (`adguard` or `pihole` in shadow mode), `enforce` (`null` or `nft`), `models`, `feed` (`domains`, `updated`), `stats` (counters since start; `queries` rising means it is scoring; `suppressed` counts repeat alerts, `rate_limited` alerts dropped by `alert_rate_per_device`, `blocked_upstream` random-looking names AdGuard had already blocked) |
+| `/status` | — | `devices` (name, ip, mac, isolated, last_seen, blocked_domains) and `clients` (unnamed addresses seen, newest first, up to 50): with the token only; `named_devices`, `unnamed_clients` (counts), `lockdown`, `learning`, `shadow`, `source` (`adguard` or `pihole` in shadow mode), `enforce` (`null` or `nft`), `models`, `feed` (`domains`, `updated`), `stats` (counters since start; `queries` rising means it is scoring; `suppressed` counts repeat alerts, `rate_limited` alerts dropped by `alert_rate_per_device`, `blocked_upstream` random-looking names AdGuard had already blocked) |
 | `/device` | `{"name": "laptop"}` | that device plus `last_seen` (its latest query since ghost-dns started, or null); 404 if unknown |
 | `/isolate` | `{"name": "laptop"}` | `{"name", "isolated": true}`: the device may only reach the Pi's DNS. 409 unless `enforce` is `nft` |
 | `/release` | `{"name": "laptop"}` | `{"name", "isolated": false}` |

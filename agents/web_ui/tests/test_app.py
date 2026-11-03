@@ -167,6 +167,16 @@ class ControlTokenTests(unittest.TestCase):
                 self.end_headers()
                 self.wfile.write(body)
 
+            def do_GET(self):   # /status: the device list only with the token
+                seen.append(self.headers.get("Authorization"))
+                ok = self.headers.get("Authorization") == "Bearer tok123"
+                body = json.dumps({"ok": True, **({"devices": [{"name": "tv"}]} if ok
+                                                  else {"devices_hidden": True})}).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
         ctl = ThreadingHTTPServer(("127.0.0.1", 0), Ctl)
         threading.Thread(target=ctl.serve_forever, daemon=True).start()
         d = tempfile.mkdtemp()
@@ -185,6 +195,10 @@ class ControlTokenTests(unittest.TestCase):
             r.read()
             self.assertEqual(r.status, 200)
             self.assertEqual(seen, ["Bearer tok123"])
+            c.request("GET", "/api/status", headers={"Host": f"127.0.0.1:{port}"})
+            r = c.getresponse()
+            self.assertEqual(json.loads(r.read())["resolver"]["devices"], [{"name": "tv"}])
+            self.assertEqual(seen[-1], "Bearer tok123")
         finally:
             srv.shutdown(); ctl.shutdown()
 
