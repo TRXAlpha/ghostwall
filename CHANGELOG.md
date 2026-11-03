@@ -39,6 +39,10 @@ Your settings, alerts, allowlist and thresholds are kept.
   query alerted again; it now trusts the zone (the event's new `trust` field). A
   `dga_burst` alert no longer offers Trust at all: it is many different names, and
   trusting the one shown changed nothing. `ghostwall alerts` prints local time, not UTC.
+- Docker: `ghostwall telegram` set everything up and sent nothing, ever: the image had no
+  Telegram bot and nothing said so. The image now ships it and starts it once the setup
+  has written its files (restart the container, as the setup says); CI checks an alert
+  reaches a stand-in Telegram from the locked-down container.
 - Device names stuck to addresses: once DHCP gave the laptop's old address to the TV,
   the TV's alerts said `laptop` and "isolate laptop" cut off the TV. `ghostwall name` now
   records the MAC, ghost-dns reads the ARP table, and a name follows its MAC (IPv4):

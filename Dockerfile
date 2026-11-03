@@ -1,4 +1,4 @@
-# Ghostwall: ghost-dns in shadow mode + the dashboard. See compose.yaml.
+# Ghostwall: ghost-dns in shadow mode + the dashboard (+ Telegram alerts once set up). See compose.yaml.
 # Pinned by digest: the same base image on every build (bump it deliberately). Rate-limited
 # by Docker Hub? The same digest from a mirror works too:
 #   docker build --build-arg BASE=mirror.gcr.io/library/python@sha256:e697c818... .
@@ -13,6 +13,7 @@ COPY pyproject.toml .
 COPY ghostwall/models ghostwall/models
 COPY agents/ghost_dns agents/ghost_dns
 COPY agents/web_ui agents/web_ui
+COPY agents/fw_bot agents/fw_bot
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh && rm -rf agents/*/tests \
  && printf '#!/bin/sh\nexec python /opt/ghostwall/agents/ghost_dns/ghostwall_cli.py "$@"\n' > /usr/local/bin/ghostwall \
@@ -20,7 +21,7 @@ RUN chmod +x /entrypoint.sh && rm -rf agents/*/tests \
 
 # ORT_DISABLE_TELEMETRY: onnxruntime sends usage telemetry to Microsoft unless told not to.
 # GHOSTWALL_DATA/ETC: where `python agents/ghost_dns/ghostwall_cli.py` finds things here.
-ENV PYTHONUNBUFFERED=1 ORT_DISABLE_TELEMETRY=1 GHOSTWALL_DATA=/data GHOSTWALL_ETC=/data
+ENV PYTHONUNBUFFERED=1 ORT_DISABLE_TELEMETRY=1 GHOSTWALL_DATA=/data GHOSTWALL_ETC=/data GHOSTWALL_DOCKER=1
 VOLUME /data
 EXPOSE 8088
 HEALTHCHECK --interval=60s --timeout=5s --start-period=30s \

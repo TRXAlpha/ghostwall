@@ -117,6 +117,10 @@ Unblock, Keep blocked and Isolate.
 | `/fw lockdown` | toggle LAN lockdown (needs `enforce: "nft"`) |
 | `/fw learning on\|off` | alert-only vs blocking (inline mode) |
 
+**In Docker:** `docker compose exec ghostwall ghostwall telegram` writes the same two files
+into `/data` (`ghostwall-data/` on the host); after `docker compose restart ghostwall` the
+container runs the bot with `--commands`, as the systemd unit does.
+
 **When Telegram is down** (or the Pi is offline, or you haven't pressed Start yet) alerts
 wait in order and are retried with a growing pause (up to a minute); an alert that
 arrives more than 5 minutes late says when it happened. The bot keeps its place in

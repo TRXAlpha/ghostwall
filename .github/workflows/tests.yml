@@ -83,6 +83,40 @@ jobs:
           test "$(curl -sk -o /dev/null -w '%{http_code}' -u "ghostwall:$PASS" https://127.0.0.1:8088/api/events)" = 200
           if docker logs gw 2>&1 | grep -qF "$PASS"; then echo "password leaked into the logs"; exit 1; fi
           docker exec gw ghostwall status | grep -q "1 queries"
+      - name: Telegram alerts in the container (as `ghostwall telegram` sets them up; Telegram answers only late)
+        run: |
+          printf 'FW_BOT_TELEGRAM_TOKEN=123456:EXAMPLE-not-a-real-token-xyz\nFW_BOT_CALLBACK_SECRET=%s\nFW_BOT_TELEGRAM_API=http://127.0.0.1:18080\n' \
+            "$(openssl rand -hex 32)" > data/fw_bot.env
+          echo '{"chat_id": 4242}' > data/owner.json
+          docker restart gw
+          for i in $(seq 60); do docker exec gw python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5380/status')" 2>/dev/null && break; sleep 1; done
+          sleep 2
+          echo '{"T":"2026-10-31T12:05:00Z","QH":"zqxwvkjhgfdsplm.biz","QT":"A","IP":"192.168.1.9"}' >> work/data/querylog.json
+          sleep 4   # the alert is written while Telegram is still unreachable
+          FAKE=$(cat <<'PY'
+          import json
+          from http.server import BaseHTTPRequestHandler, HTTPServer
+          class H(BaseHTTPRequestHandler):
+              def log_message(self, *a): pass
+              def reply(self, result):
+                  b = json.dumps({"ok": True, "result": result}).encode()
+                  self.send_response(200); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+              def do_GET(self):
+                  __import__("time").sleep(1); self.reply([])
+              def do_POST(self):
+                  body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+                  if self.path.endswith("/sendMessage"):
+                      open("/tmp/sent.jsonl", "a").write(json.dumps(body) + "\n")
+                      return self.reply({"message_id": 1})
+                  self.reply(True)
+          HTTPServer(("127.0.0.1", 18080), H).serve_forever()
+          PY
+          )
+          docker exec -d gw python -c "$FAKE"
+          for i in $(seq 60); do docker exec gw grep -q zqxwvkjhgfdsplm.biz /tmp/sent.jsonl 2>/dev/null && break; sleep 1; done
+          docker exec gw grep zqxwvkjhgfdsplm.biz /tmp/sent.jsonl
+          docker logs gw 2>&1 | grep -q "Telegram alerts on"
+          if docker logs gw 2>&1 | grep -q "EXAMPLE-not-a-real-token"; then echo "bot token in the logs"; exit 1; fi
       - name: adguard-tune sidecar (no network, as in compose.yaml) lowers AdGuard's buffer and keeps the file's owner
         run: |
           mkdir -p conf

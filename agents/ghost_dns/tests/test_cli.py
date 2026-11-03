@@ -168,6 +168,33 @@ class CliTests(unittest.TestCase):
         self.assertRegex(text, r"FW_BOT_CALLBACK_SECRET=[0-9a-f]{64}")
         self.assertIn("FW_BOT_PRIVACY=minimal", text)
 
+    def test_telegram_setup_in_docker_says_to_restart_and_writes_an_env_file_the_bot_reads(self):
+        UPDATES.append({"update_id": 6, "message": {"chat": {"id": 4242, "type": "private"},
+                                                    "from": {"id": 4242, "first_name": "Sam"}}})
+        out = io.StringIO()
+        old_which = cli.shutil_which
+        cli.shutil_which = lambda cmd: None            # no systemd in the container
+        os.environ["GHOSTWALL_DOCKER"] = "1"
+        try:
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(cli.cmd_telegram(type("A", (), {"wait": 5})(), token="123456:" + "A" * 30,
+                                                  private=False), 0)
+        finally:
+            cli.shutil_which = old_which
+            os.environ.pop("GHOSTWALL_DOCKER")
+        self.assertIn("docker compose restart ghostwall", out.getvalue())
+        self.assertTrue(any(p.endswith("/sendMessage") for p, _, _ in SEEN))   # the test message
+        # the entrypoint starts fw_bot.py --env-file on this file: it must read it the same way
+        # (its own interpreter: fw_bot and ghost_dns each have a config module)
+        import subprocess
+        fw = os.path.join(os.path.dirname(HERE), "fw_bot")
+        r = subprocess.run([sys.executable, "-c", "import json, sys, fw_bot; e = {}; "
+                            "fw_bot.load_env_file(sys.argv[1], e); print(json.dumps(e))",
+                            os.path.join(self.etc, "fw_bot.env")], cwd=fw, capture_output=True, text=True)
+        env = json.loads(r.stdout)
+        self.assertEqual(env["FW_BOT_TELEGRAM_TOKEN"], "123456:" + "A" * 30)
+        self.assertRegex(env["FW_BOT_CALLBACK_SECRET"], r"^[0-9a-f]{64}$")
+
     def test_bad_token_shape_refused(self):
         with contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaises(cli.CliError):

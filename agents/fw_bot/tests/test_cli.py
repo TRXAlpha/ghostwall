@@ -27,5 +27,28 @@ class CliTests(unittest.TestCase):
         self.assertNotIn("Traceback", r.stderr)
 
 
+class EnvFileTests(unittest.TestCase):
+    """--env-file: what systemd's EnvironmentFile gives the bot, where there is no systemd."""
+
+    def test_reads_fw_bot_keys_only_and_the_environment_wins(self):
+        import tempfile
+        sys.path.insert(0, ROOT)
+        import fw_bot
+        p = os.path.join(tempfile.mkdtemp(), "fw_bot.env")
+        with open(p, "w") as f:
+            f.write("# comment\nFW_BOT_TELEGRAM_TOKEN=123456:abc\nFW_BOT_PRIVACY=\"minimal\"\n"
+                    "PATH=/evil\nFW_BOT_CALLBACK_SECRET=from-file\n\nnot a line\n")
+        env = {"FW_BOT_CALLBACK_SECRET": "from-env"}
+        fw_bot.load_env_file(p, env)
+        self.assertEqual(env, {"FW_BOT_TELEGRAM_TOKEN": "123456:abc", "FW_BOT_PRIVACY": "minimal",
+                               "FW_BOT_CALLBACK_SECRET": "from-env"})
+
+    def test_missing_env_file_is_a_config_error(self):
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "fw_bot.py"), "--owner-file", "x",
+                            "--env-file", "/nonexistent/fw_bot.env"], capture_output=True, text=True, cwd=ROOT)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("can't read /nonexistent/fw_bot.env", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

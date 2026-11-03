@@ -131,6 +131,8 @@ docker compose up -d --build
 4. Dashboard: `https://<host>:8088` (self-signed: the browser warns once), user `ghostwall`, password from
    `docker compose exec ghostwall ghostwall password`. The same `ghostwall` commands work
    there (`docker compose exec ghostwall ghostwall status`, `... alerts`, `... name`).
+5. Telegram (optional): `docker compose exec ghostwall ghostwall telegram`, then
+   `docker compose restart ghostwall`; the container runs the bot from then on.
 
 The Ghostwall container keeps one capability (`DAC_OVERRIDE`, to read AdGuard's log), a
 read-only filesystem and `no-new-privileges`, and sees AdGuard's files read-only. Only the

@@ -335,6 +335,10 @@ def tg(token: str, method: str, params: dict | None = None) -> dict:
     except urllib.error.HTTPError as e:
         if e.code == 401:
             raise CliError("Telegram says that token is wrong. Copy it again from @BotFather.")
+        if e.code == 409:
+            raise CliError("Telegram says another program is reading this bot's messages (a Ghostwall "
+                           "bot already running?). Stop it first: sudo systemctl stop ghostwall-fw-bot, "
+                           "or in Docker remove /data/fw_bot.env and restart the container.")
         raise CliError(f"Telegram error: HTTP {e.code}")
     except (urllib.error.URLError, OSError) as e:
         raise CliError(f"can't reach Telegram ({e})")
@@ -405,6 +409,13 @@ def cmd_telegram(a, token: str | None = None, start_service: bool = True, privat
         tg(token, "sendMessage", {"chat_id": chat_id, "text": "Ghostwall is connected. Alerts will arrive here; "
                                                              "send /fw help for commands."})
         print("   Started ghostwall-fw-bot and sent you a test message.")
+    elif start_service and os.environ.get("GHOSTWALL_DOCKER"):
+        tg(token, "sendMessage", {"chat_id": chat_id, "text": "Ghostwall is connected. Alerts will arrive "
+                                                             "here once its container restarts."})
+        print("   Sent you a test message. Now restart the container, which starts the bot:\n"
+              "     docker compose restart ghostwall")
+    elif start_service:
+        print("   No systemd here: start the bot yourself (agents/fw_bot/fw_bot.py --env-file ...).")
     return 0
 
 

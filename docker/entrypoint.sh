@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Ghostwall in a container: ghost-dns in shadow mode plus the dashboard, state in /data.
+# Ghostwall in a container: ghost-dns in shadow mode plus the dashboard, state in /data,
+# and the Telegram bot once `docker compose exec ghostwall ghostwall telegram` set it up.
 #
 # Environment (all optional):
 #   GHOSTWALL_QUERYLOG         the DNS server's log as mounted here
@@ -98,6 +99,18 @@ PY
 # (No `[ -d ] && ... &` here: a job that exits at once would end `wait -n` below.)
 if [ -d "$(dirname "$YAML")" ]; then
   ( while :; do tune_adguard; sleep 300; done ) &
+fi
+
+# Telegram alerts, once `ghostwall telegram` has written its two files here (it says to
+# restart the container then). A bad file is retried every 30 s, not a restart of everything.
+if [ -f "$D/fw_bot.env" ] && [ -f "$D/owner.json" ]; then
+  echo "[ghostwall] Telegram alerts on ($D/fw_bot.env)"
+  ( while :; do
+      FW_BOT_CONTROL_TOKEN_FILE="$D/control_token" python agents/fw_bot/fw_bot.py \
+        --env-file "$D/fw_bot.env" --owner-file "$D/owner.json" --labels "$D/labels.jsonl" \
+        --digest "$D/digest.jsonl" --follow "$D/events.jsonl" --commands || true
+      sleep 30
+    done ) &
 fi
 
 python agents/ghost_dns/app.py --config "$D/ghost_dns.json" &

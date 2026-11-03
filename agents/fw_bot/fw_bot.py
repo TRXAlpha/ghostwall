@@ -375,6 +375,23 @@ def poll_updates(cfg: Config, handle, max_polls: int | None = None, max_backoff:
                 problems.say(f"update error: {exc}")
 
 
+def load_env_file(path: str, env=None) -> None:
+    """KEY=VALUE lines as systemd's EnvironmentFile reads them (# comments, optional
+    quotes), for where there is no systemd (the Docker image). Only FW_BOT_* keys, and
+    the real environment wins."""
+    env = os.environ if env is None else env
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, val = (x.strip() for x in line.split("=", 1))
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+                val = val[1:-1]
+            if key.startswith("FW_BOT_"):
+                env.setdefault(key, val)
+
+
 def main(argv=None) -> int:
     import argparse
 
@@ -384,6 +401,9 @@ def main(argv=None) -> int:
     ap.add_argument("--labels", default="labels.jsonl")
     ap.add_argument("--digest", default="digest.jsonl")
     ap.add_argument("--control-base", default=cfgmod.CONTROL_BASE)
+    ap.add_argument("--env-file", metavar="PATH",
+                    help="read FW_BOT_* settings from this KEY=VALUE file, as systemd's "
+                         "EnvironmentFile does (the Docker image starts the bot this way)")
     ap.add_argument("--events", help="replay an events.jsonl file once, then exit")
     ap.add_argument("--follow", help="send-only: tail this events.jsonl and alert the owner (no polling)")
     ap.add_argument("--follow-state", metavar="PATH",
@@ -393,6 +413,12 @@ def main(argv=None) -> int:
                     help="with --follow: also poll Telegram for /fw commands and alert buttons "
                          "(only if no other bot process uses this token)")
     args = ap.parse_args(argv)
+    if args.env_file:
+        try:
+            load_env_file(args.env_file)
+        except OSError as exc:
+            print(f"config error: can't read {args.env_file}: {exc}", file=sys.stderr)
+            return 2
     try:
         cfg = Config.load(
             args.owner_file,
