@@ -1,0 +1,25 @@
+name: release
+
+# Pushing a version tag (v0.3.0-beta.1, ...) publishes a GitHub release whose notes are
+# that version's section of CHANGELOG.md; a tag with a "-" (beta, rc) is a pre-release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: release from the CHANGELOG section of this tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          awk -v h="## $TAG " 'index($0, h) == 1 {on = 1; next} on && /^## / {exit} on' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "CHANGELOG.md has no '## $TAG ' section"; exit 1; }
+          pre=""; case "$TAG" in *-*) pre="--prerelease" ;; esac
+          gh release create "$TAG" --title "$TAG" --notes-file notes.md --verify-tag $pre

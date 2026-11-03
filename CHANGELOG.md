@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (after v0.2.0-beta.2)
+## v0.3.0-beta.1 (2026-11-03)
 
 Update as usual: `git pull && sudo ./install.sh` (Docker: `git pull && docker compose up -d --build`).
 Your settings, alerts, allowlist and thresholds are kept.
