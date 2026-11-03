@@ -222,7 +222,10 @@ names when 1% of normal names are flagged (53.4% up to v0.2.0-beta.2, which did 
 look inside dynamic-DNS names such as `x7kq2v9w.ddns.net`). Dictionary-word DGAs
 (`brothernerveplace.com`) get through almost always: they look like normal names. A
 plain score therefore only alerts for names new to your network, and the behaviour
-rules above do the rest.
+rules above do the rest. Is that better than "this name looks random"? On the same names,
+character entropy catches 11.6% and the best simple rule tried 16.2% at the same 1% of
+normal names flagged
+([results_baselines.md](agents/dga_eval/results_baselines.md), `agents/dga_eval/baselines.py`).
 
 A 1-5-gram model retrained on the public data catches 80.5% of names from known families
 and 64.8% from families it never saw, against 81.4% and 60.8% for an Endgame-style LSTM.

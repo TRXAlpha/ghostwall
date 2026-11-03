@@ -108,7 +108,9 @@ CI job looks up every locked Python version in the OSV vulnerability database.
   your own query log). The dashboard lists what you trusted, with an undo.
 - `FW_BOT_PRIVACY=minimal`: no domains, IPs or MACs in Telegram messages.
 - Opt-in `"models": "v3-public"` (no onnxruntime), and a public, reproducible benchmark:
-  `agents/dga_eval/results_public.md`, with a fairer LSTM rematch in `results_lstm_fair.md`.
+  `agents/dga_eval/results_public.md`, with a fairer LSTM rematch in `results_lstm_fair.md`
+  and simple baselines in `results_baselines.md` (character entropy: 11.6% at 1% false
+  positives, against 60.3% for the shipped models).
 - CI installs Ghostwall for real under systemd (Debian 12 and 13, Ubuntu 22.04, 24.04 and
   26.04), inline mode included.
 - CI lints the code (pyflakes, pinned). Its first run found a gateway test (the LAN

@@ -131,6 +131,7 @@ overrides any of them. The most useful keys:
 | `web_ui/make_demo.py` | regenerate the demo data by running the real detector over a scripted day |
 | `ghost_dns/eval_detection.py` | before/after simulation on labelled data |
 | `ghost_dns/bench_latency.py [-n 200]` | inline-mode answer time for never-seen names, scoring before vs after the answer |
+| `dga_eval/baselines.py --data DIR` | the shipped models against simple "looks random" rules (entropy, ...) on the same public names → `results_baselines.md` |
 | `dga_eval/fair_lstm.py --data DIR` | 1-5-gram model vs an early-stopped LSTM, 3 seeds × 5 unseen-family folds → `results_lstm_fair.md` |
 | `dga_eval/train_public.py --data DIR` | retrain the opt-in `v3-public` model and its thresholds → `results_v3_public.md` |
 | `dga_eval/public_bench.py --data DIR --download` | public DGA benchmark (pinned data, ~2 h on 4 cores; needs scikit-learn, torch, onnx) → `results_public.md` |
