@@ -27,6 +27,12 @@ Your settings, alerts, allowlist and thresholds are kept.
   the provider's name, which hid whole malware families.
 - Updates deleted thresholds you had set; Trust on a DoH alert did nothing; the history replay
   ignored the log's time (novelty, de-duplication); every restart re-sent the day's alerts.
+- Telegram dropped alerts: one failed send (Telegram down, the Pi offline, the owner not
+  having pressed Start) skipped that alert for good and, with `--commands` (the shipped
+  setting), silently stopped all later alerts while commands kept working. A restart
+  skipped everything written while the bot was down, and a wrong token only showed as
+  silence. Alerts now wait and retry in order, survive restarts and say "sent late";
+  the journal says once what is wrong and how to fix it, without the token.
 - `/opt/ghostwall` kept the cloning user's ownership, so that user could change code that runs
   with more rights.
 

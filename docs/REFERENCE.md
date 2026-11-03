@@ -127,7 +127,7 @@ overrides any of them. The most useful keys:
 | `dga_eval/fair_lstm.py --data DIR` | 1-5-gram model vs an early-stopped LSTM, 3 seeds × 5 unseen-family folds → `results_lstm_fair.md` |
 | `dga_eval/train_public.py --data DIR` | retrain the opt-in `v3-public` model and its thresholds → `results_v3_public.md` |
 | `dga_eval/public_bench.py --data DIR --download` | public DGA benchmark (pinned data, ~2 h on 4 cores; needs scikit-learn, torch, onnx) → `results_public.md` |
-| `fw_bot/fw_bot.py --owner-file FILE --follow EVENTS [--commands]` | Telegram alerts, optionally commands |
+| `fw_bot/fw_bot.py --owner-file FILE --follow EVENTS [--commands] [--follow-state FILE]` | Telegram alerts, optionally commands. Alerts are sent in order and kept while Telegram fails; the position survives restarts in `--follow-state` (default `fw_bot_follow.json` next to EVENTS) |
 | `fw_bot/validate_events.py FILE` | validate an events file |
 | `web_ui/app.py --bind ADDR --port 8088 [--tls-cert F --tls-key F] [--control-token-file FILE]` | dashboard (the token file defaults to `/var/lib/ghostwall/control_token`) |
 | `netconf/gen.py` | render gateway-mode configs into `netconf/out/` |

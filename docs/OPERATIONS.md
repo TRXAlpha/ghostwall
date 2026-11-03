@@ -117,6 +117,13 @@ Unblock, Keep blocked and Isolate.
 | `/fw lockdown` | toggle LAN lockdown (needs `enforce: "nft"`) |
 | `/fw learning on\|off` | alert-only vs blocking (inline mode) |
 
+**When Telegram is down** (or the Pi is offline, or you haven't pressed Start yet) alerts
+wait in order and are retried with a growing pause (up to a minute); an alert that
+arrives more than 5 minutes late says when it happened. The bot keeps its place in
+`/var/lib/ghostwall/fw_bot_follow.json`, so alerts written while it was stopped are
+sent when it starts (the very first start sends only new ones). A message Telegram
+refuses outright is logged and skipped, so it can't hold up the rest.
+
 **Already running a bot on the same token?** Only one process may poll a token. Remove
 `--commands` from the `ghostwall-fw-bot` unit (it then only sends alerts) and route
 `/fw` messages from your bot to `dispatch.Dispatcher`: `Dispatcher.text(text)` returns
@@ -239,7 +246,7 @@ whole network; read it fully first, and keep the router's admin page open.
 | Browser warns about the certificate | expected once: it is the box's own self-signed one. Compare the SHA-256 fingerprint the installer printed (`openssl x509 -noout -fingerprint -sha256 -in /etc/ghostwall/tls/cert.pem`) |
 | Forgot the dashboard password | `sudo ghostwall password` |
 | Alerts show IP addresses | `sudo ghostwall devices`, then `sudo ghostwall name <ip> <name>` |
-| Telegram silent | `journalctl -u ghostwall-fw-bot -n 50`; token, chat id, file permissions |
+| Telegram silent | `journalctl -u ghostwall-fw-bot -n 50` says why, once: a rejected token (fix `fw_bot.env`, restart), "press Start" (open the bot in Telegram and press Start: a bot can't write first) or Telegram unreachable. Alerts wait meanwhile and go out, marked "sent late", when Telegram answers; a restart resumes where the bot stopped |
 | Telegram `409 Conflict` | another process polls the same token; see "Already running a bot" |
 | No DNS (inline) | `sudo bash .../go_shadow.sh` puts AdGuard back on :53 |
 
