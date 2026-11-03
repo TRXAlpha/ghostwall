@@ -138,7 +138,6 @@ class ResolverTests(unittest.TestCase):
         r, s = self._resolver(0.0, learning=False)
         s.add_block("bad.example")
         resp = r.handle_packet("192.168.1.30", build_query("bad.example"))
-        q = dnsmsg.parse_question(build_query("bad.example"))
         # sinkhole default -> 1 answer with the sinkhole ip
         self.assertEqual(struct.unpack(">H", resp[6:8])[0], 1)
 

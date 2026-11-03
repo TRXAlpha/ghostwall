@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pcapmerge import (MAGIC_BYTES_BE, MAGIC_BYTES_LE, PKT_HDR, read_header,
+from pcapmerge import (MAGIC_BYTES_LE, PKT_HDR, read_header,
                        merge_pcaps_pure, merge_pcaps)
 
 PCAP_HDR = struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, 0, 1)

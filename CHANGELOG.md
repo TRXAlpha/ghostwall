@@ -97,3 +97,5 @@ CI job looks up every locked Python version in the OSV vulnerability database.
   `agents/dga_eval/results_public.md`, with a fairer LSTM rematch in `results_lstm_fair.md`.
 - CI installs Ghostwall for real under systemd (Debian 12 and 13, Ubuntu 22.04, 24.04 and
   26.04), inline mode included.
+- CI lints the code (pyflakes, pinned). Its first run found a gateway test (the LAN
+  interface setting) that had never run, and two tests that checked nothing; all fixed.

@@ -1,7 +1,6 @@
 """Tests for incidents.py: freeze flow, dns history JSON, retention cap."""
 import json
 import os
-import shutil
 import struct
 import sys
 import tempfile
@@ -11,7 +10,6 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from incidents import freeze_incident, enforce_retention, write_dns_history
-import incidents
 
 PCAP_HDR = struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, 0, 1)
 PKT = struct.Struct("<IIII")

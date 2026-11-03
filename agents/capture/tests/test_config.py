@@ -13,12 +13,16 @@ from config import (DEFAULTS, load_config, load_devices, per_device_files,
 
 class TestConfig(unittest.TestCase):
     def test_defaults_and_overrides(self):
-        cfg = load_config({})
-        self.assertEqual(cfg["http_port"], 5381)
-        cfg2 = load_config({"ring_seconds": 5})
-        self.assertEqual(cfg["ring_seconds"], 30)
-        self.assertEqual(cfg["ring_seconds_override"], 5) if False else None
-        self.assertEqual(cfg.get("ring_seconds"), 30)  # override dict key mismatch safe
+        # (not this machine's /etc/ghostwall/capture.json)
+        os.environ["GHOSTWALL_CAPTURE_CONF"] = os.path.join(tempfile.mkdtemp(), "none.json")
+        try:
+            cfg = load_config({})
+            self.assertEqual(cfg["http_port"], 5381)
+            self.assertEqual(cfg["ring_seconds"], 30)
+            self.assertEqual(load_config({"ring_seconds": 5})["ring_seconds"], 5)
+            self.assertEqual(load_config({"ring_seconds": None})["ring_seconds"], 30)   # unset flag
+        finally:
+            del os.environ["GHOSTWALL_CAPTURE_CONF"]
 
     def test_load_devices(self):
         with tempfile.TemporaryDirectory() as d:

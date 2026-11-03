@@ -6,10 +6,9 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from callbacks import CallbackHandler, append_label
+from callbacks import CallbackHandler
 from config import Config
 from control_client import ControlClient, ControlError
-from signing import make_callback
 
 SECRET = b"s3cret"
 EVENT = {

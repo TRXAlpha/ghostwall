@@ -33,6 +33,19 @@ jobs:
       - name: shell scripts parse
         run: for f in install.sh uninstall.sh agents/ghost_dns/go_shadow.sh docker/entrypoint.sh tests/installer_e2e.sh tests/gateway_e2e.sh; do bash -n "$f"; done
 
+  lint:
+    # Undefined names, unused imports, code that can never run: a test class written after
+    # `unittest.main()` once passed CI for weeks without ever running.
+    name: lint (pyflakes)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.13"
+      - run: pip install --require-hashes -r tests/requirements-lint.txt
+      - run: python -m pyflakes agents ghostwall tests trm
+
   installer:
     # install.sh for real, under systemd, as a user would run it. (Before this job, a
     # Python 3.12-only line made every fresh install on Debian 12 / Ubuntu 22.04 fail.)

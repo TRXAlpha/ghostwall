@@ -91,7 +91,6 @@ class NgramCompatTests(unittest.TestCase):
         np.testing.assert_array_equal(lr.score_tokens(toks), self._v2_reference(lr, toks))
 
     def test_boundary_markers_add_start_and_end_grams(self):
-        import numpy as np
         from ngram import BOS, EOS, with_boundaries
         from tokenizer import encode, strip_dot
         toks = strip_dot(encode(["ab", "abc.de"]))
@@ -119,7 +118,6 @@ class CacheTests(unittest.TestCase):
 
 class SingleNamePathTests(unittest.TestCase):
     def test_one_name_path_matches_batch_path(self):
-        import numpy as np
         from ngram import hashed_ngrams, hashed_ngrams_one
         from tokenizer import encode, strip_dot
         names = BENIGN + DGAISH + ["a", "", "x" * 80, "my-site", "q1w2e3r4t5y6u7i8o9p0", "brothernerveplace"]

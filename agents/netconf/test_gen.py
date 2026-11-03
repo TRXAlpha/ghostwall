@@ -249,27 +249,34 @@ class TestBreakglassRestore(unittest.TestCase):
         self.assertIn("table inet ghostwall {}\ndelete table inet ghostwall", nft)
 
 
+class TestLanInterface(unittest.TestCase):
+    """The LAN interface was eth0 written into every file; it comes from config.json."""
+
+    def render(self, iface):
+        import json
+        d = tempfile.mkdtemp(prefix="netconf_iface_")
+        cfg = json.loads((HERE / "config.json").read_text(encoding="utf-8"))
+        cfg["lan_iface"] = iface
+        cfg_path = Path(d) / "config.json"
+        cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+        out = Path(d) / "out"
+        r = subprocess.run([sys.executable, str(HERE / "gen.py"), "--devices", str(HERE / "devices.example.json"),
+                            "--config", str(cfg_path), "--out", str(out)], capture_output=True, text=True, cwd=str(HERE))
+        return r, out
+
+    def test_interface_is_configurable(self):
+        r, out = self.render("enp1s0")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for p in out.iterdir():
+            self.assertNotIn("eth0", p.read_text(), p.name)
+        self.assertIn('iifname "enp1s0"', (out / "ghostwall.nft").read_text())
+        self.assertIn("interface=enp1s0", (out / "dnsmasq.conf").read_text())
+
+    def test_interface_name_cannot_inject_rules(self):
+        r, _ = self.render('eth0" accept; #')
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("is not an interface name", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
-
-
-class TestLanInterface(unittest.TestCase):
-    def test_interface_is_configurable(self):
-        import json, tempfile
-        d = tempfile.mkdtemp()
-        cfg = json.load(open(os.path.join(HERE, "config.json")))
-        cfg["lan_iface"] = "enp1s0"
-        orig = os.path.join(HERE, "config.json")
-        saved = open(orig).read()
-        try:
-            with open(orig, "w") as f:
-                json.dump(cfg, f)
-            gen.main(["--devices", os.path.join(HERE, "devices.example.json"), "--out", d])
-        finally:
-            with open(orig, "w") as f:
-                f.write(saved)
-        for name in os.listdir(d):
-            text = open(os.path.join(d, name)).read()
-            self.assertNotIn("eth0", text, name)
-        self.assertIn('iifname "enp1s0"', open(os.path.join(d, "ghostwall.nft")).read())
-        self.assertIn("interface=enp1s0", open(os.path.join(d, "dnsmasq.conf")).read())

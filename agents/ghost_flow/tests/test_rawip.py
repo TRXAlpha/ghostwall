@@ -6,7 +6,6 @@ import unittest
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 from rawip import RawIPDetector, is_local
-from resolved import ResolvedIPs
 
 
 class _Res:

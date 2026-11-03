@@ -89,7 +89,7 @@ def _fnv_hash(tok):
 
 
 if __name__ == "__main__":
-    import sys, time
+    import time
     for f in sorted(os.listdir(RAW)):
         if f.endswith(".parquet"):
             t0 = time.time()

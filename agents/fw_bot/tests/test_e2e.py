@@ -11,7 +11,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fake_telegram import FakeTelegram
 from fw_bot import FwBot
-from signing import make_callback
 
 SECRET = "s3cret"
 EVENT = {

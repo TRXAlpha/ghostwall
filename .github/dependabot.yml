@@ -12,6 +12,11 @@ updates:
       actions:
         patterns: ["*"]
 
+  - package-ecosystem: pip             # the linter CI runs (tests/requirements-lint.txt)
+    directory: /tests
+    schedule:
+      interval: weekly
+
   - package-ecosystem: docker          # the Dockerfile's python base image
     directory: /
     schedule:

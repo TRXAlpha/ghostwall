@@ -1,5 +1,4 @@
 """abused_service: an established device starting to use a service malware favours."""
-import json
 import os
 import sys
 import tempfile

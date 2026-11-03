@@ -20,7 +20,6 @@ import os
 import sys
 import time
 
-import beacon as beacon_mod  # noqa: F401 (type hint only)
 import packet as packet_mod
 import tls as tls_mod
 from ja4 import ja4 as compute_ja4

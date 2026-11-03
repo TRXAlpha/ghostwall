@@ -1,7 +1,6 @@
 """Tests for ring.py using the fake tcpdump: rotation, wrap, stop, status."""
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 import time

@@ -6,7 +6,6 @@ import json
 import time
 
 from alerts import minimal
-from config import Config
 from control_client import ControlClient, ControlError
 from signing import CallbackError, parse_callback
 

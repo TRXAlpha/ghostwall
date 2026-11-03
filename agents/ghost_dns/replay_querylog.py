@@ -18,7 +18,7 @@ import re
 import sys
 import tempfile
 import time
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))

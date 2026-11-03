@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-from control_client import ControlClient, ControlError
+from control_client import ControlClient
 
 
 class Handler(BaseHTTPRequestHandler):
