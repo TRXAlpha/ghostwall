@@ -107,7 +107,8 @@
    "ip": "192.168.1.11",
    "reasons": [
     "resolved DoH/DoT provider dns.google",
-    "this device may be bypassing your DNS filter"
+    "this device may be bypassing your DNS filter",
+    "not a sign of infection by itself: phones (Private DNS) and browsers (secure DNS) do this; Trust it if it is yours"
    ]
   },
   {

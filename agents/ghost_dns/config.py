@@ -33,6 +33,9 @@ DEFAULTS = {
     "upstream_fallbacks": ["9.9.9.9"],
     "primary_retry_seconds": 10,    # skip a failed primary this long before retrying
     "event_dedupe_seconds": 86400,  # one alert per device per domain family per day
+    # ...except where a daily repeat is only noise: a phone with "Private DNS" or a browser
+    # with "secure DNS" on keeps using its DoH provider; say so once a month, not daily.
+    "rule_dedupe_seconds": {"doh_bypass": 30 * 86400},
     "alert_rate_per_device": 30,    # alerts per device per minute at most (0 = no cap)
     "workers": 16,                  # concurrent in-flight queries
     "resolved_dedupe_seconds": 300,  # min gap before re-logging a resolved IP

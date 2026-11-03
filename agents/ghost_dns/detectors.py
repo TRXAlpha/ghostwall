@@ -162,7 +162,9 @@ class DohDetector:
             return None
         if host in DOH_HOSTS or (host.split(".", 1)[-1] in DOH_HOSTS):
             return Hit("doh_bypass", "warn",
-                       [f"resolved DoH/DoT provider {host}", "this device may be bypassing your DNS filter"])
+                       [f"resolved DoH/DoT provider {host}", "this device may be bypassing your DNS filter",
+                        "not a sign of infection by itself: phones (Private DNS) and browsers (secure DNS) "
+                        "do this; Trust it if it is yours"])
         return None
 
 

@@ -367,6 +367,22 @@ class ShadowTests(Base):
         self._write({"IP": "127.0.0.1", "QH": "q.example", "QT": "A"})
         self.assertEqual(f.poll_once(), 1)
 
+    def test_an_unreadable_log_is_said_once_not_silently_skipped(self):
+        import shutil
+        f = QueryLogFollower(self.r, self.log)
+        os.remove(self.log)
+        os.mkdir(self.log)               # exists, can't be read as a file (root reads any file)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(f.poll_once(), 0)
+            self.assertEqual(f.poll_once(), 0)
+            shutil.rmtree(self.log)
+            self._write({"IP": "127.0.0.1", "QH": "back.example", "QT": "A"})
+            f.poll_once()
+        self.assertEqual(err.getvalue().count("can't read"), 1)
+        self.assertIn("DAC_OVERRIDE", err.getvalue())
+        self.assertIn("readable again", err.getvalue())
+
     def test_lines_written_just_before_a_rotation_are_scored(self):
         # The follower looks every 2 s. AdGuard renaming querylog.json to .1 (or Pi-hole's
         # logrotate copying and truncating) in between must not lose what came last.

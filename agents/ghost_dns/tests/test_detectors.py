@@ -265,6 +265,22 @@ class ResolverWiringTests(unittest.TestCase):
         r = self.build(["evil.example"])
         self.assertIn("sudo ghostwall allow evil.example", " ".join(r.decide("192.168.1.30", "x.evil.example", "A").event["reasons"]))
 
+    def test_doh_bypass_alerts_once_a_month_not_daily(self):
+        from datetime import datetime, timedelta, timezone
+        r = self.build()
+        t0 = datetime(2026, 11, 3, tzinfo=timezone.utc)
+        written = lambda rule: sum(e["rule"] == rule for e in self.events())   # noqa: E731
+        for days, total in ((0, 1), (1, 1), (29, 1), (31, 2)):     # written, not suppressed
+            self.state.clock = lambda d=days: t0 + timedelta(days=d)
+            r.decide("192.168.1.30", "dns.google", "A")
+            self.assertEqual(written("doh_bypass"), total, days)
+        self.assertIn("not a sign of infection", " ".join(self.events()[0]["reasons"]))
+        r.scorer = FakeScorer(0.99)                                    # other rules: still daily
+        for days, total in ((32, 1), (32.5, 1), (33.1, 2)):
+            self.state.clock = lambda d=days: t0 + timedelta(days=d)
+            r.decide("192.168.1.30", "kq7zx2wvplmh.biz", "A")
+            self.assertEqual(written("dga_suspect"), total, days)
+
     def test_doh_bypass_alert(self):
         r = self.build()
         d = r.decide("192.168.1.30", "dns.google", "A")

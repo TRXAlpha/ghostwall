@@ -115,6 +115,7 @@ class QueryLogFollower:
         self._stop = threading.Event()
         self.seen = 0
         self.missing = False  # True while the querylog can't be seen; warned once per outage
+        self.unreadable = False  # True while it exists but can't be opened (permissions)
 
     def _read_head(self) -> bytes:
         try:
@@ -159,7 +160,7 @@ class QueryLogFollower:
                 done += self._read_from(old)
             self.offset = 0
             self._head = self._read_head()
-        done += self._read_from(self.path)
+        done += self._read_from(self.path, main=True)
         self.seen += done
         return done
 
@@ -170,14 +171,22 @@ class QueryLogFollower:
         except OSError:
             return b""
 
-    def _read_from(self, path: str) -> int:
+    def _read_from(self, path: str, main: bool = False) -> int:
         """Score the complete lines of `path` after self.offset (advancing it)."""
         done = 0
         pending: list[list] = []   # Pi-hole: queries waiting to see whether a "blocked" line follows
         try:
             f = open(path, "rb")
-        except OSError:
+        except OSError as exc:
+            if main and not self.unreadable:   # blind, so say so (once), with the usual cause
+                print(f"[ghost-dns:shadow] WARNING can't read {path} ({exc.strerror or exc}) -- nothing is "
+                      "being scored. It belongs to the user your DNS server runs as; Docker: add "
+                      "cap_add: [DAC_OVERRIDE] to the ghostwall service", file=sys.stderr, flush=True)
+                self.unreadable = True
             return 0
+        if main and self.unreadable:
+            print(f"[ghost-dns:shadow] {path} is readable again", file=sys.stderr, flush=True)
+            self.unreadable = False
         with f:
             f.seek(self.offset)
             for raw in f:

@@ -4,27 +4,32 @@
 [![release](https://img.shields.io/github/v/release/TRXAlpha/ghostwall?include_prereleases&sort=semver)](https://github.com/TRXAlpha/ghostwall/releases)
 [![license](https://img.shields.io/github/license/TRXAlpha/ghostwall)](LICENSE)
 
-**Spots infected devices on your home network from their DNS lookups.** Ghostwall runs
+**Watches each device on your home network for the DNS habits of malware.** Ghostwall runs
 next to [AdGuard Home](https://github.com/AdguardTeam/AdGuardHome) or
 [Pi-hole](https://pi-hole.net) on a Raspberry Pi, a VM or any small Linux box. It reads
-your DNS server's query log and watches each device for the habits of malware: a device
-that suddenly starts using a bot API, a paste site or a tunnel service, skips your DNS
-filter, smuggles data through DNS, calls home on a timer, looks up known phishing
-domains, or a burst of random-looking names. Two small on-device models score how
-random a name looks; the behaviour rules do most of the work. Alerts go to a dashboard
-or Telegram. Ghostwall never sends your DNS traffic anywhere (one exception: in inline
-mode, while your DNS server is down, it answers through a fallback resolver, Quad9 by
-default; `"upstream_fallbacks": []` turns that off). The only thing it downloads is a
-daily phishing list, and the only thing it sends out is the alerts themselves, if you
-turn on Telegram (domain names can be left out of those too).
+your DNS server's query log and flags a device that suddenly starts using a bot API, a
+paste site or a tunnel service, smuggles data through DNS, calls home on a timer, looks up
+known phishing domains, or bursts through random-looking names. It also tells you when a
+device skips your DNS filter (DNS-over-HTTPS): not a sign of infection by itself (phones
+and browsers do it when "Private DNS" or "secure DNS" is on), but your filter no longer
+sees that device. Two small on-device models score how random a name looks; the behaviour
+rules do most of the work. Alerts go to a dashboard or Telegram. Ghostwall never sends
+your DNS traffic anywhere (one exception: in inline mode, while your DNS server is down,
+it answers through a fallback resolver, Quad9 by default; `"upstream_fallbacks": []` turns
+that off). The only thing it downloads is a daily phishing list, and the only thing it
+sends out is the alerts themselves, if you turn on Telegram (domain names can be left out
+of those too).
 
 > **Status: a detector, with blocking as an experiment.** The recommended *shadow mode*
-> reads the query log and alerts; it cannot break DNS. It has run on the author's home
-> network (Raspberry Pi 4 + AdGuard Home) since late October 2026, which is not long.
-> v0.2 added Pi-hole, x86_64 VMs, Docker and a dashboard password. *Inline mode*
-> (Ghostwall answers DNS and blocks) passes an end-to-end test in CI (a systemd
-> container with a stand-in AdGuard: forwarding, sinkholing, SERVFAIL when the upstream
-> dies, and the way back to shadow mode), but is not proven on a real network. See [Limits](#limits).
+> only reads the query log and alerts, so it is never in the path of your DNS (installing
+> restarts AdGuard once, a few seconds, to make it write its log promptly). It has run on
+> the author's home network (Raspberry Pi 4 + AdGuard Home) since late October 2026, which
+> is not long, and **it has not caught a real infection yet**: there was none to catch, so
+> the numbers from the field are false-alarm counts. Detection rates come from public data
+> ([How well it works](#how-well-it-works)). *Inline mode* (Ghostwall answers DNS and
+> blocks) passes an end-to-end test in CI (a systemd container with a stand-in AdGuard:
+> forwarding, sinkholing, SERVFAIL when the upstream dies, and the way back to shadow
+> mode), but is not proven on a real network. See [Limits](#limits).
 
 **Try it** on the box that runs AdGuard Home or Pi-hole:
 
@@ -134,7 +139,8 @@ docker compose up -d --build
 5. Telegram (optional): `docker compose exec ghostwall ghostwall telegram`, then
    `docker compose restart ghostwall`; the container runs the bot from then on.
 
-The Ghostwall container keeps one capability (`DAC_OVERRIDE`, to read AdGuard's log), a
+The Ghostwall container runs with no capabilities (if you run AdGuard as a non-root user, it
+needs `DAC_OVERRIDE` to read the log, and says so), a
 read-only filesystem and `no-new-privileges`, and sees AdGuard's files read-only. Only the
 small `adguard-tune` service, which has no network and sees nothing but that folder, can
 write AdGuard's config (to lower its log buffer, keeping the file's owner). Images are pinned by digest (Dependabot proposes

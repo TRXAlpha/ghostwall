@@ -49,6 +49,17 @@ if [ "${1:-}" = "tune-adguard" ]; then
 fi
 
 mkdir -p "$D"
+# No capabilities (compose.yaml): only what this container's root owns can be written or read.
+if ! ( : > "$D/.writable" ) 2>/dev/null; then
+  echo "[ghostwall] can't write $D: the ghostwall-data folder belongs to another user." >&2
+  echo "            sudo chown -R root:root ./ghostwall-data   (or add cap_add: [DAC_OVERRIDE])" >&2
+  exit 1
+fi
+rm -f "$D/.writable"
+if [ -e "$QUERYLOG" ] && [ ! -r "$QUERYLOG" ]; then
+  echo "[ghostwall] can't read $QUERYLOG: your DNS server runs as another user. Add" >&2
+  echo "            cap_add: [DAC_OVERRIDE] to the ghostwall service in compose.yaml" >&2
+fi
 
 # The password is never printed: container logs are kept, shipped and pasted into issues.
 if [ -z "${GHOSTWALL_WEB_PASSWORD:-}" ]; then

@@ -36,14 +36,16 @@ services:
     environment:
       GHOSTWALL_QUERYLOG: /adguard/work/data/querylog.json
       # GHOSTWALL_WEB_PASSWORD: choose-one   # default: generated once into /data/web_password
-    # Root inside the container (to read AdGuard's root-owned log) but with one capability,
+    # Root inside the container (to read AdGuard's root-owned log) but with no capabilities,
     # a read-only filesystem and no way to gain privileges. It sees AdGuard's files
     # read-only and never its config: the dashboard listens on the network, and a bug
     # there must not be able to change where your DNS goes.
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
-    cap_add: [DAC_OVERRIDE]
+    # No capabilities: AdGuard's image runs as root, and root may read what root owns.
+    # Running AdGuard as another user (`user:` in its service)? Then add
+    # cap_add: [DAC_OVERRIDE] here; the container says so when it can't read the log.
     security_opt: ["no-new-privileges:true"]
     volumes:
       - ./adguard/work:/adguard/work:ro

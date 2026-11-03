@@ -18,7 +18,9 @@ Your settings, alerts, allowlist and thresholds are kept.
 - **Telegram commands count only from you, in your private chat with the bot** (not from
   other members of a group).
 - **Docker:** AdGuard's config is now mounted only into a small `adguard-tune` service; use the
-  new `compose.yaml` if you copied the old one. Images are pinned.
+  new `compose.yaml` if you copied the old one. Images are pinned. The Ghostwall container now
+  runs with no capabilities; if you run AdGuard as a non-root user, add
+  `cap_add: [DAC_OVERRIDE]` to it (the container tells you when it can't read the log).
 
 ### Fixed
 
@@ -39,6 +41,12 @@ Your settings, alerts, allowlist and thresholds are kept.
   query alerted again; it now trusts the zone (the event's new `trust` field). A
   `dga_burst` alert no longer offers Trust at all: it is many different names, and
   trusting the one shown changed nothing. `ghostwall alerts` prints local time, not UTC.
+- A phone with "Private DNS" on (or a browser with "secure DNS") raised the same
+  "bypassing your DNS filter" alert every day. It now comes once a month per device and
+  provider, and says that it is not a sign of infection by itself.
+- In shadow mode a query log Ghostwall may not read (it belongs to the user AdGuard runs
+  as) was skipped in silence; it is now said once, with the fix. The installer says when it
+  restarts AdGuard (and `ADGUARD_FLUSH_EVERY=0` skips that).
 - Inline mode made every never-seen name wait for the models before answering, even with
   learning on, where the score can't change the answer. It now answers first and scores
   right after: about 6 ms → 0.1 ms median per new name on an x86 VM (more saved on a Pi;

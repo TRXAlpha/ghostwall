@@ -60,6 +60,7 @@ if [ "$SOURCE" = adguard ] && [ -f "$YAML" ]; then
     echo "   backup of the original: $backup"
     case " $changes " in *" port "*) moved=1 ;; esac
     case "$changes" in *flush:*) echo "   AdGuard now writes its query log every $FLUSH queries (was ${changes##*flush:}), so alerts arrive in seconds" ;; esac
+    echo "   restarting $NAME to apply it: a few seconds without DNS (ADGUARD_FLUSH_EVERY=0 skips this)"
     $RESTART >/dev/null
   fi
 fi

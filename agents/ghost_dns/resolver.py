@@ -295,7 +295,8 @@ class Resolver:
         """True if this device already got this kind of alert for this registrable
         domain within event_dedupe_seconds. Records the sighting otherwise (in state.json,
         so restarts don't repeat alerts)."""
-        window = float(self.cfg.get("event_dedupe_seconds", 86400))
+        window = float((self.cfg.get("rule_dedupe_seconds") or {}).get(
+            rule, self.cfg.get("event_dedupe_seconds", 86400)))
         if window <= 0:
             return False
         return self.state.seen_alert(f"{device}|{registrable_part(domain)}|{rule}", window)

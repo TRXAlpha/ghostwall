@@ -77,16 +77,19 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - run: docker build -t ghostwall:ci .
-      - name: smoke test (locked down as in compose.yaml; follows a fake AdGuard log, scores a query, dashboard needs the password)
+      - name: smoke test (locked down as in compose.yaml, no capabilities; follows a fake AdGuard log, scores a query, dashboard needs the password)
         run: |
           mkdir -p work/data data
           : > work/data/querylog.json
+          # as AdGuard's image leaves them: root-owned, 0700 / 0600; data/ as Docker creates it
+          sudo chown -R root:root work data && sudo chmod 700 work/data && sudo chmod 600 work/data/querylog.json
           docker run -d --name gw -p 8088:8088 \
-            --read-only --tmpfs /tmp --cap-drop ALL --cap-add DAC_OVERRIDE --security-opt no-new-privileges \
+            --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges \
             -v "$PWD/work:/adguard/work:ro" -v "$PWD/data:/data" ghostwall:ci
+          test "$(docker exec gw grep CapEff /proc/1/status | cut -f2)" = 0000000000000000
           queries() { docker exec gw python -c "import json,urllib.request; print(json.load(urllib.request.urlopen('http://127.0.0.1:5380/status'))['stats']['queries'])"; }
           for i in $(seq 60); do queries >/dev/null 2>&1 && break; sleep 1; done
-          echo '{"T":"2026-10-31T12:00:00Z","QH":"kjqwehdzxklqwpe.biz","QT":"A","IP":"192.168.1.9"}' >> work/data/querylog.json
+          echo '{"T":"2026-10-31T12:00:00Z","QH":"kjqwehdzxklqwpe.biz","QT":"A","IP":"192.168.1.9"}' | sudo tee -a work/data/querylog.json >/dev/null
           for i in $(seq 30); do [ "$(queries)" = 1 ] && break; sleep 1; done
           docker exec gw python -c "import json,urllib.request; s=json.load(urllib.request.urlopen('http://127.0.0.1:5380/status')); print(s); assert s['shadow'] and s['stats']['queries'] == 1"
           grep kjqwehdzxklqwpe.biz data/events.jsonl
@@ -96,15 +99,23 @@ jobs:
           test "$(curl -sk -o /dev/null -w '%{http_code}' -u "ghostwall:$PASS" https://127.0.0.1:8088/api/events)" = 200
           if docker logs gw 2>&1 | grep -qF "$PASS"; then echo "password leaked into the logs"; exit 1; fi
           docker exec gw ghostwall status | grep -q "1 queries"
+      - name: a log owned by another user (AdGuard run as non-root) is reported, not silently unread
+        run: |
+          mkdir -p other/data otherdata && : > other/data/querylog.json
+          sudo chown -R 1234:1234 other && sudo chmod 600 other/data/querylog.json && sudo chown root:root otherdata
+          docker run -d --name gw2 --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges \
+            -v "$PWD/other:/adguard/work:ro" -v "$PWD/otherdata:/data" ghostwall:ci
+          for i in $(seq 30); do docker logs gw2 2>&1 | grep -q "cap_add: \[DAC_OVERRIDE\]" && break; sleep 1; done
+          docker logs gw2 2>&1 | grep "can't read /adguard/work/data/querylog.json"
       - name: Telegram alerts in the container (as `ghostwall telegram` sets them up; Telegram answers only late)
         run: |
           printf 'FW_BOT_TELEGRAM_TOKEN=123456:EXAMPLE-not-a-real-token-xyz\nFW_BOT_CALLBACK_SECRET=%s\nFW_BOT_TELEGRAM_API=http://127.0.0.1:18080\n' \
-            "$(openssl rand -hex 32)" > data/fw_bot.env
-          echo '{"chat_id": 4242}' > data/owner.json
+            "$(openssl rand -hex 32)" | sudo tee data/fw_bot.env >/dev/null
+          echo '{"chat_id": 4242}' | sudo tee data/owner.json >/dev/null
           docker restart gw
           for i in $(seq 60); do docker exec gw python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5380/status')" 2>/dev/null && break; sleep 1; done
           sleep 2
-          echo '{"T":"2026-10-31T12:05:00Z","QH":"zqxwvkjhgfdsplm.biz","QT":"A","IP":"192.168.1.9"}' >> work/data/querylog.json
+          echo '{"T":"2026-10-31T12:05:00Z","QH":"zqxwvkjhgfdsplm.biz","QT":"A","IP":"192.168.1.9"}' | sudo tee -a work/data/querylog.json >/dev/null
           sleep 4   # the alert is written while Telegram is still unreachable
           FAKE=$(cat <<'PY'
           import json
@@ -142,4 +153,4 @@ jobs:
           test "$(stat -c %u:%a conf/AdGuardHome.yaml)" = "$(id -u):600"
           docker logs tune
       - if: failure()
-        run: docker logs gw; docker logs tune || true
+        run: docker logs gw; docker logs gw2 || true; docker logs tune || true
