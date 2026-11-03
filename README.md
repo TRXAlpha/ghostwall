@@ -289,7 +289,8 @@ on the missing model's empty score.)
   afterwards. The models miss about 4 in 10 DGA domains, and nearly all made of
   dictionary words. Malware that talks to shared
   services (cloud storage, CDNs, chat apps) looks like everyone else, and a device with
-  hardcoded DNS-over-HTTPS is invisible unless it looks the server up by name. Any web
+  hardcoded DNS-over-HTTPS is invisible in shadow mode unless it looks the server up by name
+  (gateway mode catches it by IP: `doh_ip`). Any web
   page can also make your browser look up random-looking names, so an alert means
   "check this device", not proof of infection; alerts are capped per device per
   minute so such a page can't flood you.
@@ -321,9 +322,18 @@ on the missing model's empty score.)
 ## Tests
 
 Stdlib `unittest`, no network needed (`numpy` and `onnxruntime` for the scoring tests).
-[CI](https://github.com/TRXAlpha/ghostwall/actions/workflows/tests.yml) runs them on every
-push on x86_64 and arm64 with Python 3.10 and 3.13, and builds and smoke-tests the Docker
-image on both. To run them yourself:
+[CI](https://github.com/TRXAlpha/ghostwall/actions/workflows/tests.yml) runs on every push:
+
+- unit tests on x86_64 and arm64 with Python 3.10, 3.13 and 3.14, and pyflakes;
+- `tests/installer_e2e.sh`: `install.sh` for real under systemd on Debian 12 and 13 and
+  Ubuntu 22.04, 24.04 and 26.04 (inline mode, update and uninstall included), and an upgrade
+  over v0.2.0-beta.2 that must keep its alerts, trusted domains, names and thresholds;
+- `tests/gateway_e2e.sh`: ghost-flow on a real kernel queue, capture with real tcpdump, the
+  generated nftables ruleset;
+- the Docker image on both CPUs, with no capabilities, including Telegram alerts;
+- weekly, every pinned Python package against the OSV vulnerability database.
+
+To run the unit tests yourself:
 
 ```bash
 for d in agents/ghost_dns/tests agents/ghost_flow/tests agents/fw_bot/tests agents/capture/tests agents/web_ui/tests; do
@@ -344,7 +354,9 @@ agents/ghost_flow/  connection inspector (gateway mode)
 agents/capture/     per-device pcap ring + freeze on alert (gateway mode)
 agents/netconf/     generator for the Pi-as-gateway configs (dnsmasq, nftables, sysctl)
 agents/dga_eval/    evaluation: shipped models on DRIFT (eval_shipped.py -> results_shipped.md),
-                    public benchmark (public_bench.py -> results_public.md)
+                    public benchmark (public_bench.py -> results_public.md), LSTM rematch
+                    (fair_lstm.py), simple baselines (baselines.py -> results_baselines.md)
+tests/              installer, upgrade and gateway end-to-end tests, OSV audit
 ghostwall/          shipped models + the numpy LR trainer
 trm/                neural-net training code
 ```
