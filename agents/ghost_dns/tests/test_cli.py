@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -126,6 +127,24 @@ class CliTests(unittest.TestCase):
         code, out, _ = self.run_cli("alerts", "-n", "5")
         self.assertEqual(code, 0)
         self.assertLess(out.index("new.example"), out.index("old.example"))
+
+    def test_alerts_show_local_time(self):
+        with open(os.path.join(self.data, "events.jsonl"), "w") as f:
+            f.write(json.dumps({"time": "2026-11-03T10:00:00Z", "device": "pc", "domain": "x.example",
+                                "rule": "dga_high"}) + "\n")
+        old_tz = os.environ.get("TZ")
+        os.environ["TZ"] = "XST-5:30"                # POSIX rule (no tzdata needed): UTC+5:30
+        time.tzset()
+        try:
+            _, out, _ = self.run_cli("alerts")
+        finally:
+            if old_tz is None:
+                os.environ.pop("TZ")
+            else:
+                os.environ["TZ"] = old_tz
+            time.tzset()
+        self.assertIn("2026-11-03 15:30:00", out)
+        self.assertNotIn("10:00:00Z", out)
 
     def test_telegram_setup_writes_private_files(self):
         UPDATES.extend([

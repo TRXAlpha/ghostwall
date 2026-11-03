@@ -226,8 +226,11 @@ class Resolver:
         return Decision("recommend", "abused_service", evt)
 
     def _emit_hit(self, dev, domain, hit) -> dict:
+        # A tunnel uses a new subdomain for every query: trusting the one name in the
+        # alert would never match the next, so Trust means the zone it goes to.
+        trust = registrable_part(domain) if hit.rule == "dns_tunnel" else None
         return self._event(dev, domain, rule=hit.rule, action="recommend", severity=hit.severity,
-                           scores=hit.scores or None, reasons=hit.reasons)
+                           scores=hit.scores or None, reasons=hit.reasons, trust=trust)
 
     def enforcer_block_hook(self, domain: str) -> None:
         """Domain blocks are enforced at the resolver (sinkhole); no kernel
@@ -235,11 +238,11 @@ class Resolver:
         return None
 
     def _event(self, dev, domain, *, rule, action, severity, scores=None,
-               reasons=None) -> dict:
+               reasons=None, trust=None) -> dict:
         evt = events_mod.make_event(
             device=dev.name, ip=dev.ip, mac=dev.mac, domain=domain,
             rule=rule, action=action, severity=severity, scores=scores,
-            reasons=reasons)
+            reasons=reasons, trust=trust)
         # Any web page can make a browser look up thousands of made-up names, so one
         # device's alerts are capped per minute (a block still happens; only its alert
         # is dropped). The flood itself still shows up as a dga_burst alert.

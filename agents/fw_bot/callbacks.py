@@ -62,7 +62,7 @@ class CallbackHandler:
                 self.client.unblock(event_id, domain)
                 text = f"Unblocked {domain} (event {event_id})."
             elif action == "trust":
-                r = self.client.allow(domain)
+                r = self.client.allow(str(event.get("trust") or domain))   # a tunnel: its zone
                 text = f"Trusted {r.get('domain', domain)}: no more alerts for it."
             elif action == "keep":
                 text = f"Kept blocked: {domain}."

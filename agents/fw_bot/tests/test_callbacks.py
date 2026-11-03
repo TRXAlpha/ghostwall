@@ -118,6 +118,12 @@ class CallbackTests(unittest.TestCase):
         self.assertIn("Trusted xkjqwehz.biz", out)
         self.assertEqual(self.client.calls, [("allow", "xkjqwehz.biz")])
 
+    def test_trust_on_a_tunnel_alert_trusts_the_zone(self):
+        self.h.events = {"evt_01abc": dict(EVENT, rule="dns_tunnel", trust="exfil.example",
+                                           domain="q8f3k2m9x7v1z4p6.exfil.example")}
+        self.h.handle(self._q("trust"))
+        self.assertEqual(self.client.calls, [("allow", "exfil.example")])
+
     def test_control_error_shows_failure(self):
         self.client.fail = True
         out = self.h.handle(self._q("unblock"))

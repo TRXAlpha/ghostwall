@@ -78,3 +78,8 @@ class TrustButtonTests(unittest.TestCase):
         self.assertNotIn("Trust domain", labels)
         evt["rule"] = "doh_bypass"
         self.assertIn("Trust domain", [b["text"] for row in inline_keyboard(evt, b"k") for b in row])
+
+    def test_no_trust_button_for_a_burst(self):
+        # A burst is many different random names; trusting the one in the alert is a placebo.
+        evt = {"event_id": "evt_1", "rule": "dga_burst", "action": "recommend"}
+        self.assertEqual([b["text"] for row in inline_keyboard(evt, b"k") for b in row], ["Details"])

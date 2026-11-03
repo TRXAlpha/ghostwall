@@ -212,7 +212,8 @@
    "reasons": [
     "12 very long high-entropy subdomains of cdn-pkt7.net",
     "pattern matches DNS tunnelling/exfiltration"
-   ]
+   ],
+   "trust": "cdn-pkt7.net"
   },
   {
    "minutes_ago": 960,

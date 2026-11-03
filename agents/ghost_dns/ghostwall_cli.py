@@ -21,6 +21,7 @@ alert log are readable only by the ghostwall user). In Docker:
 from __future__ import annotations
 
 import argparse
+import datetime
 import getpass
 import json
 import os
@@ -95,6 +96,15 @@ def _ago(iso: str | None) -> str:
     return "just now"
 
 
+def _local(iso: str | None) -> str:
+    """An event's UTC time (2026-11-03T10:00:00Z) as this box's local time."""
+    try:
+        t = datetime.datetime.strptime(str(iso), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return str(iso or "?")
+    return t.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+
 def cmd_status(_a) -> int:
     st = control("/status")
     mode = ("shadow (reads your DNS server's log, can't block)" if st.get("shadow")
@@ -148,7 +158,7 @@ def cmd_alerts(a) -> int:
     for e in alerts:
         score = (e.get("scores") or {}).get("dga")
         sc = f"  score {score:.2f}" if isinstance(score, (int, float)) else ""
-        print(f"{e.get('time', '?')}  {e.get('severity', 'warn'):<4}  {e.get('device', '?'):<16} "
+        print(f"{_local(e.get('time')):<20} {e.get('severity', 'warn'):<4}  {e.get('device', '?'):<16} "
               f"{e.get('domain', '?')}  [{e.get('rule')}]{sc}")
         if e.get("reasons"):
             print(f"{'':22}{'; '.join(e['reasons'][:3])}")

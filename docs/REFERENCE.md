@@ -67,6 +67,7 @@ against this schema (exit 1 on any invalid line).
 | `scores` | no | numbers in 0..1, e.g. `{"dga": 0.97}` |
 | `reasons` | no | short human strings |
 | `capture` | no | pcap note |
+| `trust` | no | what Trust allowlists when it isn't `domain`: a `dns_tunnel` alert names one of many throw-away subdomains, so Trust takes the zone (`trust: "example.com"`). `threat_feed` and `dga_burst` alerts offer no Trust (the feed wins anyway; a burst is many different names) |
 
 ```json
 {"time":"2026-10-20T21:04:05Z","device":"laptop","ip":"192.168.1.10",

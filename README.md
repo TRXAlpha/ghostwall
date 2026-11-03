@@ -26,6 +26,15 @@ turn on Telegram (domain names can be left out of those too).
 > container with a stand-in AdGuard: forwarding, sinkholing, SERVFAIL when the upstream
 > dies, and the way back to shadow mode), but is not proven on a real network. See [Limits](#limits).
 
+**Try it** on the box that runs AdGuard Home or Pi-hole:
+
+```bash
+git clone https://github.com/TRXAlpha/ghostwall.git && cd ghostwall && sudo ./install.sh
+```
+
+It starts in shadow mode (it only reads the query log, so it can't break DNS);
+`sudo /opt/ghostwall/uninstall.sh` removes it. Docker and other ways: [Install](#install).
+
 ![Ghostwall dashboard](docs/img/dashboard.png)
 
 <sub>Demo mode (`python agents/web_ui/demo.py`). Every alert in it came out of the real
@@ -75,40 +84,10 @@ A random-looking name that AdGuard Home already blocked raises no alert of its o
 connection happened, and most of those are ad and tracker junk); it still counts toward a
 burst, and the other rules see it as usual.
 
-**How well, on data anyone can check.** [results_public.md](agents/dga_eval/results_public.md)
-uses only public data (25 DGA families from Netlab 360, the Tranco top 1M) and reproduces
-with `agents/dga_eval/public_bench.py`. There the shipped models catch 60.3% of DGA
-names when 1% of normal names are flagged (53.4% up to v0.2.0-beta.2, which did not
-look inside dynamic-DNS names such as `x7kq2v9w.ddns.net`). Dictionary-word DGAs
-(`brothernerveplace.com`) get through almost always: they look like normal names. A
-plain score therefore only alerts for names new to your network, and the behaviour
-rules above do the rest.
-
-A 1-5-gram model retrained on the public data catches 80.5% of names from known families
-and 64.8% from families it never saw, against 81.4% and 60.8% for an Endgame-style LSTM.
-In a [fairer rematch](agents/dga_eval/results_lstm_fair.md) (the LSTM early-stopped on
-held-out names, three seeds each, the same five unseen-family folds) it is 64.6% against
-60.9% at 1% false positives and about even at 0.1% (38.0% against 37.2%): the LSTM wins
-two folds, the n-gram model wins clearly on folds with dictionary-word families. One
-dataset still. The n-gram model scores a name in about 40 µs in plain numpy (x86, one thread). A version trained on all of that data
-ships as an opt-in: `"models": "v3-public"` in `/etc/ghostwall/ghost_dns.json`, then
-`sudo systemctl restart ghostwall-dns`. It runs without onnxruntime (ghost-dns used 44 MB
-instead of 71 MB on the x86 test machine) and its thresholds flag the same share of
-normal names as the defaults ([results_v3_public.md](agents/dga_eval/results_v3_public.md)).
-It is not the default because it has not been measured on a real network yet. Either way,
-`sudo ghostwall calibrate` shows what the thresholds would flag on your own network.
-
-**On private data.** On DRIFT (a 2017-2025 dataset that is not in this repo), trained
-on 2017-2019 and tested on 2024-2025, the shipped models catch about 61% of DGA names
-at 1% false positives and 47% at 0.2%
-([results_shipped.md](agents/dga_eval/results_shipped.md); reproducing it needs the
-dataset). Replaying 12.9 days of the author's network (115,549 queries, before the
-dynamic-DNS fix and the behaviour rules added since) gave 17 alerts: 4 test lookups the
-author made, 3 devices using DNS-over-HTTPS, 9 random-looking ad-redirect and pop-up
-style domains on the author's computers and phone, and 1 false positive (a weather
-script polling every 15 minutes). That is one network: please
-[open an issue](https://github.com/TRXAlpha/ghostwall/issues) with what you see on yours.
-Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#detection).
+**How well:** about 6 in 10 random-looking (DGA) names nobody has listed yet are caught
+when 1% of normal names are flagged, on public data anyone can check; dictionary-word
+DGAs mostly get through, so the behaviour rules above carry most of the weight. The
+numbers, how to reproduce them and the LSTM comparison: [How well it works](#how-well-it-works).
 
 ## Install
 
@@ -224,6 +203,43 @@ sudo ghostwall calibrate          # after a few days: what each threshold would 
 
 Everything else (going inline, enforcement, the Pi-as-gateway setup, troubleshooting,
 rollback): [docs/OPERATIONS.md](docs/OPERATIONS.md).
+
+## How well it works
+
+**How well, on data anyone can check.** [results_public.md](agents/dga_eval/results_public.md)
+uses only public data (25 DGA families from Netlab 360, the Tranco top 1M) and reproduces
+with `agents/dga_eval/public_bench.py`. There the shipped models catch 60.3% of DGA
+names when 1% of normal names are flagged (53.4% up to v0.2.0-beta.2, which did not
+look inside dynamic-DNS names such as `x7kq2v9w.ddns.net`). Dictionary-word DGAs
+(`brothernerveplace.com`) get through almost always: they look like normal names. A
+plain score therefore only alerts for names new to your network, and the behaviour
+rules above do the rest.
+
+A 1-5-gram model retrained on the public data catches 80.5% of names from known families
+and 64.8% from families it never saw, against 81.4% and 60.8% for an Endgame-style LSTM.
+In a [fairer rematch](agents/dga_eval/results_lstm_fair.md) (the LSTM early-stopped on
+held-out names, three seeds each, the same five unseen-family folds) it is 64.6% against
+60.9% at 1% false positives and about even at 0.1% (38.0% against 37.2%): the LSTM wins
+two folds, the n-gram model wins clearly on folds with dictionary-word families. One
+dataset still. The n-gram model scores a name in about 40 µs in plain numpy (x86, one thread). A version trained on all of that data
+ships as an opt-in: `"models": "v3-public"` in `/etc/ghostwall/ghost_dns.json`, then
+`sudo systemctl restart ghostwall-dns`. It runs without onnxruntime (ghost-dns used 44 MB
+instead of 71 MB on the x86 test machine) and its thresholds flag the same share of
+normal names as the defaults ([results_v3_public.md](agents/dga_eval/results_v3_public.md)).
+It is not the default because it has not been measured on a real network yet. Either way,
+`sudo ghostwall calibrate` shows what the thresholds would flag on your own network.
+
+**On private data.** On DRIFT (a 2017-2025 dataset that is not in this repo), trained
+on 2017-2019 and tested on 2024-2025, the shipped models catch about 61% of DGA names
+at 1% false positives and 47% at 0.2%
+([results_shipped.md](agents/dga_eval/results_shipped.md); reproducing it needs the
+dataset). Replaying 12.9 days of the author's network (115,549 queries, before the
+dynamic-DNS fix and the behaviour rules added since) gave 17 alerts: 4 test lookups the
+author made, 3 devices using DNS-over-HTTPS, 9 random-looking ad-redirect and pop-up
+style domains on the author's computers and phone, and 1 false positive (a weather
+script polling every 15 minutes). That is one network: please
+[open an issue](https://github.com/TRXAlpha/ghostwall/issues) with what you see on yours.
+Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#detection).
 
 ## How it works
 

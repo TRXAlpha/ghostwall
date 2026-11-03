@@ -56,6 +56,26 @@ class ResolverTests(unittest.TestCase):
         return Resolver(self.cfg, state, FakeScorer(dga),
                         Enforcer(NullBackend()), self.devices, self.events), state
 
+    def test_trust_on_a_tunnel_alert_trusts_its_zone(self):
+        # Every tunnel query is a new subdomain: Trust on the one in the alert would never
+        # match the next. The event names the zone to trust, and trusting it works.
+        r, s = self._resolver(0.1, learning=True)
+        evt = None
+        for i in range(40):
+            d = r.decide("192.168.1.30", f"{i:02d}q8f3k2m9x7v1z4p6w0r5t.exfil.example", "TXT")
+            evt = evt or d.event
+        self.assertEqual(evt["rule"], "dns_tunnel")
+        self.assertEqual(evt["trust"], "exfil.example")
+        s.allow(evt["trust"])
+        r2, _ = self._resolver(0.1, learning=True)
+        quiet = [r2.decide("192.168.1.30", f"{i:02d}z9y8x7w6v5u4t3s2r1q0p.exfil.example", "TXT")
+                 for i in range(40)]
+        self.assertTrue(all(d.event is None for d in quiet))
+
+    def test_ordinary_alert_has_no_separate_trust_target(self):
+        r, _ = self._resolver(0.7, learning=False)
+        self.assertNotIn("trust", r.decide("192.168.1.30", "suspect.example", "A").event)
+
     def test_allowlisted(self):
         r, s = self._resolver(0.99, learning=False)
         s.allow("good.example")

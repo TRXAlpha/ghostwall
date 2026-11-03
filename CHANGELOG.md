@@ -35,6 +35,10 @@ Your settings, alerts, allowlist and thresholds are kept.
   skipped everything written while the bot was down, and a wrong token only showed as
   silence. Alerts now wait and retry in order, survive restarts and say "sent late";
   the journal says once what is wrong and how to fix it, without the token.
+- Trust on a `dns_tunnel` alert trusted the one throw-away subdomain in it, so the next
+  query alerted again; it now trusts the zone (the event's new `trust` field). A
+  `dga_burst` alert no longer offers Trust at all: it is many different names, and
+  trusting the one shown changed nothing. `ghostwall alerts` prints local time, not UTC.
 - `/opt/ghostwall` kept the cloning user's ownership, so that user could change code that runs
   with more rights.
 
