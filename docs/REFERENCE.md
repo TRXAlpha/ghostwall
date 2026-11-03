@@ -135,4 +135,4 @@ overrides any of them. The most useful keys:
 | `fw_bot/fw_bot.py --owner-file FILE --follow EVENTS [--commands] [--follow-state FILE] [--env-file FILE]` | Telegram alerts, optionally commands. Alerts are sent in order and kept while Telegram fails; the position survives restarts in `--follow-state` (default `fw_bot_follow.json` next to EVENTS). `--env-file` reads the `FW_BOT_*` settings from a `KEY=VALUE` file where systemd's `EnvironmentFile` isn't there (the Docker image) |
 | `fw_bot/validate_events.py FILE` | validate an events file |
 | `web_ui/app.py --bind ADDR --port 8088 [--tls-cert F --tls-key F] [--control-token-file FILE]` | dashboard (the token file defaults to `/var/lib/ghostwall/control_token`) |
-| `netconf/gen.py` | render gateway-mode configs into `netconf/out/` |
+| `netconf/gen.py [--devices F] [--config F] [--out DIR]` | render gateway-mode configs into `netconf/out/` (settings from `netconf/config.json` unless `--config`) |
