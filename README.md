@@ -116,8 +116,8 @@ Pick one. All of them start in shadow mode: your DNS keeps working exactly as be
 
 ### 1. On the box that runs your DNS server (Pi, VM, mini PC)
 
-Needs 64-bit Linux with systemd (Raspberry Pi OS, Debian 12+, Ubuntu 22.04+; arm64 or
-x86_64), Python 3.10+, and AdGuard Home or Pi-hole on the same machine.
+Needs 64-bit Linux with systemd (Raspberry Pi OS, Debian 12 or 13, Ubuntu 22.04 to 26.04;
+arm64 or x86_64), Python 3.10+, and AdGuard Home or Pi-hole on the same machine.
 
 ```bash
 git clone https://github.com/TRXAlpha/ghostwall.git

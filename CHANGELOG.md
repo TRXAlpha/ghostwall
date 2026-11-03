@@ -12,7 +12,9 @@ Your settings, alerts, allowlist and thresholds are kept.
   `GHOSTWALL_WEB_TLS=off` in `ghostwall.env` keeps HTTP.
 - **Control API actions need a token** (`Authorization: Bearer $(sudo cat /var/lib/ghostwall/control_token)`).
   The dashboard, the bot and the new `ghostwall` command use it by themselves; only your own
-  `curl` calls need the header. `/status` stays open.
+  `curl` calls need the header. `/status` stays open as a summary; its device list (names, IPs,
+  MACs, last seen) needs the token too, so `ghostwall devices` needs sudo and plain
+  `ghostwall status` shows only counts.
 - **Telegram commands count only from you, in your private chat with the bot** (not from
   other members of a group).
 - **Docker:** AdGuard's config is now mounted only into a small `adguard-tune` service; use the
@@ -69,5 +71,5 @@ every site your household visits (converted on the first start); tighter systemd
 - `FW_BOT_PRIVACY=minimal`: no domains, IPs or MACs in Telegram messages.
 - Opt-in `"models": "v3-public"` (no onnxruntime), and a public, reproducible benchmark:
   `agents/dga_eval/results_public.md`, with a fairer LSTM rematch in `results_lstm_fair.md`.
-- CI installs Ghostwall for real under systemd (Debian 12, Ubuntu 22.04 and 24.04), inline
-  mode included.
+- CI installs Ghostwall for real under systemd (Debian 12 and 13, Ubuntu 22.04, 24.04 and
+  26.04), inline mode included.

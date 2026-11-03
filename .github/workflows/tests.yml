@@ -17,7 +17,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm]
-        python: ["3.10", "3.13"]
+        python: ["3.10", "3.13", "3.14"]   # 3.14: Ubuntu 26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
@@ -41,7 +41,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: ["debian:bookworm", "ubuntu:22.04", "ubuntu:24.04"]
+        # Debian 13 is what current Raspberry Pi OS is built on; Ubuntu 26.04 is the newest LTS.
+        image: ["debian:bookworm", "debian:trixie", "ubuntu:22.04", "ubuntu:24.04", "ubuntu:26.04"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - run: tests/installer_e2e.sh "${{ matrix.image }}"
