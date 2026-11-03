@@ -39,6 +39,9 @@ Your settings, alerts, allowlist and thresholds are kept.
   query alerted again; it now trusts the zone (the event's new `trust` field). A
   `dga_burst` alert no longer offers Trust at all: it is many different names, and
   trusting the one shown changed nothing. `ghostwall alerts` prints local time, not UTC.
+- Shadow mode skipped the queries written in the last moments before AdGuard rotated its
+  query log (or Pi-hole's logrotate truncated `pihole.log`); it reads them from the `.1`
+  file first now.
 - Docker: `ghostwall telegram` set everything up and sent nothing, ever: the image had no
   Telegram bot and nothing said so. The image now ships it and starts it once the setup
   has written its files (restart the container, as the setup says); CI checks an alert

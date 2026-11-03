@@ -150,12 +150,35 @@ class QueryLogFollower:
             print(f"[ghost-dns:shadow] querylog is back: {self.path}", file=sys.stderr, flush=True)
             self.missing = False
         size = os.path.getsize(self.path)
+        done = 0
         if self._rotated(size):
-            self.offset = 0  # AdGuard rotated/truncated the log
+            # AdGuard renames the log to .1, Pi-hole's logrotate copies it there and
+            # truncates: either way the lines written since our last look are in .1 now.
+            old = self.path + ".1"
+            if self._head and self._head_of(old)[:len(self._head)] == self._head:
+                done += self._read_from(old)
+            self.offset = 0
             self._head = self._read_head()
+        done += self._read_from(self.path)
+        self.seen += done
+        return done
+
+    def _head_of(self, path: str) -> bytes:
+        try:
+            with open(path, "rb") as f:
+                return f.read(64)
+        except OSError:
+            return b""
+
+    def _read_from(self, path: str) -> int:
+        """Score the complete lines of `path` after self.offset (advancing it)."""
         done = 0
         pending: list[list] = []   # Pi-hole: queries waiting to see whether a "blocked" line follows
-        with open(self.path, "rb") as f:
+        try:
+            f = open(path, "rb")
+        except OSError:
+            return 0
+        with f:
             f.seek(self.offset)
             for raw in f:
                 if not raw.endswith(b"\n"):
@@ -177,7 +200,6 @@ class QueryLogFollower:
                     done += self._decide(pending.pop(0))
         for q in pending:   # Pi-hole writes the query and its block in one go
             done += self._decide(q)
-        self.seen += done
         return done
 
     def _decide(self, q) -> int:

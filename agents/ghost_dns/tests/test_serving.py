@@ -317,6 +317,26 @@ class ShadowTests(Base):
         self._write({"IP": "127.0.0.1", "QH": "q.example", "QT": "A"})
         self.assertEqual(f.poll_once(), 1)
 
+    def test_lines_written_just_before_a_rotation_are_scored(self):
+        # The follower looks every 2 s. AdGuard renaming querylog.json to .1 (or Pi-hole's
+        # logrotate copying and truncating) in between must not lose what came last.
+        self.r.scorer = FakeScorer(0.7)
+        f = QueryLogFollower(self.r, self.log)
+        self._write({"IP": "127.0.0.1", "QH": "a1.example", "QT": "A"})
+        self.assertEqual(f.poll_once(), 1)
+        self._write({"IP": "127.0.0.1", "QH": "b2.example", "QT": "A"})     # unseen yet...
+        os.replace(self.log, self.log + ".1")                              # ...AdGuard rotates
+        self._write({"IP": "127.0.0.1", "QH": "c3.example", "QT": "A"})
+        self.assertEqual(f.poll_once(), 2)
+        import shutil
+        self._write({"IP": "127.0.0.1", "QH": "d4.example", "QT": "A"})     # unseen yet...
+        shutil.copy(self.log, self.log + ".1")                             # ...copytruncate
+        open(self.log, "w").close()
+        self._write({"IP": "127.0.0.1", "QH": "e5.example", "QT": "A"})
+        self.assertEqual(f.poll_once(), 2)
+        self.assertEqual([e["domain"] for e in self.read_events()],
+                         ["a1.example", "b2.example", "c3.example", "d4.example", "e5.example"])
+
     def test_parse_pihole_line(self):
         # A name crafted to look like the end of a line must not move the alert to
         # another client, nor may a name sneak a second query[] into one line.
