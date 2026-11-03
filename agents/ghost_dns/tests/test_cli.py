@@ -72,6 +72,7 @@ class CliTests(unittest.TestCase):
         UPDATES.clear()
         self.data, self.etc = tempfile.mkdtemp(), tempfile.mkdtemp()
         cli.DATA, cli.ETC = self.data, self.etc
+        cli.ARP = os.path.join(self.data, "arp")     # this machine's own ARP table must not matter
         with open(os.path.join(self.data, "control_token"), "w") as f:
             f.write("tok-example\n")
 
@@ -211,6 +212,30 @@ class NameTests(unittest.TestCase):
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = cli.main(list(argv))
         return code, out.getvalue(), err.getvalue()
+
+    def arp(self, *rows):
+        with open(cli.ARP, "w") as f:
+            f.write("IP address       HW type     Flags       HW address            Mask     Device\n")
+            for ip, mac in rows:
+                f.write(f"{ip:<17}0x1         0x2         {mac}     *        eth0\n")
+
+    def test_name_records_the_mac_and_follows_a_move(self):
+        self.arp(("192.168.1.20", "02:00:00:00:00:aa"))
+        code, out, _ = self.run_cli("name", "192.168.1.20", "laptop")
+        self.assertEqual(code, 0)
+        self.assertIn("follows its MAC (02:00:00:00:00:aa)", out)
+        self.arp(("192.168.1.21", "02:00:00:00:00:aa"))   # DHCP moved it
+        code, out, _ = self.run_cli("name", "192.168.1.21", "laptop")
+        self.assertEqual(code, 0)
+        self.assertIn("laptop moved to 192.168.1.21", out)
+        with open(os.path.join(self.etc, "devices.json")) as f:
+            data = json.load(f)
+        self.assertEqual(data["_pending"], [{"name": "laptop", "ip": "192.168.1.21",
+                                             "mac": "02:00:00:00:00:aa", "profile": "normal"}])
+
+    def test_name_without_a_known_mac_says_so(self):
+        _, out, _ = self.run_cli("name", "192.168.1.30", "printer")
+        self.assertIn("stays with the address", out)
 
     def test_name_creates_renames_and_validates(self):
         self.assertEqual(self.run_cli("name", "192.168.1.20", "laptop")[0], 0)

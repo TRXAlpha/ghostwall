@@ -36,6 +36,7 @@ import urllib.request
 ETC = os.environ.get("GHOSTWALL_ETC", "/etc/ghostwall")
 DATA = os.environ.get("GHOSTWALL_DATA", "/var/lib/ghostwall")
 CONTROL = os.environ.get("GHOSTWALL_CONTROL", "http://127.0.0.1:5380")
+ARP = os.environ.get("GHOSTWALL_ARP", "/proc/net/arp")
 TELEGRAM = os.environ.get("GHOSTWALL_TELEGRAM_API", "https://api.telegram.org")
 DOMAIN_RE = re.compile(r"^(?=.{1,253}$)[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?)+$")
 
@@ -183,7 +184,8 @@ def cmd_devices(_a) -> int:
     if st.get("devices_hidden"):
         raise CliError("the device list needs the control token: run this with sudo")
     for d in st.get("devices") or []:
-        print(f"  {d.get('name'):<16} {d.get('ip'):<40} last query {_ago(d.get('last_seen'))}")
+        print(f"  {d.get('name'):<16} {d.get('ip'):<40} {d.get('mac') or '(no MAC)':<17}  "
+              f"last query {_ago(d.get('last_seen'))}")
     clients = st.get("clients") or []
     if clients:
         print("Seen, no name yet (sudo ghostwall name IP NAME):")
@@ -215,19 +217,35 @@ def cmd_name(a) -> int:
         raise CliError(f"can't read {path}: run this with sudo")
     if isinstance(data, list):
         data = {"devices": data, "_pending": []}
-    entries = list(data.get("devices", [])) + list(data.get("_pending", []))
+    from neighbours import normalize_mac, read_arp
+    mac = read_arp(ARP).get(ip)   # the device at that address now (IPv4, this network)
+    pending = data.setdefault("_pending", [])
+    entries = list(data.get("devices", [])) + list(pending)
+    target = next((e for e in entries if e.get("ip") == ip), None)
+    moved = target is None and mac is not None and next(
+        (e for e in entries if normalize_mac(e.get("mac")) == mac), None)
+    target = target or moved or None
     for e in entries:
-        if e.get("name") == a.name and e.get("ip") != ip:
+        if e.get("name") == a.name and e is not target:
             raise CliError(f"{a.name} is already the name of {e.get('ip')}")
-    for e in entries:
-        if e.get("ip") == ip:
-            old, e["name"] = e.get("name"), a.name
-            print(f"Renamed {ip}: {old} -> {a.name}")
-            break
-    else:
-        # _pending: named without a MAC, so netconf makes no DHCP lease for it
-        data.setdefault("_pending", []).append({"name": a.name, "ip": ip, "mac": None, "profile": "normal"})
+    if target is None:
+        # _pending: no DHCP lease from netconf; the MAC lets ghost-dns follow the device
+        pending.append({"name": a.name, "ip": ip, "mac": mac, "profile": "normal"})
         print(f"Named {ip} {a.name}")
+    else:
+        old, target["name"] = target.get("name"), a.name
+        if moved:
+            print(f"{old} moved to {ip} (same MAC {mac}): renamed {a.name}" if old != a.name
+                  else f"{a.name} moved to {ip} (same MAC {mac})")
+            target["ip"] = ip
+        else:
+            print(f"Renamed {ip}: {old} -> {a.name}" if old != a.name else f"{ip} is {a.name}")
+        if mac and any(target is e for e in pending):   # (a DHCP reservation keeps its own MAC)
+            target["mac"] = mac
+    if mac:
+        print(f"The name follows its MAC ({mac}) if the address changes.")
+    else:
+        print(f"No MAC known for {ip} right now (offline, or IPv6): the name stays with the address.")
     write_private(path, json.dumps(data, indent=2) + "\n")
     if shutil_which("systemctl") and os.path.exists("/etc/systemd/system/ghostwall-dns.service"):
         subprocess.run(["systemctl", "restart", "ghostwall-dns"], check=False)

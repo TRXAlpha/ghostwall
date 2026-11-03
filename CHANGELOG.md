@@ -39,6 +39,12 @@ Your settings, alerts, allowlist and thresholds are kept.
   query alerted again; it now trusts the zone (the event's new `trust` field). A
   `dga_burst` alert no longer offers Trust at all: it is many different names, and
   trusting the one shown changed nothing. `ghostwall alerts` prints local time, not UTC.
+- Device names stuck to addresses: once DHCP gave the laptop's old address to the TV,
+  the TV's alerts said `laptop` and "isolate laptop" cut off the TV. `ghostwall name` now
+  records the MAC, ghost-dns reads the ARP table, and a name follows its MAC (IPv4):
+  alerts, the device list and isolation use where the device is now, and an old address
+  shows as an address. Names given before this, without a MAC, work as before; name them
+  again while the device is online to pin them.
 - `/opt/ghostwall` kept the cloning user's ownership, so that user could change code that runs
   with more rights.
 

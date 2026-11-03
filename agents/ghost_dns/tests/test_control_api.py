@@ -223,6 +223,21 @@ class EnforcingControlApiTests(ControlApiTests):
         self.assertFalse(self.client.release("dell")["isolated"])
         self.assertFalse(self.state.is_isolated("dell"))
 
+    def test_isolate_hits_where_the_device_is_now(self):
+        # dell's address in devices.json may belong to another device by now (DHCP); its
+        # queries come from .31, so isolating "dell" must cut off .31, not .30.
+        res = type("R", (), {"current_ip": {"dell": "192.168.1.31"}, "last_seen": {
+            "192.168.1.31": "2026-11-03T10:00:00Z", "192.168.1.30": "2026-11-03T10:01:00Z"}})()
+        self.server.httpd.RequestHandlerClass.state["resolver"] = res
+        self.assertEqual(self.client.isolate("dell")["ip"], "192.168.1.31")
+        calls = " ".join(" ".join(c) for c in self.enforcer.backend.calls)
+        self.assertIn("192.168.1.31", calls)
+        self.assertNotIn("192.168.1.30", calls)
+        st = self.client.status()
+        self.assertEqual([(d["name"], d["ip"]) for d in st["devices"]], [("dell", "192.168.1.31")])
+        self.assertEqual([c["ip"] for c in st["clients"]], ["192.168.1.30"])   # the newcomer at .30
+        self.assertFalse(self.client.release("dell")["isolated"])
+
     def test_lockdown_toggles(self):
         self.assertTrue(self.client.lockdown()["lockdown"])
         self.assertTrue(self.state.lockdown)

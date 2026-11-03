@@ -34,7 +34,7 @@ with `{"ok": false, "error": "..."}`. All endpoints take POST with a JSON body;
 |---|---|---|
 | `/status` | — | `devices` (name, ip, mac, isolated, last_seen, blocked_domains) and `clients` (unnamed addresses seen, newest first, up to 50): with the token only; `named_devices`, `unnamed_clients` (counts), `lockdown`, `learning`, `shadow`, `source` (`adguard` or `pihole` in shadow mode), `enforce` (`null` or `nft`), `models`, `feed` (`domains`, `updated`), `stats` (counters since start; `queries` rising means it is scoring; `suppressed` counts repeat alerts, `rate_limited` alerts dropped by `alert_rate_per_device`, `blocked_upstream` random-looking names AdGuard had already blocked) |
 | `/device` | `{"name": "laptop"}` | that device plus `last_seen` (its latest query since ghost-dns started, or null); 404 if unknown |
-| `/isolate` | `{"name": "laptop"}` | `{"name", "isolated": true}`: the device may only reach the Pi's DNS. 409 unless `enforce` is `nft` |
+| `/isolate` | `{"name": "laptop"}` | `{"name", "ip", "isolated": true}`: the device may only reach the Pi's DNS. `ip` is where it queried from last (its name follows its MAC), not necessarily the address in `devices.json`. 409 unless `enforce` is `nft` |
 | `/release` | `{"name": "laptop"}` | `{"name", "isolated": false}` |
 | `/allow` | `{"domain": "example.com"}` | `{"domain", "allowed": true}`: allowlisted network-wide. 400 unless it is a hostname |
 | `/trusted` | `{}` | `{"domains": [...]}`: what was trusted with `/allow` (the starter `allowlist.txt` aside) |
@@ -108,7 +108,8 @@ overrides any of them. The most useful keys:
 | `control_token_path` | `null` | `null`: `control_token` next to `state_path`; `""` turns the token off (not recommended) |
 | `threat_feed_path` | installer: `/var/lib/ghostwall/threat_feed.txt` | written by `update_feed.py` |
 | `allowlist_path` | `agents/ghost_dns/allowlist.txt` | starter allowlist |
-| `devices_json` | installer: `/etc/ghostwall/devices.json` | device names; unknown clients are named by IP |
+| `devices_json` | installer: `/etc/ghostwall/devices.json` | device names; unknown clients are named by IP. An entry with a `mac` is known by it: its name follows it to a new IPv4 address, and its old address loses the name once another device has it |
+| `neighbours_path` | `/proc/net/arp` | the kernel's ARP table, read to see which MAC is at an address (IPv4 on this network only: IPv6 clients and Docker's bridge network keep names on addresses); `""` turns it off |
 | `state_path`, `events_path` | installer: `/var/lib/ghostwall/state.json`, `.../events.jsonl` | persistent state and the alert log. The log starts a new file past 32 MiB and keeps one `events.jsonl.1`; the dashboard and bot read across both |
 | `query_log` | `null` (off) | inline mode: a text log of every query |
 | `resolved_ips_path` | installer: `/var/lib/ghostwall/resolved_ips.jsonl` | inline mode: answered IPs, read by ghost-flow |

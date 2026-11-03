@@ -188,13 +188,14 @@ class ControlHandler(BaseHTTPRequestHandler):
         blocked = sorted(g.blocklist)
         devices = []
         for d in dmap.all():
+            ip = self._current_ip(d)
             devices.append({
-                "name": d.name, "ip": d.ip, "mac": d.mac,
+                "name": d.name, "ip": ip, "mac": d.mac,
                 "isolated": g.is_isolated(d.name),
-                "last_seen": seen.get(d.ip),
+                "last_seen": seen.get(ip),
                 "blocked_domains": blocked,
             })
-        named = {d.ip for d in dmap.all()}
+        named = {self._current_ip(d) for d in dmap.all()}
         # clients seen but not named yet (for `ghostwall devices` / `ghostwall name`)
         clients = sorted(((t, ip) for ip, t in seen.items() if ip not in named), reverse=True)[:50]
         out = {"ok": True, "named_devices": len(devices), "unnamed_clients": len(clients),
@@ -226,9 +227,10 @@ class ControlHandler(BaseHTTPRequestHandler):
             raise _ApiError(404, "unknown device")
         g = self.state["gstate"]
         seen = getattr(self.state.get("resolver"), "last_seen", {})
-        return 200, {"ok": True, "name": d.name, "ip": d.ip, "mac": d.mac,
+        ip = self._current_ip(d)
+        return 200, {"ok": True, "name": d.name, "ip": ip, "mac": d.mac,
                      "isolated": g.is_isolated(d.name),
-                     "last_seen": seen.get(d.ip),
+                     "last_seen": seen.get(ip),
                      "blocked_domains": sorted(g.blocklist)}
 
     def _require_enforcement(self) -> None:
@@ -240,14 +242,23 @@ class ControlHandler(BaseHTTPRequestHandler):
     def _isolate(self, body):
         d = self._require_device(body)
         self._require_enforcement()
-        self.state["enforcer"].isolate(d.ip)
+        ip = self._current_ip(d)   # where it is now: its old address may be another device's
+        self.state["enforcer"].isolate(ip)
         self.state["gstate"].isolate(d.name)
-        return 200, {"ok": True, "name": d.name, "isolated": True}
+        return 200, {"ok": True, "name": d.name, "ip": ip, "isolated": True}
 
     def _release(self, body):
         # Allowed without enforcement too, so state left by an older version can be cleared.
         d = self._require_device(body)
-        self.state["enforcer"].release(d.ip)
+        ips = [self._current_ip(d)] + ([d.ip] if d.ip != self._current_ip(d) else [])
+        released = False
+        for ip in ips:   # wherever it was isolated: now, or at its address in devices.json
+            try:
+                self.state["enforcer"].release(ip)
+                released = True
+            except Exception:  # noqa: BLE001 (that address was not in the set)
+                if ip == ips[-1] and not released:
+                    raise
         self.state["gstate"].release(d.name)
         return 200, {"ok": True, "name": d.name, "isolated": False}
 
@@ -306,6 +317,12 @@ class ControlHandler(BaseHTTPRequestHandler):
         self.state["gstate"].unblock(domain)
         return 200, {"ok": True, "event_id": event_id, "domain": domain,
                      "unblocked": True}
+
+    def _current_ip(self, d) -> str:
+        """The address a named device last queried from (its name follows its MAC,
+        devices.py), else the one in devices.json."""
+        cur = getattr(self.state.get("resolver"), "current_ip", None) or {}
+        return cur.get(d.name, d.ip)
 
     def _require_device(self, body):
         name = str(body.get("name", "")).strip()

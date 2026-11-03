@@ -55,8 +55,9 @@ class Decision:
 
 class Resolver:
     def __init__(self, cfg, state, scorer, enforcer, device_map, event_log,
-                 capture=None):
+                 capture=None, neighbours=None):
         self.cfg = cfg
+        self.neighbours = neighbours         # neighbours.Neighbours: which MAC is at an IP
         self.state = state
         self.scorer = scorer
         self.enforcer = enforcer
@@ -78,6 +79,7 @@ class Resolver:
         self.clock = time.monotonic          # overridable, so tests can drive time
         self.det = Detectors(cfg)            # threat feed, DoH, tunnel, beacon, DGA burst
         self.last_seen: dict[str, str] = {}  # client ip -> ISO time of its latest query
+        self.current_ip: dict[str, str] = {} # named device -> the address it last queried from
         self.stats = {"queries": 0, "blocked": 0, "recommended": 0, "suppressed": 0,
                       "forwarded": 0, "errors": 0, "fallbacks": 0, "failopen": 0,
                       "rate_limited": 0, "blocked_upstream": 0}
@@ -90,11 +92,14 @@ class Resolver:
         domain = domain.rstrip(".").lower()
         if not domain:
             return Decision("allow", "empty")
-        dev = self.devices.device_for_ip(client_ip)
+        mac = self.neighbours.mac(client_ip) if self.neighbours is not None else None
+        dev = self.devices.device_for_ip(client_ip, mac)
         now = self.clock()
         if len(self.last_seen) > 10000:      # a LAN has far fewer clients; bound it anyway
             self.last_seen.clear()
         self.last_seen[client_ip] = events_mod.now_iso()
+        if dev.name != client_ip:
+            self.current_ip[dev.name] = client_ip
 
         # Evidence that is checked BEFORE the allowlist: a known-bad host (an exact
         # feed match wins even over a trusted parent domain) and DoH bypass.

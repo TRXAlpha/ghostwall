@@ -24,6 +24,7 @@ import config as config_mod          # noqa: E402
 from capture_client import CaptureClient  # noqa: E402
 from control_api import ControlServer, ensure_token, token_path  # noqa: E402
 from devices import DeviceMap             # noqa: E402
+from neighbours import Neighbours         # noqa: E402
 from enforce import Enforcer, NftBackend, NullBackend  # noqa: E402
 from events import EventLog               # noqa: E402
 from resolver import Resolver             # noqa: E402
@@ -44,7 +45,8 @@ def build(cfg: dict):
     enforcer.lockdown = gstate.lockdown
     event_log = EventLog(cfg["events_path"])
     capture = CaptureClient(cfg["capture_url"], enabled=bool(cfg.get("capture_enabled")))
-    resolver = Resolver(cfg, gstate, scorer, enforcer, devices, event_log, capture)
+    neigh = Neighbours(cfg["neighbours_path"]) if cfg.get("neighbours_path") else None
+    resolver = Resolver(cfg, gstate, scorer, enforcer, devices, event_log, capture, neigh)
     return devices, gstate, scorer, enforcer, event_log, capture, resolver
 
 
