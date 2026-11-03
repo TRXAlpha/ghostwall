@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field
-from pathlib import Path
 
 # Control API endpoint (loopback only, see docs/REFERENCE.md)
 CONTROL_HOST = "127.0.0.1"
@@ -108,6 +107,14 @@ class Config:
             extra={k: v for k, v in data.items() if k not in ("owner_chat_id", "chat_id")},
         )
         return cfg
+
+    def is_owner_message(self, msg: dict) -> bool:
+        """A command counts only if the owner sent it, in the private chat with the bot.
+        Checking the chat alone would let anyone in a group chat with that id give
+        commands; alert buttons already check the sender (callbacks.py)."""
+        chat_id = (msg.get("chat") or {}).get("id")
+        from_id = (msg.get("from") or {}).get("id")
+        return self.is_owner(chat_id) and self.is_owner(from_id)
 
     def is_owner(self, chat_id: int | None) -> bool:
         """Only the owner chat id may issue commands or press buttons."""

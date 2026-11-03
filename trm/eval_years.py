@@ -3,7 +3,7 @@ import sys, os, json, numpy as np, torch
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import data as D
 from model import TRM
-from train import evaluate, metrics, batches
+from train import evaluate, metrics
 from sklearn.metrics import roc_auc_score
 
 def tpr_at_fpr(p, y, f):

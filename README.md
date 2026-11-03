@@ -4,21 +4,41 @@
 [![release](https://img.shields.io/github/v/release/TRXAlpha/ghostwall?include_prereleases&sort=semver)](https://github.com/TRXAlpha/ghostwall/releases)
 [![license](https://img.shields.io/github/license/TRXAlpha/ghostwall)](LICENSE)
 
-**Spots infected devices on your home network from their DNS lookups.** Ghostwall runs
+**Watches each device on your home network for the DNS habits of malware.** Ghostwall runs
 next to [AdGuard Home](https://github.com/AdguardTeam/AdGuardHome) or
 [Pi-hole](https://pi-hole.net) on a Raspberry Pi, a VM or any small Linux box. It reads
-your DNS server's query log, scores every lookup with two small on-device models and a
-set of behavioural rules, and tells you (dashboard or Telegram) when a device starts
-acting like it is infected. Your DNS traffic is never sent anywhere; the only thing
-Ghostwall downloads is a daily phishing list, and the only thing it sends out is the
-alerts themselves, if you turn on Telegram.
+your DNS server's query log and flags a device that suddenly starts using a bot API, a
+paste site or a tunnel service, smuggles data through DNS, calls home on a timer, looks up
+known phishing domains, or bursts through random-looking names. It also tells you when a
+device skips your DNS filter (DNS-over-HTTPS): not a sign of infection by itself (phones
+and browsers do it when "Private DNS" or "secure DNS" is on), but your filter no longer
+sees that device. Two small on-device models score how random a name looks; the behaviour
+rules do most of the work. Alerts go to a dashboard or Telegram. Ghostwall never sends
+your DNS traffic anywhere (one exception: in inline mode, while your DNS server is down,
+it answers through a fallback resolver, Quad9 by default; `"upstream_fallbacks": []` turns
+that off). The only thing it downloads is a daily phishing list, and the only thing it
+sends out is the alerts themselves, if you turn on Telegram (domain names can be left out
+of those too).
 
 > **Status: a detector, with blocking as an experiment.** The recommended *shadow mode*
-> reads the query log and alerts; it cannot break DNS. It has run on the author's home
-> network (Raspberry Pi 4 + AdGuard Home) since late October 2026, which is not long.
-> v0.2 added Pi-hole, x86_64 VMs, Docker and a dashboard password. *Inline mode*
-> (Ghostwall answers DNS and blocks) is implemented and unit-tested but not proven on a
-> real network. See [Limits](#limits).
+> only reads the query log and alerts, so it is never in the path of your DNS (installing
+> restarts AdGuard once, a few seconds, to make it write its log promptly). It has run on
+> the author's home network (Raspberry Pi 4 + AdGuard Home) since late October 2026, which
+> is not long, and **it has not caught a real infection yet**: there was none to catch, so
+> the numbers from the field are false-alarm counts. Detection rates come from public data
+> ([How well it works](#how-well-it-works)). *Inline mode* (Ghostwall answers DNS and
+> blocks) passes an end-to-end test in CI (a systemd container with a stand-in AdGuard:
+> forwarding, sinkholing, SERVFAIL when the upstream dies, and the way back to shadow
+> mode), but is not proven on a real network. See [Limits](#limits).
+
+**Try it** on the box that runs AdGuard Home or Pi-hole:
+
+```bash
+git clone https://github.com/TRXAlpha/ghostwall.git && cd ghostwall && sudo ./install.sh
+```
+
+It starts in shadow mode (it only reads the query log, so it can't break DNS);
+`sudo /opt/ghostwall/uninstall.sh` removes it. Docker and other ways: [Install](#install).
 
 ![Ghostwall dashboard](docs/img/dashboard.png)
 
@@ -34,9 +54,10 @@ Keep them. Ghostwall runs on top and covers what a blocklist can't:
 | | AdGuard Home / Pi-hole | + Ghostwall |
 |---|---|---|
 | Known phishing domains | blocks them | also tells you which device tried |
-| Random-looking domains nobody has listed yet (DGA) | no | about 6 in 10, plus bursts of them |
+| A camera or TV that starts using Telegram's bot API, a paste site, ngrok, a file drop | no | flagged the first time (each device learns its normal services first) |
 | DNS tunnelling, timer-like beacons | no | yes |
-| A device using its own DNS-over-HTTPS | no | flagged, if it looks up a known DoH server by name |
+| A device using its own DNS-over-HTTPS | no | flagged if it looks the server up by name; by IP too in gateway mode |
+| Random-looking domains nobody has listed yet (DGA) | no | about 6 in 10 on [public data](agents/dga_eval/results_public.md), plus bursts of them |
 | Per-device "this looks infected" alerts | no | dashboard + Telegram |
 | Can break your DNS | it is your DNS | no (shadow mode only reads the log) |
 
@@ -44,13 +65,15 @@ Keep them. Ghostwall runs on top and covers what a blocklist can't:
 
 | Rule | Meaning | Severity |
 |---|---|---|
-| `threat_feed` | the name is on the phishing list ([Phishing Army](https://phishing.army), ~150k domains, refreshed daily) | high |
+| `threat_feed` | the name is on the phishing list ([Phishing Army](https://phishing.army), ~150k domains, refreshed daily). It lists some link shorteners and apps as a whole, because phishing runs through them: if one you use alerts, `sudo ghostwall allow <name>` (deliberately no one-tap Trust for these) | high |
 | `dga_burst` | one device looked up 5+ different random-looking domains within 10 minutes | high |
 | `dga_high` / `dga_suspect` | a single very random-looking name that is new to your network | high / warn |
 | `dga_corroborated` | a fairly random name on a rarely-legitimate TLD (`.top`, `.xyz`, ...) | warn |
 | `doh_bypass` | a device looked up a known DNS-over-HTTPS server, so it may be skipping your filter | warn |
+| `abused_service` | a device that has been on your network for 3+ days starts using a service malware likes for commands, payloads or stolen data: Telegram's bot API, Discord's CDN, paste sites, ngrok and other tunnels, anonymous file drops, raw GitHub downloads, "what is my IP" lookups | warn |
 | `dns_tunnel` | many long random subdomains of one domain (data smuggled over DNS) | high |
 | `dns_beacon` | an odd-looking name queried on a fixed timer | warn |
+| `doh_ip`, `raw_ip`, `beacon` | gateway mode only (`ghost-flow`): a connection straight to a DNS-over-HTTPS server's IP, to an IP nobody looked up, or on a fixed timer | warn / high |
 
 An alert, as written to `events.jsonl` and sent to Telegram:
 
@@ -62,18 +85,14 @@ An alert, as written to `events.jsonl` and sent to Telegram:
 
 Internal names (`*.local`, `*.ts.net`, single labels, `_service` records) are never
 scored, and repeat alerts for the same device and domain are collapsed to one per day.
+A random-looking name that AdGuard Home already blocked raises no alert of its own (no
+connection happened, and most of those are ad and tracker junk); it still counts toward a
+burst, and the other rules see it as usual.
 
-**How well.** Trained on 2017–2019 and tested on 2024–2025, the models catch about 61%
-of algorithmically generated (DGA) domains when 1% of normal domains are flagged, and
-47% at 0.2%. Counting only normal names that never appeared in training, which are
-closer to what Ghostwall alerts on, the alert threshold flags about 2% of them and the
-block threshold 0.4%. That alone would be noisy, so a plain score only alerts for names
-new to your network, and the bursts, tunnels, beacons, phishing list and DoH rules do
-the rest.
-Replaying 12.9 days of the author's network (115,549 queries) gave 17 alerts: 4 test
-lookups the author made, 3 devices using DNS-over-HTTPS, 9 random-looking ad-redirect
-and pop-up style domains on the author's computers and phone, and 1 false positive (a
-weather script polling every 15 minutes). Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#detection).
+**How well:** about 6 in 10 random-looking (DGA) names nobody has listed yet are caught
+when 1% of normal names are flagged, on public data anyone can check; dictionary-word
+DGAs mostly get through, so the behaviour rules above carry most of the weight. The
+numbers, how to reproduce them and the LSTM comparison: [How well it works](#how-well-it-works).
 
 ## Install
 
@@ -81,8 +100,8 @@ Pick one. All of them start in shadow mode: your DNS keeps working exactly as be
 
 ### 1. On the box that runs your DNS server (Pi, VM, mini PC)
 
-Needs 64-bit Linux with systemd (Raspberry Pi OS, Debian 12+, Ubuntu 22.04+; arm64 or
-x86_64), Python 3.10+, and AdGuard Home or Pi-hole on the same machine.
+Needs 64-bit Linux with systemd (Raspberry Pi OS, Debian 12 or 13, Ubuntu 22.04 to 26.04;
+arm64 or x86_64), Python 3.10+, and AdGuard Home or Pi-hole on the same machine.
 
 ```bash
 git clone https://github.com/TRXAlpha/ghostwall.git
@@ -111,14 +130,23 @@ docker compose up -d --build
 ```
 
 1. Finish AdGuard's setup at `http://<host>:3000` (keep the query log on).
-2. `docker compose restart adguardhome` once, so it picks up the faster log setting.
+2. Wait for `docker compose logs adguard-tune` to say it set the buffer (about 10 s),
+   then `docker compose restart adguardhome` once, so alerts arrive in seconds.
 3. Point your router's DNS (or one test device) at the host.
-4. Dashboard: `http://<host>:8088`, user `ghostwall`, password from
-   `docker compose exec ghostwall cat /data/web_password`.
+4. Dashboard: `https://<host>:8088` (self-signed: the browser warns once), user `ghostwall`, password from
+   `docker compose exec ghostwall ghostwall password`. The same `ghostwall` commands work
+   there (`docker compose exec ghostwall ghostwall status`, `... alerts`, `... name`).
+5. Telegram (optional): `docker compose exec ghostwall ghostwall telegram`, then
+   `docker compose restart ghostwall`; the container runs the bot from then on.
 
-The Ghostwall container keeps one capability (`DAC_OVERRIDE`, to read AdGuard's log), a
-read-only filesystem and `no-new-privileges`; copy those lines from `compose.yaml` if
-you write your own service.
+The Ghostwall container runs with no capabilities (if you run AdGuard as a non-root user, it
+needs `DAC_OVERRIDE` to read the log, and says so), a
+read-only filesystem and `no-new-privileges`, and sees AdGuard's files read-only. Only the
+small `adguard-tune` service, which has no network and sees nothing but that folder, can
+write AdGuard's config (to lower its log buffer, keeping the file's owner). Images are pinned by digest (Dependabot proposes
+bumps weekly). Copy those lines from `compose.yaml` if you write your own service. Docker Hub
+rate-limiting your builds? `"registry-mirrors": ["https://mirror.gcr.io"]` in
+`/etc/docker/daemon.json` (then restart Docker) pulls the same images from Google's mirror.
 
 Port 53 already taken on Ubuntu? That is `systemd-resolved`; the "resolved" section of
 AdGuard's [Docker docs](https://github.com/AdguardTeam/AdGuardHome/wiki/Docker) shows
@@ -161,17 +189,22 @@ about 25 MB each for the dashboard and the Telegram bot).
 ## After installing
 
 ```bash
-sudo tail -f /var/lib/ghostwall/events.jsonl   # alerts as they happen
-curl -s http://127.0.0.1:5380/status           # "stats.queries" should keep rising
+ghostwall status                  # is it scoring? ("queries" should keep rising)
+sudo ghostwall alerts             # what it found, newest first
+sudo ghostwall telegram           # alerts on your phone: paste a bot token, message the bot, done
+sudo ghostwall allow example.com  # stop alerts for a domain you trust (ghostwall untrust undoes it)
+sudo ghostwall calibrate          # after a few days: what each threshold would flag on YOUR network
 ```
 
-- **Dashboard:** `http://<box>:8088`, user `ghostwall`, password in
-  `/etc/ghostwall/ghostwall.env`. To keep it to your tailnet or to the box itself, see
+- **Dashboard:** `https://<box>:8088` (plain `http://` redirects there), user `ghostwall`, password from
+  `sudo ghostwall password`. To keep it to your tailnet or to the box itself, see
   [Dashboard access](docs/OPERATIONS.md#dashboard-access).
-- **Name your devices:** copy `agents/netconf/devices.example.json` to
-  `/etc/ghostwall/devices.json`, fill in your devices, and
-  `sudo systemctl restart ghostwall-dns`, so alerts say `laptop` instead of an IP.
-- **Telegram alerts and `/fw` commands:** [docs/OPERATIONS.md](docs/OPERATIONS.md#telegram).
+- **Name your devices:** `sudo ghostwall devices` lists the addresses it has seen;
+  `sudo ghostwall name 192.168.1.20 laptop` names one, so alerts say `laptop` instead of
+  an IP. It records the device's MAC, so the name follows it when DHCP hands out a new
+  address, IPv6 privacy addresses included. (Or edit `/etc/ghostwall/devices.json`, as in `agents/netconf/devices.example.json`.)
+- **Telegram alerts and `/fw` commands:** `sudo ghostwall telegram`, or by hand:
+  [docs/OPERATIONS.md](docs/OPERATIONS.md#telegram).
 - **Check it against your own history** (changes nothing):
   `sudo /opt/ghostwall/.venv/bin/python /opt/ghostwall/agents/ghost_dns/replay_querylog.py --querylog <querylog.json or pihole.log>`
 - **Update:** `git pull && sudo ./install.sh`. **Remove:** `sudo /opt/ghostwall/uninstall.sh`
@@ -179,6 +212,46 @@ curl -s http://127.0.0.1:5380/status           # "stats.queries" should keep ris
 
 Everything else (going inline, enforcement, the Pi-as-gateway setup, troubleshooting,
 rollback): [docs/OPERATIONS.md](docs/OPERATIONS.md).
+
+## How well it works
+
+**How well, on data anyone can check.** [results_public.md](agents/dga_eval/results_public.md)
+uses only public data (25 DGA families from Netlab 360, the Tranco top 1M) and reproduces
+with `agents/dga_eval/public_bench.py`. There the shipped models catch 60.3% of DGA
+names when 1% of normal names are flagged (53.4% up to v0.2.0-beta.2, which did not
+look inside dynamic-DNS names such as `x7kq2v9w.ddns.net`). Dictionary-word DGAs
+(`brothernerveplace.com`) get through almost always: they look like normal names. A
+plain score therefore only alerts for names new to your network, and the behaviour
+rules above do the rest. Is that better than "this name looks random"? On the same names,
+character entropy catches 11.6% and the best simple rule tried 16.2% at the same 1% of
+normal names flagged
+([results_baselines.md](agents/dga_eval/results_baselines.md), `agents/dga_eval/baselines.py`).
+
+A 1-5-gram model retrained on the public data catches 80.5% of names from known families
+and 64.8% from families it never saw, against 81.4% and 60.8% for an Endgame-style LSTM.
+In a [fairer rematch](agents/dga_eval/results_lstm_fair.md) (the LSTM early-stopped on
+held-out names, three seeds each, the same five unseen-family folds) it is 64.6% against
+60.9% at 1% false positives and about even at 0.1% (38.0% against 37.2%): the LSTM wins
+two folds, the n-gram model wins clearly on folds with dictionary-word families. One
+dataset still. The n-gram model scores a name in about 40 µs in plain numpy (x86, one thread). A version trained on all of that data
+ships as an opt-in: `"models": "v3-public"` in `/etc/ghostwall/ghost_dns.json`, then
+`sudo systemctl restart ghostwall-dns`. It runs without onnxruntime (ghost-dns used 44 MB
+instead of 71 MB on the x86 test machine) and its thresholds flag the same share of
+normal names as the defaults ([results_v3_public.md](agents/dga_eval/results_v3_public.md)).
+It is not the default because it has not been measured on a real network yet. Either way,
+`sudo ghostwall calibrate` shows what the thresholds would flag on your own network.
+
+**On private data.** On DRIFT (a 2017-2025 dataset that is not in this repo), trained
+on 2017-2019 and tested on 2024-2025, the shipped models catch about 61% of DGA names
+at 1% false positives and 47% at 0.2%
+([results_shipped.md](agents/dga_eval/results_shipped.md); reproducing it needs the
+dataset). Replaying 12.9 days of the author's network (115,549 queries, before the
+dynamic-DNS fix and the behaviour rules added since) gave 17 alerts: 4 test lookups the
+author made, 3 devices using DNS-over-HTTPS, 9 random-looking ad-redirect and pop-up
+style domains on the author's computers and phone, and 1 false positive (a weather
+script polling every 15 minutes). That is one network: please
+[open an issue](https://github.com/TRXAlpha/ghostwall/issues) with what you see on yours.
+Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#detection).
 
 ## How it works
 
@@ -202,37 +275,65 @@ config keys: [docs/REFERENCE.md](docs/REFERENCE.md).
 
 Without onnxruntime (no build for your platform, e.g. 32-bit ARM), scoring falls back
 to the n-gram model alone, which catches about 5 points fewer DGA names at the same
-false-positive rate.
+false-positive rate; `"models": "v3-public"` is made for that case. (Up to
+v0.2.0-beta.2 such installs wrote no score-based alerts at all: building the alert failed
+on the missing model's empty score.)
 
 ## Limits
 
+- **Baselines trust what is already there.** `abused_service` learns each device's usual
+  services in its first 3 days, and novelty counts names as normal after a week. A device
+  that is already infected when you install Ghostwall teaches it that its malware is
+  normal; the phishing list, bursts, tunnels and DoH rules don't depend on a baseline.
 - **Detection is name-based.** It sees what a device looks up, not what it does
-  afterwards. The models miss about 4 in 10 DGA domains. Malware that talks to shared
+  afterwards. The models miss about 4 in 10 DGA domains, and nearly all made of
+  dictionary words. Malware that talks to shared
   services (cloud storage, CDNs, chat apps) looks like everyone else, and a device with
-  hardcoded DNS-over-HTTPS is invisible unless it looks the server up by name.
+  hardcoded DNS-over-HTTPS is invisible in shadow mode unless it looks the server up by name
+  (gateway mode catches it by IP: `doh_ip`). Any web
+  page can also make your browser look up random-looking names, so an alert means
+  "check this device", not proof of infection; alerts are capped per device per
+  minute so such a page can't flood you.
 - **Tested on one home network** (Pi 4, AdGuard Home in Docker). The x86_64 install,
   Pi-hole support and the Docker image are new in v0.2 and verified on Ubuntu 24.04
   (x86_64), a Pi 4, the official Pi-hole Docker image and in CI, not yet on many real setups. Expect
   to allowlist a few domains in the first week, and please open an issue with what you see.
-- **Inline mode and enforcement are unproven on a real network.** The first inline
+- **Inline mode and enforcement are unproven on a real network** (CI tests inline mode
+  end to end in a container). The first inline
   deployment broke a workstation's DNS; the resolver was hardened afterwards (TCP,
   IPv6, upstream fallback, fail-open), but run shadow mode for at least a week first.
   Inline mode needs AdGuard Home.
 - **Isolating a device and LAN lockdown need gateway mode** (the box routes your LAN's
   traffic). In the default setup the dashboard doesn't offer them and the API refuses.
-- **`ghost-flow`** (raw-IP, beacon and JA4 connection checks) and **`capture`**
-  (pcap freeze on alert) need gateway mode too. They are tested on recorded traffic only.
-- **The dashboard is plain HTTP with a password**, like AdGuard's and Pi-hole's own.
-  Fine on a home LAN or a tailnet; never expose it to the internet. The control API has
-  no authentication; it listens on loopback only and refuses requests from web pages.
-- **Telegram alerts go through Telegram's servers.** They name the device and domain.
+- **`ghost-flow`** (raw-IP, DoH-by-IP, beacon and JA4 connection checks) and **`capture`**
+  (pcap freeze on alert) need gateway mode too. CI runs them in a lab container (a device
+  and a "wan" in network namespaces): the generated firewall loads on nftables 1.0.6,
+  isolation and lockdown change it, ghost-flow reads a real kernel queue, capture runs
+  real tcpdump. Not yet on a real network.
+- **The dashboard is HTTPS with a self-signed certificate** (the installer makes it and
+  prints its fingerprint; browsers warn once) and a password. Fine on a home LAN or a
+  tailnet; never expose it to the internet. The control API
+  listens on loopback only, refuses requests from web pages, and takes actions only with
+  a token that only the `ghostwall` user can read.
+- **Telegram alerts go through Telegram's servers.** They name the device and domain,
+  unless you set `FW_BOT_PRIVACY=minimal` in `/etc/ghostwall/fw_bot.env`: then they say
+  only which device and what kind of alert, and the rest stays on the dashboard.
 
 ## Tests
 
 Stdlib `unittest`, no network needed (`numpy` and `onnxruntime` for the scoring tests).
-[CI](https://github.com/TRXAlpha/ghostwall/actions/workflows/tests.yml) runs them on every
-push on x86_64 and arm64 with Python 3.10 and 3.13, and builds and smoke-tests the Docker
-image on both. To run them yourself:
+[CI](https://github.com/TRXAlpha/ghostwall/actions/workflows/tests.yml) runs on every push:
+
+- unit tests on x86_64 and arm64 with Python 3.10, 3.13 and 3.14, and pyflakes;
+- `tests/installer_e2e.sh`: `install.sh` for real under systemd on Debian 12 and 13 and
+  Ubuntu 22.04, 24.04 and 26.04 (inline mode, update and uninstall included), and an upgrade
+  over v0.2.0-beta.2 that must keep its alerts, trusted domains, names and thresholds;
+- `tests/gateway_e2e.sh`: ghost-flow on a real kernel queue, capture with real tcpdump, the
+  generated nftables ruleset;
+- the Docker image on both CPUs, with no capabilities, including Telegram alerts;
+- weekly, every pinned Python package against the OSV vulnerability database.
+
+To run the unit tests yourself:
 
 ```bash
 for d in agents/ghost_dns/tests agents/ghost_flow/tests agents/fw_bot/tests agents/capture/tests agents/web_ui/tests; do
@@ -252,12 +353,17 @@ agents/fw_bot/      Telegram alerts and /fw commands
 agents/ghost_flow/  connection inspector (gateway mode)
 agents/capture/     per-device pcap ring + freeze on alert (gateway mode)
 agents/netconf/     generator for the Pi-as-gateway configs (dnsmasq, nftables, sysctl)
-agents/dga_eval/    evaluation of the shipped models (eval_shipped.py -> results_shipped.md)
+agents/dga_eval/    evaluation: shipped models on DRIFT (eval_shipped.py -> results_shipped.md),
+                    public benchmark (public_bench.py -> results_public.md), LSTM rematch
+                    (fair_lstm.py), simple baselines (baselines.py -> results_baselines.md)
+tests/              installer, upgrade and gateway end-to-end tests, OSV audit
 ghostwall/          shipped models + the numpy LR trainer
 trm/                neural-net training code
 ```
 
 ## Contributing
+
+What changed between versions: [CHANGELOG.md](CHANGELOG.md).
 
 Bug reports with your setup (DNS server, how it is installed, OS, CPU) are the most
 useful thing right now. A false positive? Include the domain and the alert line. Pull

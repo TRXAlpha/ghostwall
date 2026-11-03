@@ -27,6 +27,8 @@ runs/
 # ---- Runtime state written by the agents (not source) ----
 agents/*/state.json
 agents/*/events.jsonl
+agents/*/control_token
+agents/*/novelty_key
 agents/*/resolved_ips.jsonl
 agents/*/flow_events.jsonl
 agents/*/queries.log
@@ -75,3 +77,6 @@ agents/fw_bot/integrate_ghost_bot.py
 
 # pickled models from experiments: never shipped
 *.joblib
+
+# written by install.sh into /opt/ghostwall (and into a checkout installed in place)
+/VERSION

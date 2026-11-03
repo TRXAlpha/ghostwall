@@ -18,8 +18,6 @@ class TestCliFreeze(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="capcli_")
         try:
             ring_dir = os.path.join(tmp, "cap")
-            inc = os.path.join(tmp, "incidents")
-            dev_dir = os.path.join(ring_dir, "laptop")
             os.makedirs(ring_dir)
             hdr = struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, 0, 1)
             for i in range(2):

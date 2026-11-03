@@ -4,7 +4,6 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import commands
 from commands import handle_command, parse_command
 from control_client import ControlClient, ControlError
 

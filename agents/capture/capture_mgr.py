@@ -14,8 +14,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import (check_ring_dir, load_config, load_devices, ring_usage)
-from ring import RingManager, safe_name
+from config import check_ring_dir, load_config, load_devices
+from ring import RingManager
 from incidents import freeze_incident
 
 
@@ -60,6 +60,18 @@ def cmd_serve(cfg):
     def freeze_fn(device, event_id, dns_history):
         return freeze_incident(cfg, device, event_id, dns_history, mgr)
 
+    import threading
+    import time
+
+    def pruner():  # tcpdump starts a new file every ring_seconds; old ones go here
+        while True:
+            time.sleep(max(1, int(cfg["ring_seconds"])))
+            mgr.prune()
+            for dev in devices:   # a tcpdump that died (interface gone ...) comes back
+                if not mgr.alive(dev["name"]):
+                    mgr.start_one(dev)
+    threading.Thread(target=pruner, daemon=True).start()
+
     import api as api_mod
     srv = api_mod.FreezeServer(cfg, mgr, freeze_fn)
     print("capture server on %s:%d, %d device rings; Ctrl-C to stop"
@@ -82,7 +94,8 @@ def cmd_start(cfg, allow_nontmpfs):
     try:
         import time
         while True:
-            time.sleep(1)
+            time.sleep(max(1, int(cfg["ring_seconds"])))
+            mgr.prune()
     except KeyboardInterrupt:
         pass
     finally:
@@ -131,7 +144,18 @@ def main():
     p.add_argument("--incidents-dir")
     p.add_argument("--retention-mb", type=float)
     p.add_argument("--allow-nontmpfs", action="store_true")
-    sub.add_parser("serve").add_argument("--devices")
+    p = sub.add_parser("serve")
+    p.add_argument("--devices")
+    p.add_argument("--ring-dir")
+    p.add_argument("--ring-seconds", type=int)
+    p.add_argument("--keep-minutes", type=int)
+    p.add_argument("--total-ring-mb", type=float)
+    p.add_argument("--interface")
+    p.add_argument("--tcpdump", dest="tcpdump")
+    p.add_argument("--max-devices", type=int)
+    p.add_argument("--freeze-extra-minutes", type=float)
+    p.add_argument("--incidents-dir")
+    p.add_argument("--retention-mb", type=float)
     args = ap.parse_args()
     if not args.cmd:
         ap.print_help()

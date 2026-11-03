@@ -223,6 +223,21 @@ class EnforcingControlApiTests(ControlApiTests):
         self.assertFalse(self.client.release("dell")["isolated"])
         self.assertFalse(self.state.is_isolated("dell"))
 
+    def test_isolate_hits_where_the_device_is_now(self):
+        # dell's address in devices.json may belong to another device by now (DHCP); its
+        # queries come from .31, so isolating "dell" must cut off .31, not .30.
+        res = type("R", (), {"current_ip": {"dell": "192.168.1.31"}, "last_seen": {
+            "192.168.1.31": "2026-11-03T10:00:00Z", "192.168.1.30": "2026-11-03T10:01:00Z"}})()
+        self.server.httpd.RequestHandlerClass.state["resolver"] = res
+        self.assertEqual(self.client.isolate("dell")["ip"], "192.168.1.31")
+        calls = " ".join(" ".join(c) for c in self.enforcer.backend.calls)
+        self.assertIn("192.168.1.31", calls)
+        self.assertNotIn("192.168.1.30", calls)
+        st = self.client.status()
+        self.assertEqual([(d["name"], d["ip"]) for d in st["devices"]], [("dell", "192.168.1.31")])
+        self.assertEqual([c["ip"] for c in st["clients"]], ["192.168.1.30"])   # the newcomer at .30
+        self.assertFalse(self.client.release("dell")["isolated"])
+
     def test_lockdown_toggles(self):
         self.assertTrue(self.client.lockdown()["lockdown"])
         self.assertTrue(self.state.lockdown)
@@ -238,3 +253,112 @@ class EnforcingControlApiTests(ControlApiTests):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ControlAuthTests(unittest.TestCase):
+    """Actions need the token from control_token; /status does not."""
+
+    def setUp(self):
+        from control_api import ensure_token, token_path
+        self.dir = tempfile.mkdtemp()
+        self.cfg = config_mod.load_config(None, {
+            "state_path": os.path.join(self.dir, "state.json"), "control_port": 0})
+        self.tpath = token_path(self.cfg)
+        self.token = ensure_token(self.tpath)
+        self.server = ControlServer(self.cfg, GhostState(self.cfg["state_path"]),
+                                    Enforcer(NullBackend()),
+                                    DeviceMap.from_json([{"name": "dell", "ip": "192.168.1.30"}]),
+                                    token=self.token)
+        self.port = self.server.httpd.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.server.shutdown()
+
+    def _post(self, path, body, auth=None, method="POST"):
+        h = {"Content-Type": "application/json"}
+        if auth:
+            h["Authorization"] = auth
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", method=method,
+                                     data=None if method == "GET" else json.dumps(body).encode(),
+                                     headers=h)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    def test_token_file_is_private_and_stable(self):
+        from control_api import ensure_token
+        self.assertEqual(os.stat(self.tpath).st_mode & 0o777, 0o600)
+        self.assertEqual(self.tpath, os.path.join(self.dir, "control_token"))
+        self.assertEqual(ensure_token(self.tpath), self.token)  # restarts keep the token
+        self.assertGreaterEqual(len(self.token), 40)
+
+    def test_actions_need_the_token(self):
+        for auth in (None, "Bearer wrong", "Basic " + self.token, self.token):
+            self.assertEqual(self._post("/allow", {"domain": "example.com"}, auth), 401, auth)
+        self.assertEqual(self._post("/allow", {"domain": "example.com"}, "Bearer " + self.token), 200)
+        self.assertEqual(self._post("/learning", {"enabled": False}, None), 401)
+
+    def test_status_stays_open(self):
+        self.assertEqual(self._post("/status", {}, None, method="GET"), 200)
+        self.assertEqual(self._post("/status", {}, None), 200)
+
+    def _status_body(self, auth=None, method="GET"):
+        h = {"Content-Type": "application/json"}
+        if auth:
+            h["Authorization"] = auth
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}/status", method=method,
+                                     data=None if method == "GET" else b"{}", headers=h)
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return json.loads(r.read())
+
+    def test_status_without_the_token_names_no_device(self):
+        # Any local user or process can reach this port: the household's device list
+        # (names, IPs, MACs, who was online when) needs the token like any action.
+        self.server.httpd.RequestHandlerClass.state["resolver"] = type("R", (), {"last_seen": {
+            "192.168.1.30": "2026-11-03T10:00:00Z", "192.168.1.77": "2026-11-03T10:01:00Z"}})()
+        for method in ("GET", "POST"):
+            for auth in (None, "Bearer wrong"):
+                st = self._status_body(auth, method)
+                raw = json.dumps(st)
+                self.assertTrue(st["devices_hidden"], (method, auth))
+                self.assertNotIn("devices", st)
+                self.assertNotIn("clients", st)
+                for leak in ("dell", "192.168.1.30", "192.168.1.77"):
+                    self.assertNotIn(leak, raw, (method, auth))
+                self.assertEqual((st["named_devices"], st["unnamed_clients"]), (1, 1))
+                self.assertIn("stats", st)                     # health checks still work
+            full = self._status_body("Bearer " + self.token, method)
+            self.assertNotIn("devices_hidden", full)
+            self.assertEqual([d["name"] for d in full["devices"]], ["dell"])
+            self.assertEqual([c["ip"] for c in full["clients"]], ["192.168.1.77"])
+
+    def test_allow_rejects_non_domains(self):
+        ok = "Bearer " + self.token
+        for bad in ("<script>", "a b.com", "x" * 300, "..", "evil.com/path"):
+            self.assertEqual(self._post("/allow", {"domain": bad}, ok), 400, bad)
+
+    def test_token_off_with_empty_path(self):
+        from control_api import token_path
+        self.assertIsNone(token_path({"state_path": "/x/state.json", "control_token_path": ""}))
+
+    def test_refuses_non_loopback_bind(self):
+        cfg = dict(self.cfg, control_host="0.0.0.0")
+        with self.assertRaises(ValueError):
+            ControlServer(cfg, None, None, None)
+
+
+class TrustListTests(ControlAuthTests):
+    def test_trusted_list_and_undo(self):
+        tok = "Bearer " + self.token
+        g = self.server.httpd.RequestHandlerClass.state["gstate"]
+        g.allowlist.add("starter.example"); g.static_allow.add("starter.example")
+        self.assertEqual(self._post("/allow", {"domain": "mine.example"}, tok), 200)
+        self.assertEqual(g.trusted(), ["mine.example"])                  # the starter entry isn't "yours"
+        self.assertEqual(self._post("/trusted", {}, None), 401)
+        self.assertEqual(self._post("/untrust", {"domain": "starter.example"}, tok), 409)
+        self.assertEqual(self._post("/untrust", {"domain": "mine.example"}, tok), 200)
+        self.assertFalse(g.is_allowed("mine.example"))
+        self.assertEqual(self._post("/untrust", {"domain": "mine.example"}, tok), 404)

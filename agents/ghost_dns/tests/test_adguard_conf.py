@@ -55,6 +55,77 @@ class EditTests(unittest.TestCase):
         self.assertEqual(again.getvalue().strip(), "")
         self.assertEqual(os.listdir(d), ["AdGuardHome.yaml"])  # no temp files left
 
+    @unittest.skipUnless(hasattr(os, "geteuid") and os.geteuid() == 0, "needs root to own files as others")
+    def test_rewrite_keeps_the_files_owner(self):
+        # AdGuard may run as a normal user with a 0600 config: a root-owned rewrite
+        # would lock it out of its own file.
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "AdGuardHome.yaml")
+        with open(p, "w") as f:
+            f.write(YAML)
+        os.chmod(p, 0o600)
+        os.chown(p, 1001, 1001)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(adguard_conf.main([p, "--flush", "10"]), 0)
+        st = os.stat(p)
+        self.assertEqual((st.st_uid, st.st_gid, st.st_mode & 0o777), (1001, 1001, 0o600))
+        with open(p) as f:
+            self.assertIn("size_memory: 10\n", f.read())
+
+    def test_refuses_when_owner_cannot_be_kept(self):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "AdGuardHome.yaml")
+        with open(p, "w") as f:
+            f.write(YAML)
+        real_chown, real_stat = os.chown, os.stat
+
+        def fake_stat(path, *a, **k):  # pretend the config belongs to someone else
+            st = real_stat(path, *a, **k)
+            if path == p:
+                return os.stat_result((st.st_mode, st.st_ino, st.st_dev, st.st_nlink, 4242, 4242) + tuple(st)[6:])
+            return st
+
+        def deny(*a, **k):
+            raise PermissionError("no CAP_CHOWN")
+        adguard_conf.os.chown, adguard_conf.os.stat = deny, fake_stat
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(adguard_conf.main([p, "--flush", "10"]), 1)
+        finally:
+            adguard_conf.os.chown, adguard_conf.os.stat = real_chown, real_stat
+        with open(p) as f:
+            self.assertIn("size_memory: 1000", f.read())       # untouched
+        self.assertEqual(os.listdir(d), ["AdGuardHome.yaml"])  # temp file removed
+
+
+class CheckTests(unittest.TestCase):
+    """Settings that leave Ghostwall blind, or make every device look the same."""
+
+    def test_a_good_config_has_no_problems(self):
+        self.assertEqual(adguard_conf.problems(YAML), [])
+
+    def test_each_problem_is_named(self):
+        bad = (YAML.replace("  enabled: true\n  file_enabled: true", "  enabled: false\n  file_enabled: false")
+                   .replace("  port: 5300\n", "  port: 5300\n  anonymize_client_ip: true\n"))
+        found = " ".join(adguard_conf.problems(bad))
+        for words in ("query log is off", "in memory only", "anonymizes client IPs"):
+            self.assertIn(words, found)
+
+    def test_same_keys_elsewhere_are_not_mistaken(self):
+        other = YAML.replace("statistics:\n  interval: 24h", "statistics:\n  enabled: false\n  interval: 24h")
+        self.assertEqual(adguard_conf.problems(other), [])
+
+    def test_check_flag_changes_nothing(self):
+        p = os.path.join(tempfile.mkdtemp(), "AdGuardHome.yaml")
+        with open(p, "w") as f:
+            f.write(YAML.replace("  enabled: true\n", "  enabled: false\n", 1))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(adguard_conf.main([p, "--check"]), 0)
+        self.assertIn("query log is off", out.getvalue())
+        with open(p) as f:
+            self.assertIn("  enabled: false", f.read())
+
 
 if __name__ == "__main__":
     unittest.main()

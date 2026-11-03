@@ -6,21 +6,38 @@ Requires=ghostwall-dns.service
 
 [Service]
 Type=simple
-User=root
+# It parses packets from every device: not root. Binding the NFQUEUE (and, with
+# enforce=nft, changing the ghostwall table) needs CAP_NET_ADMIN and nothing else.
+User=ghostwall
+Group=ghostwall
 WorkingDirectory=/opt/ghostwall/agents/ghost_flow
-# Binds nftables queue num 100 (the slot reserved in ghostwall.nft). Enable the
-# queue rule only once this service is running:
-#   nft add rule inet ghostwall forward iifname "eth0" ct state new \
-#       ct original proto-dst != 53 queue num 100 bypass
-# The `bypass` flag means traffic flows normally if this daemon is not bound.
-ExecStart=/opt/ghostwall/.venv/bin/python app.py --config /opt/ghostwall/agents/ghost_flow/ghost_flow.json
+# Settings live with the others in /etc/ghostwall (uninstall keeps them).
+ExecStart=/opt/ghostwall/.venv/bin/python app.py --config /etc/ghostwall/ghost_flow.json
 Restart=on-failure
 RestartSec=3
+StateDirectory=ghostwall
+StateDirectoryMode=0750
 AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
 NoNewPrivileges=true
-ProtectSystem=full
+ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0027
 
 [Install]
 WantedBy=multi-user.target

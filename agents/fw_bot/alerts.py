@@ -1,21 +1,72 @@
 """Alert formatting, inline keyboard, Telegram send/edit via HTTP. Stdlib only."""
 from __future__ import annotations
 
+import datetime
+import http.client
 import json
+import os
 import urllib.error
 import urllib.request
 
 from signing import make_callback
 
 
+RULE_WORDS = {
+    "threat_feed": "known phishing domain", "dga_burst": "burst of random-looking domains",
+    "dga_high": "very random-looking new domain", "dga_suspect": "random-looking new domain",
+    "dga_corroborated": "random name on a risky TLD", "doh_bypass": "may be bypassing your DNS filter",
+    "abused_service": "started using a service malware favours", "dns_tunnel": "possible data over DNS",
+    "dns_beacon": "looked up on a fixed timer", "blocklist": "on your blocklist",
+    "raw_ip": "connected to a raw IP", "doh_ip": "uses its own DNS-over-HTTPS", "beacon": "connects on a fixed timer",
+}
+
+
+def minimal() -> bool:
+    """FW_BOT_PRIVACY=minimal: messages name the device and the kind of alert, never a
+    domain, IP or MAC, so Telegram learns that something happened, not what. The
+    details are on the dashboard."""
+    return os.environ.get("FW_BOT_PRIVACY", "").strip().lower() == "minimal"
+
+
 def is_block(event: dict) -> bool:
     return event.get("action") == "block"
 
 
-def format_alert(event: dict, count: int = 1) -> str:
+LATE_AFTER = 300   # seconds: an alert sent later than this says when it happened
+
+
+def late_note(event: dict, now: float | None) -> str | None:
+    """`Happened 09:12 (sent late)` for an alert queued while Telegram or the bot was
+    down; None for one sent as it happened (or without a usable time)."""
+    if now is None:
+        return None
+    try:
+        t = datetime.datetime.fromisoformat(str(event.get("time", "")).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=datetime.timezone.utc)
+    if now - t.timestamp() <= LATE_AFTER:
+        return None
+    local = t.astimezone()
+    same_day = local.date() == datetime.datetime.fromtimestamp(now).astimezone().date()
+    return f"Happened {local.strftime('%H:%M' if same_day else '%a %d %b %H:%M')} (sent late)"
+
+
+def format_alert(event: dict, count: int = 1, now: float | None = None) -> str:
     """`BLOCKED · <device>` for a block, `ALERT · <device>` for anything Ghostwall only
-    flagged (shadow and learning mode), then the domain, `Why:` and the capture if any."""
+    flagged (shadow and learning mode), then the domain, `Why:` and the capture if any.
+    With `now`, an alert older than LATE_AFTER also says when it happened."""
     device = event.get("device", "unknown")
+    late = late_note(event, now)
+    if minimal():
+        what = RULE_WORDS.get(event.get("rule"), "alert")
+        return "\n".join([
+            f"{'BLOCKED' if is_block(event) else 'ALERT'} · {device}" + (f" (x{count})" if count > 1 else ""),
+            f"{what} ({event.get('severity', 'warn')})",
+            *([late] if late else []),
+            "Details on the dashboard (privacy mode: no domains are sent to Telegram).",
+        ])
     domain = event.get("domain", "?")
     reasons = event.get("reasons") or [event.get("rule", "rule fired")]
     lines = [
@@ -25,6 +76,8 @@ def format_alert(event: dict, count: int = 1) -> str:
     ]
     if event.get("capture"):
         lines.append(f"Capture: {event['capture']}")
+    if late:
+        lines.append(late)
     return "\n".join(lines)
 
 
@@ -38,6 +91,11 @@ def inline_keyboard(event: dict, secret: bytes) -> list[list[dict]]:
         }
 
     if not is_block(event):
+        # On the phishing list: trusting one takes a typed `ghostwall allow` (the alert
+        # says so), not one tap on a phone. A burst is many different
+        # random names: trusting the one in the alert would change nothing.
+        if event.get("rule") in ("threat_feed", "dga_burst"):
+            return [[btn("Details", "details")]]
         return [[btn("Trust domain", "trust"), btn("Details", "details")]]
     return [[
         btn("Unblock", "unblock"),
@@ -47,31 +105,94 @@ def inline_keyboard(event: dict, secret: bytes) -> list[list[dict]]:
     ]]
 
 
+class TelegramError(Exception):
+    """A Bot API call failed. Its text never contains the bot token (the token is part of
+    every request URL, so urllib's own errors can carry it).
+
+    kind says what to do about it:
+      network   no answer, or Telegram's side failed (5xx): wait and retry
+      rate      HTTP 429: wait retry_after seconds, then retry
+      token     HTTP 401/404: the bot token is wrong
+      chat      HTTP 403, or 400 "chat not found": the bot may not write to that chat
+                (usually: the owner never pressed Start in the bot's chat)
+      conflict  HTTP 409: another process polls this token
+      message   any other 4xx: Telegram refuses this one message; others can still go
+    """
+
+    def __init__(self, method: str, status: int | None, description: str,
+                 retry_after: float | None = None):
+        self.method, self.status, self.description = method, status, description
+        self.retry_after = retry_after
+        super().__init__(f"telegram {method}: "
+                         + (f"HTTP {status}: {description}" if status else description))
+
+    @property
+    def kind(self) -> str:
+        s = self.status
+        if s is None or s >= 500:
+            return "network"
+        if s == 429:
+            return "rate"
+        if s in (401, 404):
+            return "token"
+        if s == 403 or (s == 400 and "chat not found" in self.description.lower()):
+            return "chat"
+        if s == 409:
+            return "conflict"
+        return "message"
+
+
 class TelegramAPI:
-    """Minimal Bot API client (sendMessage / editMessageText / answerCallbackQuery)."""
+    """Minimal Bot API client (sendMessage / editMessageText / getUpdates). Every failure
+    is a TelegramError."""
 
     def __init__(self, base: str, token: str, timeout: float = 5.0):
         self.base = base.rstrip("/")
         self.token = token
         self.timeout = timeout
 
-    def _call(self, method: str, payload: dict) -> dict:
-        url = f"{self.base}/bot{self.token}/{method}"
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url, data=data, method="POST",
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-            out = json.loads(resp.read().decode("utf-8"))
-        if not out.get("ok"):
-            raise RuntimeError(f"telegram {method} failed: {out}")
+    def redact(self, text: str) -> str:
+        return text.replace(self.token, "<token>") if self.token else text
+
+    def _request(self, method: str, req, timeout: float):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                out = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            try:
+                body = json.loads(exc.read().decode("utf-8", "replace"))
+            except Exception:  # noqa: BLE001 (a proxy's HTML page, an empty body, ...)
+                body = {}
+            retry = (body.get("parameters") or {}).get("retry_after")
+            desc = self.redact(str(body.get("description") or exc.reason))
+            raise TelegramError(method, exc.code, desc,
+                                float(retry) if isinstance(retry, (int, float)) else None) from None
+        except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError) as exc:
+            # no answer, a cut-off answer, or not JSON
+            raise TelegramError(method, None, self.redact(str(getattr(exc, "reason", exc)))) from None
+        if not isinstance(out, dict) or not out.get("ok"):
+            out = out if isinstance(out, dict) else {}
+            raise TelegramError(method, out.get("error_code") or 400,
+                                self.redact(str(out.get("description") or "not ok")))
         return out.get("result", {})
 
-    def send_alert(self, chat_id: int, event: dict, secret: bytes) -> int:
+    def _call(self, method: str, payload: dict) -> dict:
+        req = urllib.request.Request(
+            f"{self.base}/bot{self.token}/{method}", data=json.dumps(payload).encode("utf-8"),
+            method="POST", headers={"Content-Type": "application/json"})
+        return self._request(method, req, self.timeout)
+
+    def get_updates(self, offset: int, wait: int = 25) -> list:
+        """Long poll: Telegram holds the request up to `wait` seconds."""
+        req = urllib.request.Request(
+            f"{self.base}/bot{self.token}/getUpdates?timeout={wait}&offset={offset}", method="GET")
+        result = self._request("getUpdates", req, wait + 10)
+        return result if isinstance(result, list) else []
+
+    def send_alert(self, chat_id: int, event: dict, secret: bytes, now: float | None = None) -> int:
         result = self._call("sendMessage", {
             "chat_id": chat_id,
-            "text": format_alert(event),
+            "text": format_alert(event, now=now),
             "reply_markup": {"inline_keyboard": inline_keyboard(event, secret)},
         })
         return result["message_id"]

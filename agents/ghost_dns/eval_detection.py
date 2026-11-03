@@ -80,7 +80,7 @@ def run_trial(over, table, stream):
     r, cfg = make_resolver(over, table, wd)
     clock = {"t": 0.0}
     r.clock = lambda: clock["t"]
-    alerts_at, n_dga_seen = [], 0
+    n_dga_seen = 0
     first_dga_alert = None
     for t, dom, is_dga in stream:
         clock["t"] = t
@@ -165,7 +165,7 @@ def main():
         f = res[name]["i_first"]
         res[name]["med"] = statistics.median(f) if f else float("nan")
     print(f"{'median DGA lookups until first alert':44s} {res['old']['med']:20.1f} {res['new']['med']:16.1f}")
-    print(f"\nnote: 'old' alerts on benign include every repeat; 'new' dedupes to one per device per domain family.")
+    print("\nnote: 'old' alerts on benign include every repeat; 'new' dedupes to one per device per domain family.")
 
 
 if __name__ == "__main__":

@@ -52,6 +52,7 @@ def sample_events(now: datetime, demo: dict | None = None) -> list[dict]:
 
 def fake_control(port: int, demo: dict) -> ThreadingHTTPServer:
     st = {"learning": True, "lockdown": False}
+    trusted: set[str] = set()   # what you "trust" in the demo, so the undo list works too
     now = datetime.now(timezone.utc)
     seen = {d["ip"]: iso(now - timedelta(seconds=20 + 40 * i)) for i, d in enumerate(DEVICES)}
 
@@ -80,8 +81,15 @@ def fake_control(port: int, demo: dict) -> ThreadingHTTPServer:
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+            dom = str(body.get("domain", ""))
             if self.path == "/allow":
-                self._json({"ok": True, **body, "allowed": True})
+                trusted.add(dom)
+                self._json({"ok": True, "domain": dom, "allowed": True})
+            elif self.path == "/trusted":
+                self._json({"ok": True, "domains": sorted(trusted)})
+            elif self.path == "/untrust":
+                trusted.discard(dom)
+                self._json({"ok": True, "domain": dom, "allowed": False})
             else:  # as on a real shadow-mode install: nothing to isolate or lock down
                 self._json({"ok": False, "error": "enforcement is off (demo)"}, 409)
 

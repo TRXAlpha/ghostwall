@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-from control_client import ControlClient, ControlError
+from control_client import ControlClient
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -93,3 +93,41 @@ class ControlClientTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TokenTests(unittest.TestCase):
+    """Actions carry ghost-dns's control token; a replaced token is re-read once."""
+
+    def test_token_sent_and_reread_after_401(self):
+        seen = []
+        current = {"tok": "new"}
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                seen.append(self.headers.get("Authorization"))
+                ok = self.headers.get("Authorization") == "Bearer " + current["tok"]
+                data = json.dumps({"ok": ok, "lockdown": True, "error": "token"}).encode()
+                self.send_response(200 if ok else 401)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        path = os.path.join(tempfile.mkdtemp(), "control_token")
+        with open(path, "w") as f:
+            f.write("old\n")
+        c = ControlClient(f"http://127.0.0.1:{httpd.server_address[1]}", token_file=path)
+        try:
+            c._get_token()  # cached "old"
+            with open(path, "w") as f:
+                f.write("new\n")
+            self.assertTrue(c.lockdown()["lockdown"])
+            self.assertEqual(seen, ["Bearer old", "Bearer new"])
+        finally:
+            httpd.shutdown()
+            httpd.server_close()

@@ -16,6 +16,8 @@ All paths assume the installer's layout (`/opt/ghostwall`).
 | `/etc/ghostwall/fw_bot.env`, `/etc/ghostwall/owner.json` | Telegram token, button-signing secret, your chat id |
 | `/var/lib/ghostwall/events.jsonl` | every alert, one JSON object per line |
 | `/var/lib/ghostwall/state.json` | allowlist, blocklist, novelty, learning and lockdown |
+| `/var/lib/ghostwall/control_token` | the control API token (created by ghost-dns; the dashboard and bot read it) |
+| `/var/lib/ghostwall/novelty_key` | the key that turns "first seen" domains into hashes, so `state.json` holds no list of the sites your household visits |
 | `/var/lib/ghostwall/threat_feed.txt` | phishing list, refreshed daily |
 | `/opt/ghostwall` | the code and its Python venv; nothing you need to keep |
 
@@ -44,7 +46,9 @@ sudo DNS_SOURCE=adguard ADGUARD_YAML=/srv/adguard/conf/AdGuardHome.yaml \
 sudo DNS_SOURCE=pihole PIHOLE_LOG=/srv/pihole/log/pihole.log ./install.sh
 ```
 
-**AdGuard Home:** the query log must be on (Settings → General settings → Query logs).
+**AdGuard Home:** the query log must be on and written to a file, and *Anonymize client IP*
+off (otherwise every device looks like the same one): Settings → General settings → Logs
+configuration. The installer and ghost-dns both warn about each of these.
 AdGuard keeps `querylog.size_memory` queries in memory before writing them (1,000 by
 default), which delayed alerts by hours on a home network. The installer lowers it to
 10 (`ADGUARD_FLUSH_EVERY` in `ghostwall.env`; `0` leaves it alone), keeps a backup of
@@ -58,11 +62,13 @@ To update later: `git pull && sudo ./install.sh`.
 ## Daily use
 
 - **Watch:** the dashboard, Telegram, or `sudo tail -f /var/lib/ghostwall/events.jsonl`.
-- **Trust a domain** that keeps getting flagged: `/fw allow <domain>`, the dashboard
-  box, or
-  `curl -X POST http://127.0.0.1:5380/allow -H 'Content-Type: application/json' -d '{"domain":"example.com"}'`.
+- **Trust a domain** that keeps getting flagged: `sudo ghostwall allow <domain>`,
+  `/fw allow <domain>`, the dashboard box, or
+  `curl -X POST http://127.0.0.1:5380/allow -H 'Content-Type: application/json' -H "Authorization: Bearer $(sudo cat /var/lib/ghostwall/control_token)" -d '{"domain":"example.com"}'`.
   Domains that should be trusted everywhere can go in `agents/ghost_dns/allowlist.txt`.
-- **Too noisy?** Raise `recommend_threshold` in `/etc/ghostwall/ghost_dns.json`
+- **Too noisy?** `sudo ghostwall calibrate` scores your own query log and shows what share
+  of your names each threshold flags, with your highest-scoring names;
+  `--target 0.2 --apply` sets the alert threshold for about 0.2% of them. Or raise `recommend_threshold` in `/etc/ghostwall/ghost_dns.json`
   (default 0.96) and restart `ghostwall-dns`. Replay your own history first to see the effect:
 
   ```bash
@@ -74,6 +80,10 @@ To update later: `git pull && sudo ./install.sh`.
   picks up the installed phishing list and `/etc/ghostwall/devices.json` by itself.
 
 ## Telegram
+
+The quick way: `sudo ghostwall telegram`. It asks for the token from
+[@BotFather](https://t.me/BotFather), waits for you to message the bot, writes both
+files below with the right permissions and starts the bot. By hand:
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and note the token.
 2. Send your bot any message, then read your chat id from
@@ -89,8 +99,11 @@ To update later: `git pull && sudo ./install.sh`.
    sudo systemctl enable --now ghostwall-fw-bot
    ```
 
-Only your chat id can run commands or press alert buttons, and buttons are
-HMAC-signed. An alert starts with `ALERT · <device>` and offers **Trust domain** and
+Only you can run commands or press alert buttons, and buttons are HMAC-signed. Add
+`FW_BOT_PRIVACY=minimal` to `fw_bot.env` (and restart `ghostwall-fw-bot`) to keep
+domains, IPs and MACs out of every message: Telegram's servers see them all.
+Commands count only in your private chat with the bot: a message must come from your
+id and be sent in that chat, so other members of a group the bot is in can't use it. An alert starts with `ALERT · <device>` and offers **Trust domain** and
 **Details**; only a real block (inline mode, learning off) says `BLOCKED` and offers
 Unblock, Keep blocked and Isolate.
 
@@ -105,6 +118,17 @@ Unblock, Keep blocked and Isolate.
 | `/fw allow <domain>` | trust a domain |
 | `/fw lockdown` | toggle LAN lockdown (needs `enforce: "nft"`) |
 | `/fw learning on\|off` | alert-only vs blocking (inline mode) |
+
+**In Docker:** `docker compose exec ghostwall ghostwall telegram` writes the same two files
+into `/data` (`ghostwall-data/` on the host); after `docker compose restart ghostwall` the
+container runs the bot with `--commands`, as the systemd unit does.
+
+**When Telegram is down** (or the Pi is offline, or you haven't pressed Start yet) alerts
+wait in order and are retried with a growing pause (up to a minute); an alert that
+arrives more than 5 minutes late says when it happened. The bot keeps its place in
+`/var/lib/ghostwall/fw_bot_follow.json`, so alerts written while it was stopped are
+sent when it starts (the very first start sends only new ones). A message Telegram
+refuses outright is logged and skipped, so it can't hold up the rest.
 
 **Already running a bot on the same token?** Only one process may poll a token. Remove
 `--commands` from the `ghostwall-fw-bot` unit (it then only sends alerts) and route
@@ -121,8 +145,14 @@ a generated password (`GHOSTWALL_WEB_PASSWORD`, user `ghostwall`); both are in
   (`tailscale ip -4`).
 - **Only from the box itself:** `127.0.0.1`, then `ssh -L 8088:127.0.0.1:8088 <box>`.
   Loopback is the only bind that may run without a password.
-- It is plain HTTP: fine on a home LAN or tailnet, never expose it to the internet.
-  Actions are accepted only as JSON from the dashboard's own origin.
+- It is HTTPS with a self-signed certificate in `/etc/ghostwall/tls/` (made by the
+  installer; plain `http://` on the same port redirects). The installer prints the
+  certificate's SHA-256 fingerprint; compare it with what the browser shows the first
+  time. Your own certificate: point `GHOSTWALL_WEB_TLS_CERT` and `GHOSTWALL_WEB_TLS_KEY`
+  at it. `GHOSTWALL_WEB_TLS=off` (then re-run the installer, or remove those two lines)
+  goes back to plain HTTP.
+- Fine on a home LAN or tailnet; never expose it to the internet. Actions are accepted
+  only as JSON from the dashboard's own origin.
 
 ## Going inline (Ghostwall answers DNS)
 
@@ -135,7 +165,11 @@ also means DNS depends on it.
    nothing.
 2. In `/etc/ghostwall/ghost_dns.json` set `"shadow": false`, `"dns_host": "0.0.0.0"`,
    `"dns_port": 53`, `"upstream": "127.0.0.1"`, `"upstream_port": 5300`. Keep
-   `"learning": true`.
+   `"learning": true`: then answers never wait for the models (a new name is scored right
+   after it is answered). With learning off, every name not seen before waits for its score
+   (about 6 ms each on an x86 VM, several times that on a Pi; `agents/ghost_dns/bench_latency.py`
+   measures your box) because the score decides
+   whether it is blocked.
 3. `sudo systemctl restart ghostwall-dns`, then from a client:
    `dig @<pi-ip> google.com` (answers) and `dig @<pi-ip> kjqwehdzxklqw.biz`
    (answers, plus a `recommend` event).
@@ -163,7 +197,7 @@ Back to shadow at any time: `sudo bash /opt/ghostwall/agents/ghost_dns/go_shadow
 Connection-level checks need the Pi to be the LAN's default gateway. This changes the
 whole network; read it fully first, and keep the router's admin page open.
 
-1. Edit `agents/netconf/config.json` (`pi_ip`, `lan_cidr`, DHCP range) and
+1. Edit `agents/netconf/config.json` (`lan_iface`, e.g. `eth0` on a Pi, `pi_ip`, `lan_cidr`, DHCP range) and
    `/etc/ghostwall/devices.json` (every device needs a MAC here), then
    `sudo python agents/netconf/gen.py --devices /etc/ghostwall/devices.json`. Output goes
    to `agents/netconf/out/`.
@@ -193,25 +227,36 @@ whole network; read it fully first, and keep the router's admin page open.
 4. On the router: disable its DHCP server and IPv6 router advertisements. Renew a
    client's lease and check it gets an address in your DHCP range with the Pi as
    gateway and DNS.
-5. **ghost-flow:** `sudo apt install libnetfilter-queue-dev`,
-   `sudo /opt/ghostwall/.venv/bin/pip install NetfilterQueue`, copy
-   `agents/ghost_flow/ghost_flow.example.json` to `ghost_flow.json`, install and start
-   `ghostwall-flow.service`, then add the queue rule:
-   `sudo nft add rule inet ghostwall forward iifname "eth0" ct state new ct original proto-dst != 53 queue num 100 bypass`.
+5. **ghost-flow:** `sudo apt install libnetfilter-queue-dev build-essential python3-dev`,
+   `sudo /opt/ghostwall/.venv/bin/pip install --require-hashes -r /opt/ghostwall/requirements-gateway.lock`,
+   `sudo install -m 640 -g ghostwall /opt/ghostwall/agents/ghost_flow/ghost_flow.example.json /etc/ghostwall/ghost_flow.json`,
+   `sudo install -m 644 /opt/ghostwall/agents/ghost_flow/ghostwall-flow.service /etc/systemd/system/`,
+   `sudo systemctl enable --now ghostwall-flow` (it runs as `ghostwall` with `CAP_NET_ADMIN` only),
+   then add the queue rule:
+   `sudo nft add rule inet ghostwall forward iifname "eth0" ct state new meta l4proto '{ tcp, udp }' th dport != 53 queue num 100 bypass`.
+   (Versions before this one documented `ct original proto-dst != 53`, which nft rejects.)
+   `bypass` means traffic keeps flowing whenever ghost-flow isn't running.
    Leave it recommend-only (no `--autoblock`).
-6. **capture:** install `tcpdump`, copy `agents/capture/` to `/opt/ghostwall/capture`
-   with a `devices.json` using the same names, install `ghost-capture.service`, and set
-   `"capture_enabled": true` in `ghost_dns.json`.
+6. **capture:** `sudo apt install tcpdump`; if your LAN interface isn't `eth0`, write
+   `{"interface": "eth1"}` to `/etc/ghostwall/capture.json`; then
+   `sudo install -m 644 /opt/ghostwall/agents/capture/ghost-capture.service /etc/systemd/system/`,
+   `sudo systemctl enable --now ghost-capture`, and set `"capture_enabled": true` in
+   `ghost_dns.json`. It captures the devices in `/etc/ghostwall/devices.json`
+   (`ghostwall name` adds them). Each keeps the last 5 minutes (`ring_keep_minutes`) in
+   RAM; a high-severity alert freezes them plus 5 more minutes into
+   `/var/lib/ghostwall/incidents/<event_id>/`.
 
 ## Troubleshooting
 
 | Symptom | Check |
 |---|---|
-| No events at all | `curl -s 127.0.0.1:5380/status`: `stats.queries` should rise over time. If not, `journalctl -u ghostwall-dns -n 30`; a `querylog not found` warning means the log path in `ghostwall.env` is wrong or the query log is off. AdGuard: `size_memory` under `querylog:` in `AdGuardHome.yaml` should be small (re-run the installer). No events with rising `queries` just means nothing suspicious. |
-| Too many alerts | allowlist, raise `recommend_threshold`, replay to compare |
-| Dashboard won't load | `systemctl status ghostwall-web`; check `GHOSTWALL_WEB_BIND`; any bind but loopback needs `GHOSTWALL_WEB_PASSWORD`. Ubuntu with ufw: `sudo ufw allow 8088/tcp` |
-| Forgot the dashboard password | `sudo grep PASSWORD /etc/ghostwall/ghostwall.env` |
-| Telegram silent | `journalctl -u ghostwall-fw-bot -n 50`; token, chat id, file permissions |
+| No events at all | `ghostwall status`: "scored" should rise over time. If not, `journalctl -u ghostwall-dns -n 30`; a `querylog not found` warning means the log path in `ghostwall.env` is wrong or the query log is off. AdGuard: `size_memory` under `querylog:` in `AdGuardHome.yaml` should be small (re-run the installer). Rising numbers and no alerts just means nothing suspicious. |
+| Too many alerts | `sudo ghostwall alerts` to see which rule; `sudo ghostwall allow <domain>` for names you trust (`ghostwall untrust` undoes it); `sudo ghostwall calibrate` to see what the thresholds flag on your network and `--target 0.2 --apply` to quieten them |
+| Dashboard won't load | `systemctl status ghostwall-web`; it is `https://` now (plain `http://` redirects); check `GHOSTWALL_WEB_BIND`; any bind but loopback needs `GHOSTWALL_WEB_PASSWORD`. Ubuntu with ufw: `sudo ufw allow 8088/tcp` |
+| Browser warns about the certificate | expected once: it is the box's own self-signed one. Compare the SHA-256 fingerprint the installer printed (`openssl x509 -noout -fingerprint -sha256 -in /etc/ghostwall/tls/cert.pem`) |
+| Forgot the dashboard password | `sudo ghostwall password` |
+| Alerts show IP addresses | `sudo ghostwall devices`, then `sudo ghostwall name <ip> <name>` |
+| Telegram silent | `journalctl -u ghostwall-fw-bot -n 50` says why, once: a rejected token (fix `fw_bot.env`, restart), "press Start" (open the bot in Telegram and press Start: a bot can't write first) or Telegram unreachable. Alerts wait meanwhile and go out, marked "sent late", when Telegram answers; a restart resumes where the bot stopped |
 | Telegram `409 Conflict` | another process polls the same token; see "Already running a bot" |
 | No DNS (inline) | `sudo bash .../go_shadow.sh` puts AdGuard back on :53 |
 

@@ -3,8 +3,9 @@
 #
 # The resolver, control API, DNS wire code, enforcement bridge, capture and
 # fw_bot are stdlib-only. The only third-party runtime deps are the model
-# stack used for domain scoring. Upper bounds keep a future major release from
-# changing behaviour under an existing install; CI tests the newest allowed.
+# stack used for domain scoring. These are the allowed ranges; install.sh, the
+# Dockerfile and CI install the exact, hash-checked versions in requirements.lock
+# (regenerate it after changing this file; the command is at its top).
 numpy>=1.24,<3
 onnxruntime>=1.16,<2     # CPU inference for the TRM DGA model
 

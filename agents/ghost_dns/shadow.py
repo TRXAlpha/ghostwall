@@ -25,8 +25,9 @@ import threading
 import time
 
 
-def parse_adguard_line(line: str):
-    """AdGuard querylog line -> (client_ip, host, qtype) or None."""
+def parse_adguard_entry(line: str):
+    """AdGuard querylog line -> (client_ip, host, qtype, blocked_by_adguard) or None.
+    AdGuard marks what it blocked with Result.IsFiltered (rewrites don't set it)."""
     try:
         j = json.loads(line)
     except ValueError:
@@ -37,14 +38,25 @@ def parse_adguard_line(line: str):
     ip = j.get("IP")
     if not host or not ip:
         return None
-    return str(ip), str(host).rstrip(".").lower(), str(j.get("QT") or "A")
+    res = j.get("Result")
+    blocked = isinstance(res, dict) and res.get("IsFiltered") is True
+    return str(ip), str(host).rstrip(".").lower(), str(j.get("QT") or "A"), blocked
+
+
+def parse_adguard_line(line: str):
+    """AdGuard querylog line -> (client_ip, host, qtype) or None."""
+    e = parse_adguard_entry(line)
+    return e[:3] if e else None
 
 
 parse_line = parse_adguard_line  # older name, used by replay_querylog and tests
 
 # `Oct 31 12:00:00 dnsmasq[123]: query[A] example.com from 192.168.1.10`, and the
-# log-queries=extra form with a serial and client/port before `query`.
-_PIHOLE_QUERY = re.compile(r"\bquery\[(?P<qt>[A-Za-z0-9]+)\]\s+(?P<host>\S+)\s+from\s+(?P<ip>[0-9A-Fa-f:.]+)")
+# log-queries=extra form with a serial and client/port before `query`. Anchored after
+# the `<process>[pid]:` tag and at the end of the line: the name is whatever a device
+# asked for, so a crafted one must not be able to name a different client.
+_PIHOLE_QUERY = re.compile(r"\]:\s+(?:\d+\s+\S+\s+)?query\[(?P<qt>[A-Za-z0-9]+)\]\s+"
+                           r"(?P<host>\S+)\s+from\s+(?P<ip>[0-9A-Fa-f:.]+)\s*$")
 
 
 def parse_pihole_line(line: str):
@@ -55,7 +67,21 @@ def parse_pihole_line(line: str):
     return m["ip"], m["host"].rstrip(".").lower(), m["qt"].upper()
 
 
+# Pi-hole logs its own block on the line after the query, e.g.
+#   dnsmasq[812]: gravity blocked ads.example.com is 0.0.0.0   (v6: "... denied")
+_PIHOLE_BLOCKED = re.compile(r"\]:\s+(?:\d+\s+\S+\s+)?(?:gravity blocked|exactly blacklisted|regex blacklisted|"
+                             r"exactly denied|regex denied|gravity denied)\s+(?P<host>\S+)\s+is\s")
+
+
+def pihole_blocked_host(line: str) -> str | None:
+    m = _PIHOLE_BLOCKED.search(line)
+    return m["host"].rstrip(".").lower() if m else None
+
+
 PARSERS = {"adguard": parse_adguard_line, "pihole": parse_pihole_line}
+# with "was it already blocked by the DNS server" (Pi-hole logs that on a later line: False)
+ENTRY_PARSERS = {"adguard": parse_adguard_entry,
+                 "pihole": lambda line: (lambda p: p + (False,) if p else None)(parse_pihole_line(line))}
 
 
 def detect_format(path: str) -> str:
@@ -82,13 +108,15 @@ class QueryLogFollower:
         self.fmt = detect_format(path) if fmt in (None, "", "auto") else fmt
         if self.fmt not in PARSERS:
             raise ValueError(f"querylog_format must be adguard, pihole or auto, not {fmt!r}")
-        self.parse = PARSERS[self.fmt]
+        self.parse = ENTRY_PARSERS[self.fmt]
         self.poll = poll_seconds
         self.offset = os.path.getsize(path) if os.path.exists(path) else 0
         self._head = self._read_head()
         self._stop = threading.Event()
         self.seen = 0
         self.missing = False  # True while the querylog can't be seen; warned once per outage
+        self.unreadable = False  # True while it exists but can't be opened (permissions)
+        self.said_anonymized = False
 
     def _read_head(self) -> bytes:
         try:
@@ -124,28 +152,81 @@ class QueryLogFollower:
             print(f"[ghost-dns:shadow] querylog is back: {self.path}", file=sys.stderr, flush=True)
             self.missing = False
         size = os.path.getsize(self.path)
-        if self._rotated(size):
-            self.offset = 0  # AdGuard rotated/truncated the log
-            self._head = self._read_head()
         done = 0
-        with open(self.path, "rb") as f:
+        if self._rotated(size):
+            # AdGuard renames the log to .1, Pi-hole's logrotate copies it there and
+            # truncates: either way the lines written since our last look are in .1 now.
+            old = self.path + ".1"
+            if self._head and self._head_of(old)[:len(self._head)] == self._head:
+                done += self._read_from(old)
+            self.offset = 0
+            self._head = self._read_head()
+        done += self._read_from(self.path, main=True)
+        self.seen += done
+        return done
+
+    def _head_of(self, path: str) -> bytes:
+        try:
+            with open(path, "rb") as f:
+                return f.read(64)
+        except OSError:
+            return b""
+
+    def _read_from(self, path: str, main: bool = False) -> int:
+        """Score the complete lines of `path` after self.offset (advancing it)."""
+        done = 0
+        pending: list[list] = []   # Pi-hole: queries waiting to see whether a "blocked" line follows
+        try:
+            f = open(path, "rb")
+        except OSError as exc:
+            if main and not self.unreadable:   # blind, so say so (once), with the usual cause
+                print(f"[ghost-dns:shadow] WARNING can't read {path} ({exc.strerror or exc}) -- nothing is "
+                      "being scored. It belongs to the user your DNS server runs as; Docker: add "
+                      "cap_add: [DAC_OVERRIDE] to the ghostwall service", file=sys.stderr, flush=True)
+                self.unreadable = True
+            return 0
+        if main and self.unreadable:
+            print(f"[ghost-dns:shadow] {path} is readable again", file=sys.stderr, flush=True)
+            self.unreadable = False
+        with f:
             f.seek(self.offset)
             for raw in f:
                 if not raw.endswith(b"\n"):
                     break  # partial line: wait for the rest
                 self.offset += len(raw)
-                parsed = self.parse(raw.decode("utf-8", "replace").strip())
+                line = raw.decode("utf-8", "replace").strip()
+                if self.fmt == "pihole":
+                    host = pihole_blocked_host(line)
+                    if host:
+                        for q in pending:
+                            if q[1] == host:
+                                q[3] = True
+                        continue
+                parsed = self.parse(line)
                 if not parsed:
                     continue
-                ip, host, qtype = parsed
-                try:
-                    self.resolver.decide(ip, host, qtype)
-                except Exception as exc:  # noqa: BLE001 - never die on one bad line
-                    print(f"[ghost-dns:shadow] decide failed for {host}: {exc!r}", file=sys.stderr, flush=True)
-                self.resolver.stats["queries"] += 1
-                done += 1
-        self.seen += done
+                pending.append(list(parsed))
+                if self.fmt != "pihole" or len(pending) > 64:
+                    done += self._decide(pending.pop(0))
+        for q in pending:   # Pi-hole writes the query and its block in one go
+            done += self._decide(q)
         return done
+
+    def _decide(self, q) -> int:
+        ip, host, qtype, blocked = q
+        if not self.said_anonymized and self.fmt == "adguard" and str(ip).endswith(".0") and str(ip).count(".") == 3:
+            # AdGuard's "Anonymize client IP" zeroes the last part of every address:
+            # each /24 of devices then looks like one device here.
+            print(f"[ghost-dns:shadow] WARNING client {ip} ends in .0: AdGuard's 'Anonymize client IP' "
+                  "looks on (dns.anonymize_client_ip), so every device looks like the same one. "
+                  "Turn it off: Settings > General settings > Logs configuration", file=sys.stderr, flush=True)
+            self.said_anonymized = True
+        try:
+            self.resolver.decide(ip, host, qtype, upstream_blocked=blocked)
+        except Exception as exc:  # noqa: BLE001 - never die on one bad line
+            print(f"[ghost-dns:shadow] decide failed for {host}: {exc!r}", file=sys.stderr, flush=True)
+        self.resolver.stats["queries"] += 1
+        return 1
 
     def run(self) -> None:
         while not self._stop.is_set():

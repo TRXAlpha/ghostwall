@@ -33,7 +33,7 @@ systemctl daemon-reload
 command -v nft >/dev/null && nft delete table inet ghostwall 2>/dev/null || true
 
 echo "3) remove /opt/ghostwall"
-rm -rf /opt/ghostwall
+rm -rf /opt/ghostwall /usr/local/bin/ghostwall
 
 if [ "$PURGE" = 1 ]; then
   echo "4) remove settings, alerts, state, threat feed and the ghostwall user"

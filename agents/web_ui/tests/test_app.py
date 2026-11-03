@@ -105,3 +105,187 @@ class ValidateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HardeningTests(unittest.TestCase):
+    def test_page_has_csp_matching_its_script(self):
+        import hashlib, re
+        page, csp = app.page_and_csp()
+        script = re.search(rb"<script>(.*?)</script>", page, re.S).group(1)
+        h = base64.b64encode(hashlib.sha256(script).digest()).decode()
+        self.assertIn(f"'sha256-{h}'", csp)
+        self.assertNotIn("unsafe-inline' ;", csp)
+        self.assertIn("script-src 'sha256-", csp)
+        s = Server()
+        try:
+            r = s.req("GET", "/")
+            self.assertEqual(r.status, 200)
+            self.assertEqual(r.getheader("Content-Security-Policy"), csp)
+        finally:
+            s.close()
+
+    def test_password_guessing_is_limited_per_client(self):
+        t = [0.0]
+        lim = app.FailLimiter(limit=3, window=60, clock=lambda: t[0])
+        for _ in range(3):
+            self.assertFalse(lim.blocked("10.0.0.5"))
+            lim.fail("10.0.0.5")
+        self.assertTrue(lim.blocked("10.0.0.5"))
+        self.assertFalse(lim.blocked("10.0.0.6"))
+        t[0] = 61.0
+        self.assertFalse(lim.blocked("10.0.0.5"))
+
+    def test_wrong_passwords_get_429(self):
+        s = Server(password="right")
+        try:
+            codes = [s.req("GET", "/api/status", auth="ghostwall:wrong").status for _ in range(11)]
+            self.assertEqual(codes[:10], [401] * 10)
+            self.assertEqual(codes[10], 429)
+        finally:
+            s.close()
+
+
+class ControlTokenTests(unittest.TestCase):
+    """The dashboard forwards actions with ghost-dns's control token."""
+
+    def test_token_is_sent(self):
+        import json
+        from http.server import BaseHTTPRequestHandler
+        seen = []
+
+        class Ctl(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                seen.append(self.headers.get("Authorization"))
+                ok = self.headers.get("Authorization") == "Bearer tok123"
+                body = json.dumps({"ok": ok, "error": None if ok else "token"}).encode()
+                self.send_response(200 if ok else 401)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self):   # /status: the device list only with the token
+                seen.append(self.headers.get("Authorization"))
+                ok = self.headers.get("Authorization") == "Bearer tok123"
+                body = json.dumps({"ok": True, **({"devices": [{"name": "tv"}]} if ok
+                                                  else {"devices_hidden": True})}).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        ctl = ThreadingHTTPServer(("127.0.0.1", 0), Ctl)
+        threading.Thread(target=ctl.serve_forever, daemon=True).start()
+        d = tempfile.mkdtemp()
+        tok = os.path.join(d, "control_token")
+        with open(tok, "w") as f:
+            f.write("tok123\n")
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), app.make_handler(
+            f"http://127.0.0.1:{ctl.server_address[1]}", os.path.join(d, "e.jsonl"), None, tok))
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            port = srv.server_address[1]
+            c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            c.request("POST", "/api/action", body=json.dumps({"action": "learning", "params": {"enabled": True}}),
+                      headers={"Host": f"127.0.0.1:{port}", "Content-Type": "application/json"})
+            r = c.getresponse()
+            r.read()
+            self.assertEqual(r.status, 200)
+            self.assertEqual(seen, ["Bearer tok123"])
+            c.request("GET", "/api/status", headers={"Host": f"127.0.0.1:{port}"})
+            r = c.getresponse()
+            self.assertEqual(json.loads(r.read())["resolver"]["devices"], [{"name": "tv"}])
+            self.assertEqual(seen[-1], "Bearer tok123")
+        finally:
+            srv.shutdown(); ctl.shutdown()
+
+
+@unittest.skipUnless(__import__("shutil").which("openssl"), "needs the openssl command")
+class TlsTests(unittest.TestCase):
+    """HTTPS on the dashboard port, and plain HTTP there redirected to it."""
+
+    @classmethod
+    def setUpClass(cls):
+        import subprocess
+        d = tempfile.mkdtemp()
+        cls.cert, cls.key = os.path.join(d, "cert.pem"), os.path.join(d, "key.pem")
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
+                        "-subj", "/CN=localhost", "-keyout", cls.key, "-out", cls.cert],
+                       check=True, capture_output=True)
+        cls.srv = app.DashboardServer(("127.0.0.1", 0), app.make_handler(
+            "http://127.0.0.1:9", os.path.join(d, "events.jsonl"), "pw"))
+        cls.srv.tls = app.tls_context(cls.cert, cls.key)
+        cls.port = cls.srv.server_address[1]
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+
+    def test_https_works_and_still_needs_the_password(self):
+        import ssl
+        ctx = ssl.create_default_context(cafile=self.cert)
+        ctx.check_hostname = False
+        c = http.client.HTTPSConnection("127.0.0.1", self.port, timeout=5, context=ctx)
+        c.request("GET", "/api/status")
+        r = c.getresponse()
+        r.read()
+        self.assertEqual(r.status, 401)
+        c.close()
+
+    def test_plain_http_is_redirected(self):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.request("GET", "/api/events?limit=5", headers={"Host": f"gw.example:{self.port}"})
+        r = c.getresponse()
+        r.read()
+        self.assertEqual(r.status, 301)
+        self.assertEqual(r.getheader("Location"), f"https://gw.example:{self.port}/api/events?limit=5")
+        c.close()
+
+    def test_garbage_host_is_not_reflected(self):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        c.putrequest("GET", "/", skip_host=True)
+        c.putheader("Host", "evil.example/\\r\\nX: y")
+        c.endheaders()
+        r = c.getresponse()
+        r.read()
+        self.assertEqual(r.getheader("Location"), "https://localhost/")
+        c.close()
+
+
+class ConnectionCapTests(unittest.TestCase):
+    def test_idle_connection_times_out(self):
+        import socket
+        h = app.make_handler("http://127.0.0.1:9", "/nonexistent", None)
+        self.assertEqual(h.timeout, 30)
+        h.timeout = 0.5
+        srv = app.DashboardServer(("127.0.0.1", 0), h)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        c = socket.create_connection(("127.0.0.1", srv.server_address[1]))
+        c.settimeout(5)
+        self.assertEqual(c.recv(1), b"")             # closed by the server, not held forever
+        srv.shutdown()
+
+    def test_idle_connections_are_capped(self):
+        import socket, time
+        srv = app.DashboardServer(("127.0.0.1", 0), app.make_handler("http://127.0.0.1:9", "/nonexistent", None))
+        srv.max_connections = 3
+        srv._slots = threading.BoundedSemaphore(3)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        port = srv.server_address[1]
+        idle = [socket.create_connection(("127.0.0.1", port)) for _ in range(3)]   # never send a request
+        time.sleep(0.3)
+        extra = socket.create_connection(("127.0.0.1", port))
+        extra.settimeout(3)
+        self.assertEqual(extra.recv(1), b"")        # dropped at once
+        for s in idle:
+            s.close()
+        time.sleep(0.5)
+        r = Server.__new__(Server)
+        r.srv, r.port = srv, port
+        self.assertEqual(r.req("GET", "/api/events").status, 200)   # slots come back
+        srv.shutdown()

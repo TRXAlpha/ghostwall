@@ -6,10 +6,25 @@ flags.
 ## Control API
 
 HTTP/JSON on `127.0.0.1:5380`, served by `ghost-dns` (`control_api.py`), used by the
-dashboard and Telegram bot. No authentication: it must never listen beyond loopback.
-Because a web page in a browser on the same machine can reach loopback too, POSTs must
-send `Content-Type: application/json` (else 415) and every request must name a
-loopback `Host` such as `127.0.0.1:5380` (else 403, which stops DNS rebinding).
+dashboard and Telegram bot. It refuses to start on anything but a loopback address.
+Loopback is still shared by every local user and by web pages in a browser on the
+same machine, so:
+
+- every request must name a loopback `Host` such as `127.0.0.1:5380` (else 403, which
+  stops DNS rebinding);
+- POSTs must send `Content-Type: application/json` (else 415);
+- every endpoint except `/status` needs `Authorization: Bearer <token>` (else 401). `/status`
+  answers without it too, but then as a summary: no `devices` or `clients`, `"devices_hidden": true`
+  instead (any local user or process can reach the port, and the list names every device,
+  its IP and MAC and when it was last online).
+  `ghost-dns` creates the token on first start in `control_token` next to `state.json`
+  (`/var/lib/ghostwall/control_token` when installed, `/data/control_token` in Docker),
+  readable only by the `ghostwall` user. The dashboard and the bot read it from there.
+
+```bash
+curl -X POST http://127.0.0.1:5380/allow -H 'Content-Type: application/json' \
+     -H "Authorization: Bearer $(sudo cat /var/lib/ghostwall/control_token)" -d '{"domain":"example.com"}'
+```
 
 Every response is a JSON object: `{"ok": true, ...}` on success, or a non-2xx status
 with `{"ok": false, "error": "..."}`. All endpoints take POST with a JSON body;
@@ -17,11 +32,13 @@ with `{"ok": false, "error": "..."}`. All endpoints take POST with a JSON body;
 
 | Endpoint | Body | Returns |
 |---|---|---|
-| `/status` | — | `devices` (name, ip, mac, isolated, last_seen, blocked_domains), `lockdown`, `learning`, `shadow`, `source` (`adguard` or `pihole` in shadow mode), `enforce` (`null` or `nft`), `models`, `feed` (`domains`, `updated`), `stats` (counters since start; `queries` rising means it is scoring) |
+| `/status` | — | `devices` (name, ip, mac, isolated, last_seen, blocked_domains) and `clients` (unnamed addresses seen, newest first, up to 50): with the token only; `named_devices`, `unnamed_clients` (counts), `lockdown`, `learning`, `shadow`, `source` (`adguard` or `pihole` in shadow mode), `enforce` (`null` or `nft`), `models`, `feed` (`domains`, `updated`), `stats` (counters since start; `queries` rising means it is scoring; `suppressed` counts repeat alerts, `rate_limited` alerts dropped by `alert_rate_per_device`, `blocked_upstream` random-looking names AdGuard had already blocked) |
 | `/device` | `{"name": "laptop"}` | that device plus `last_seen` (its latest query since ghost-dns started, or null); 404 if unknown |
-| `/isolate` | `{"name": "laptop"}` | `{"name", "isolated": true}`: the device may only reach the Pi's DNS. 409 unless `enforce` is `nft` |
+| `/isolate` | `{"name": "laptop"}` | `{"name", "ip", "isolated": true}`: the device may only reach the Pi's DNS. `ip` is where it queried from last (its name follows its MAC), not necessarily the address in `devices.json`. 409 unless `enforce` is `nft` |
 | `/release` | `{"name": "laptop"}` | `{"name", "isolated": false}` |
-| `/allow` | `{"domain": "example.com"}` | `{"domain", "allowed": true}`: allowlisted network-wide |
+| `/allow` | `{"domain": "example.com"}` | `{"domain", "allowed": true}`: allowlisted network-wide. 400 unless it is a hostname |
+| `/trusted` | `{}` | `{"domains": [...]}`: what was trusted with `/allow` (the starter `allowlist.txt` aside) |
+| `/untrust` | `{"domain": "example.com"}` | `{"domain", "allowed": false}`: undoes `/allow`; 409 for a starter-file entry, 404 if not trusted |
 | `/lockdown` | `{}` | `{"lockdown": bool}`: toggles; drops forwarded traffic except to the Pi and tailnet. 409 unless `enforce` is `nft` and `pi_ip` is set |
 | `/learning` | `{"enabled": true\|false}` | `{"learning": bool}`: learning on means alerts only. Anything but a boolean is a 400 |
 | `/unblock` | `{"event_id": "...", "domain": "..."}` | `{"event_id", "unblocked": true}` (alert buttons) |
@@ -41,7 +58,7 @@ against this schema (exit 1 on any invalid line).
 | `time` | yes | ISO 8601 UTC, e.g. `2026-10-20T21:04:05Z` |
 | `device` | yes | device name from `devices.json`, or the client IP |
 | `domain` | yes | lowercase, no trailing dot |
-| `rule` | yes | `threat_feed`, `dga_burst`, `dga_high`, `dga_suspect`, `dga_corroborated`, `doh_bypass`, `dns_tunnel`, `dns_beacon`, `blocklist`, `raw_ip`, `beacon` |
+| `rule` | yes | `threat_feed`, `dga_burst`, `dga_high`, `dga_suspect`, `dga_corroborated`, `doh_bypass`, `abused_service`, `dns_tunnel`, `dns_beacon`, `blocklist`, `raw_ip`, `doh_ip`, `beacon` |
 | `action` | yes | `block`, `recommend` or `allow` |
 | `event_id` | yes | `^[A-Za-z0-9_-]{1,64}$` |
 | `severity` | no | `info`, `warn` (default), `high`, `critical` |
@@ -50,6 +67,7 @@ against this schema (exit 1 on any invalid line).
 | `scores` | no | numbers in 0..1, e.g. `{"dga": 0.97}` |
 | `reasons` | no | short human strings |
 | `capture` | no | pcap note |
+| `trust` | no | what Trust allowlists when it isn't `domain`: a `dns_tunnel` alert names one of many throw-away subdomains, so Trust takes the zone (`trust: "example.com"`). `threat_feed` and `dga_burst` alerts offer no Trust (the feed wins anyway; a burst is many different names) |
 
 ```json
 {"time":"2026-10-20T21:04:05Z","device":"laptop","ip":"192.168.1.10",
@@ -69,6 +87,8 @@ overrides any of them. The most useful keys:
 | `querylog` | `/opt/AdGuardHome/data/querylog.json` | the log followed in shadow mode: AdGuard's `querylog.json` or Pi-hole's `pihole.log` |
 | `querylog_format` | `"auto"` | `"adguard"`, `"pihole"`, or `"auto"` (from the file's first line, else its name) |
 | `learning` | `true` | alerts only; nothing is blocked |
+| `score_after_answer` | `true` | inline mode with `learning` on: answer a query first and score it right after, so a new name doesn't wait for the models (they can't change the answer then; the confirmed blocklist is still checked first). With `learning` off the score decides the answer, so it always comes first |
+| `models` | `"default"` | `"v3-public"`: the opt-in 1-5-gram model alone (no onnxruntime), with the calibrated thresholds from `lr_v3_public.json` for any threshold you haven't set yourself |
 | `enforce` | `"null"` | `"nft"` lets isolate and lockdown change nftables |
 | `dns_host`, `dns_port` | `127.0.0.1`, `53` | inline listener (IPv4); `dns_host6` `"::"` for IPv6, `null` to disable |
 | `upstream`, `upstream_port` | `127.0.0.1`, `53` | inline upstream (AdGuard on `5300`) |
@@ -82,11 +102,16 @@ overrides any of them. The most useful keys:
 | `burst_min_score`, `burst_min_distinct` | `0.80`, `5` | DGA burst: score and count per device in 10 min |
 | `tunnel_min_distinct`, `tunnel_min_long` | `30`, `12` | DNS tunnel thresholds per apex in 10 min |
 | `beacon_min_samples`, `beacon_min_dga` | `8`, `0.5` | DNS beacon thresholds |
+| `service_baseline_days` | `3` | `abused_service`: how long each device learns which of those services it normally uses |
 | `event_dedupe_seconds` | `86400` | one alert per device, domain and rule per day |
+| `alert_rate_per_device` | `30` | at most this many alerts per device per minute (`0`: no cap). Any web page can make a browser look up thousands of made-up names; blocks still happen, only their alerts are dropped |
+| `control_host`, `control_port` | `127.0.0.1`, `5380` | control API; must be loopback |
+| `control_token_path` | `null` | `null`: `control_token` next to `state_path`; `""` turns the token off (not recommended) |
 | `threat_feed_path` | installer: `/var/lib/ghostwall/threat_feed.txt` | written by `update_feed.py` |
 | `allowlist_path` | `agents/ghost_dns/allowlist.txt` | starter allowlist |
-| `devices_json` | installer: `/etc/ghostwall/devices.json` | device names; unknown clients are named by IP |
-| `state_path`, `events_path` | installer: `/var/lib/ghostwall/state.json`, `.../events.jsonl` | persistent state and the alert log |
+| `devices_json` | installer: `/etc/ghostwall/devices.json` | device names; unknown clients are named by IP. An entry with a `mac` is known by it: its name follows it to a new IPv4 address, and its old address loses the name once another device has it |
+| `neighbours_path` | `/proc/net/arp` | which MAC is at an address: this default means the kernel's neighbour table (IPv4 and IPv6, read over netlink like `ip neigh`; `/proc/net/arp`, IPv4 only, if netlink isn't available); another path is read as a file in `/proc/net/arp`'s format. Only devices on this box's own network are in it (Docker's bridge network: none, so names stay on addresses). `""` turns it off |
+| `state_path`, `events_path` | installer: `/var/lib/ghostwall/state.json`, `.../events.jsonl` | persistent state and the alert log. The log starts a new file past 32 MiB and keeps one `events.jsonl.1`; the dashboard and bot read across both |
 | `query_log` | `null` (off) | inline mode: a text log of every query |
 | `resolved_ips_path` | installer: `/var/lib/ghostwall/resolved_ips.jsonl` | inline mode: answered IPs, read by ghost-flow |
 | `log_max_bytes` | 16 MiB | `query_log` and `resolved_ips_path` start a new file past this (one `.1` kept) |
@@ -97,14 +122,20 @@ overrides any of them. The most useful keys:
 
 | Command | Purpose |
 |---|---|
+| `ghostwall status \| version \| devices \| name IP NAME \| alerts \| allow D \| trusted \| untrust D \| unblock D \| learning on\|off \| password \| telegram \| calibrate [--target P] [--apply]` | everyday commands (`ghost_dns/ghostwall_cli.py`, on the PATH after install; actions need sudo) |
 | `ghost_dns/app.py --config FILE` | run ghost-dns; `--shadow --querylog FILE`, `--once` (build and exit), `--dns-port`, `--upstream`, `--enforce`, `--learning/--no-learning` |
 | `ghost_dns/go_shadow.sh` | switch to shadow mode safely (root) |
-| `ghost_dns/update_feed.py --out FILE [--feed URL ...]` | download threat feeds; keeps the old file on failure |
+| `ghost_dns/update_feed.py --out FILE [--feed URL ...]` | download threat feeds (https only; `GHOSTWALL_FEEDS` in `ghostwall.env`, space-separated, replaces the default list); keeps the old file if any feed fails |
 | `ghost_dns/replay_querylog.py --querylog FILE [--devices FILE]` | dry-run detection over real history (uses the installed phishing list and devices by default) |
 | `web_ui/demo.py` | the dashboard on demo data, no install needed |
 | `web_ui/make_demo.py` | regenerate the demo data by running the real detector over a scripted day |
 | `ghost_dns/eval_detection.py` | before/after simulation on labelled data |
-| `fw_bot/fw_bot.py --owner-file FILE --follow EVENTS [--commands]` | Telegram alerts, optionally commands |
+| `ghost_dns/bench_latency.py [-n 200]` | inline-mode answer time for never-seen names, scoring before vs after the answer |
+| `dga_eval/baselines.py --data DIR` | the shipped models against simple "looks random" rules (entropy, ...) on the same public names → `results_baselines.md` |
+| `dga_eval/fair_lstm.py --data DIR` | 1-5-gram model vs an early-stopped LSTM, 3 seeds × 5 unseen-family folds → `results_lstm_fair.md` |
+| `dga_eval/train_public.py --data DIR` | retrain the opt-in `v3-public` model and its thresholds → `results_v3_public.md` |
+| `dga_eval/public_bench.py --data DIR --download` | public DGA benchmark (pinned data, ~2 h on 4 cores; needs scikit-learn, torch, onnx) → `results_public.md` |
+| `fw_bot/fw_bot.py --owner-file FILE --follow EVENTS [--commands] [--follow-state FILE] [--env-file FILE]` | Telegram alerts, optionally commands. Alerts are sent in order and kept while Telegram fails; the position survives restarts in `--follow-state` (default `fw_bot_follow.json` next to EVENTS). `--env-file` reads the `FW_BOT_*` settings from a `KEY=VALUE` file where systemd's `EnvironmentFile` isn't there (the Docker image) |
 | `fw_bot/validate_events.py FILE` | validate an events file |
-| `web_ui/app.py --bind ADDR --port 8088` | dashboard |
-| `netconf/gen.py` | render gateway-mode configs into `netconf/out/` |
+| `web_ui/app.py --bind ADDR --port 8088 [--tls-cert F --tls-key F] [--control-token-file FILE]` | dashboard (the token file defaults to `/var/lib/ghostwall/control_token`) |
+| `netconf/gen.py [--devices F] [--config F] [--out DIR]` | render gateway-mode configs into `netconf/out/` (settings from `netconf/config.json` unless `--config`) |

@@ -21,6 +21,7 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import os
+import queue
 import socket
 import threading
 import time
@@ -32,8 +33,18 @@ import sys
 
 import dnsmsg
 import events as events_mod
-from detectors import RARE_TLDS, Detectors, is_internal, tld_of
+from detectors import RARE_TLDS, Detectors, abused_service, is_internal, tld_of
 from tokenizer import registrable_part
+
+
+def _prune(d: dict, cutoff: float, cap: int) -> dict:
+    """Drop entries older than cutoff; if that is not enough, keep the newest half of cap.
+    (Filtering by age alone keeps everything during a flood, then re-filters on every
+    insert: quadratic.)"""
+    kept = {k: v for k, v in d.items() if v >= cutoff}
+    if len(kept) > cap // 2:
+        kept = dict(sorted(kept.items(), key=lambda kv: kv[1])[-(cap // 2):])
+    return kept
 
 
 @dataclass
@@ -45,8 +56,9 @@ class Decision:
 
 class Resolver:
     def __init__(self, cfg, state, scorer, enforcer, device_map, event_log,
-                 capture=None):
+                 capture=None, neighbours=None):
         self.cfg = cfg
+        self.neighbours = neighbours         # neighbours.Neighbours: which MAC is at an IP
         self.state = state
         self.scorer = scorer
         self.enforcer = enforcer
@@ -56,11 +68,13 @@ class Resolver:
         self._resolved_lock = threading.Lock()
         self._query_lock = threading.Lock()
         self._recent_ip: dict[str, float] = {}   # ip -> monotonic last-written
-        self._recent_events: dict[tuple, float] = {}  # (device, registrable) -> monotonic
         self._events_lock = threading.Lock()
+        self._alert_times: dict[str, list[float]] = {}  # device -> monotonic times of written alerts
         self._primary_down_until = 0.0   # monotonic; skip a dead primary upstream until then
         self._stop = threading.Event()
         self._socks: list = []
+        self._later: queue.Queue | None = None   # inline + learning: scored after the answer
+        self._later_lock = threading.Lock()
         # Shadow mode: scoring a log of queries someone else already answered.
         # Nothing here can block, so decisions are only ever recommendations.
         self.shadow = bool(cfg.get("shadow", False))
@@ -68,28 +82,39 @@ class Resolver:
         self.clock = time.monotonic          # overridable, so tests can drive time
         self.det = Detectors(cfg)            # threat feed, DoH, tunnel, beacon, DGA burst
         self.last_seen: dict[str, str] = {}  # client ip -> ISO time of its latest query
+        self.current_ip: dict[str, str] = {} # named device -> the address it last queried from
         self.stats = {"queries": 0, "blocked": 0, "recommended": 0, "suppressed": 0,
-                      "forwarded": 0, "errors": 0, "fallbacks": 0, "failopen": 0}
+                      "forwarded": 0, "errors": 0, "fallbacks": 0, "failopen": 0,
+                      "rate_limited": 0, "blocked_upstream": 0}
 
     # -- policy (pure, no I/O except event log + state + enforcer) --------
-    def decide(self, client_ip: str, domain: str, qtype: str) -> Decision:
+    def decide(self, client_ip: str, domain: str, qtype: str, upstream_blocked: bool = False) -> Decision:
+        """upstream_blocked: the DNS server (AdGuard) already refused this name, so no
+        connection happened: a single random-looking score is then not worth an alert
+        (most of those are ad and tracker junk). Bursts and every other rule still count."""
         domain = domain.rstrip(".").lower()
         if not domain:
             return Decision("allow", "empty")
-        dev = self.devices.device_for_ip(client_ip)
+        mac = self.neighbours.mac(client_ip) if self.neighbours is not None else None
+        dev = self.devices.device_for_ip(client_ip, mac)
         now = self.clock()
         if len(self.last_seen) > 10000:      # a LAN has far fewer clients; bound it anyway
             self.last_seen.clear()
         self.last_seen[client_ip] = events_mod.now_iso()
+        if dev.name != client_ip:
+            self.current_ip[dev.name] = client_ip
 
         # Evidence that is checked BEFORE the allowlist: a known-bad host (an exact
-        # feed match wins even over a trusted parent domain) and DoH bypass.
+        # feed match wins even over a trusted parent domain) and DoH bypass. Trusting the
+        # listed name itself does count: the list names some shorteners and apps as a
+        # whole (phishing runs through them), and you must be able to say "not for me".
         feed = self.det.threat_feed.match(domain, now)
-        if feed and (feed[1] or not self.state.is_allowed(domain)):
+        if feed and not self.state.trusts(feed[0]) and (feed[1] or not self.state.is_allowed(domain)):
             listed, exact = feed
             enforce = (not self.state.learning) and not self.shadow
             why = [f"{listed} is on the threat feed"
-                   + ("" if exact else f" (parent of {domain})")]
+                   + ("" if exact else f" (parent of {domain})"),
+                   f"a service you know? sudo ghostwall allow {listed}"]
             if not enforce:
                 why.append("not blocked (" + ("shadow mode" if self.shadow else "learning mode") + ")")
             evt = self._event(dev, domain, rule="threat_feed",
@@ -97,8 +122,15 @@ class Resolver:
                               severity="high", scores={"feed": 1.0}, reasons=why)
             return Decision("block" if enforce else "recommend", "threat_feed", evt)
         hit = self.det.doh.check(client_ip, domain)
-        if hit:
+        if hit and domain not in self.state.allowlist:   # trusted by exact name: a DoH you chose
             return Decision("recommend", hit.rule, self._emit_hit(dev, domain, hit))
+
+        # A device starting to use a service malware favours (bot APIs, paste sites,
+        # tunnels, file drops...). Checked before the allowlist: the starter list trusts
+        # discordapp.com and githubusercontent.com as a whole, which is where payloads sit.
+        svc = self._abused_service(client_ip, dev, domain)
+        if svc:
+            return svc
 
         if self.state.is_allowed(domain):
             return Decision("allow", "allowlist")
@@ -145,6 +177,9 @@ class Resolver:
 
         block_thr = float(self.cfg["block_threshold"])
         rec_thr = float(self.cfg["recommend_threshold"])
+        if upstream_blocked and dga >= min(rec_thr, float(self.cfg.get("corroborated_threshold", 0.80))):
+            self.stats["blocked_upstream"] += 1
+            return behaviour or Decision("allow", "blocked_upstream")
 
         if dga >= block_thr:
             can_block = (not self.state.learning) and is_new and not self.shadow
@@ -182,9 +217,31 @@ class Resolver:
 
         return behaviour or Decision("allow", "clean")
 
+    def _abused_service(self, client_ip: str, dev, domain: str):
+        if client_ip in self.det.doh.ignore:          # this box itself (fw_bot uses Telegram)
+            return None
+        self.state.note_device(dev.name)
+        match = abused_service(domain)
+        if not match:
+            return None
+        host, label = match
+        if domain in self.state.allowlist or host in self.state.allowlist:
+            return None   # trusted by name (Trust button, `ghostwall allow`)
+        first = self.state.first_service_use(dev.name, host, float(self.cfg.get("service_baseline_days", 3)))
+        if not first:
+            return None   # used before, or still learning what this device normally does
+        evt = self._event(dev, domain, rule="abused_service", action="recommend", severity="warn",
+                          reasons=[f"first use of a {label} ({host}) by this device",
+                                   "malware uses these for commands, payloads or stolen data; "
+                                   "trust it if you know why this device started"])
+        return Decision("recommend", "abused_service", evt)
+
     def _emit_hit(self, dev, domain, hit) -> dict:
+        # A tunnel uses a new subdomain for every query: trusting the one name in the
+        # alert would never match the next, so Trust means the zone it goes to.
+        trust = registrable_part(domain) if hit.rule == "dns_tunnel" else None
         return self._event(dev, domain, rule=hit.rule, action="recommend", severity=hit.severity,
-                           scores=hit.scores or None, reasons=hit.reasons)
+                           scores=hit.scores or None, reasons=hit.reasons, trust=trust)
 
     def enforcer_block_hook(self, domain: str) -> None:
         """Domain blocks are enforced at the resolver (sinkhole); no kernel
@@ -192,16 +249,23 @@ class Resolver:
         return None
 
     def _event(self, dev, domain, *, rule, action, severity, scores=None,
-               reasons=None) -> dict:
+               reasons=None, trust=None) -> dict:
         evt = events_mod.make_event(
             device=dev.name, ip=dev.ip, mac=dev.mac, domain=domain,
             rule=rule, action=action, severity=severity, scores=scores,
-            reasons=reasons)
+            reasons=reasons, trust=trust)
+        # Any web page can make a browser look up thousands of made-up names, so one
+        # device's alerts are capped per minute (a block still happens; only its alert
+        # is dropped). The flood itself still shows up as a dga_burst alert.
+        if self._over_rate(dev.name):
+            self.stats["rate_limited"] += 1
+            return evt
         # A device re-querying the same domain family is one finding, not fifty.
         # Blocks are always recorded; only repeat recommendations are suppressed.
         if action == "recommend" and self._is_repeat(dev.name, domain, rule):
             self.stats["suppressed"] += 1
             return evt
+        self._count_alert(dev.name)
         self.events.write(evt)
         self.state.record_event(evt)
         if action == "block":
@@ -211,23 +275,31 @@ class Resolver:
         self._maybe_freeze(dev, evt)
         return evt
 
+    def _over_rate(self, device: str) -> bool:
+        limit = int(self.cfg.get("alert_rate_per_device", 30))
+        if limit <= 0:
+            return False
+        now = self.clock()
+        with self._events_lock:
+            times = [t for t in self._alert_times.get(device, []) if now - t < 60.0]
+            self._alert_times[device] = times
+            return len(times) >= limit
+
+    def _count_alert(self, device: str) -> None:
+        with self._events_lock:
+            if len(self._alert_times) > 10000:  # bound memory: a LAN has far fewer devices
+                self._alert_times.clear()
+            self._alert_times.setdefault(device, []).append(self.clock())
+
     def _is_repeat(self, device: str, domain: str, rule: str = "") -> bool:
         """True if this device already got this kind of alert for this registrable
-        domain within event_dedupe_seconds. Records the sighting otherwise."""
-        window = float(self.cfg.get("event_dedupe_seconds", 86400))
+        domain within event_dedupe_seconds. Records the sighting otherwise (in state.json,
+        so restarts don't repeat alerts)."""
+        window = float((self.cfg.get("rule_dedupe_seconds") or {}).get(
+            rule, self.cfg.get("event_dedupe_seconds", 86400)))
         if window <= 0:
             return False
-        key = (device, registrable_part(domain), rule)
-        now = time.monotonic()
-        with self._events_lock:
-            last = self._recent_events.get(key)
-            if last is not None and now - last < window:
-                return True
-            self._recent_events[key] = now
-            if len(self._recent_events) > 20000:  # bound memory
-                cutoff = now - window
-                self._recent_events = {k: v for k, v in self._recent_events.items() if v >= cutoff}
-        return False
+        return self.state.seen_alert(f"{device}|{registrable_part(domain)}|{rule}", window)
 
     def _maybe_freeze(self, dev, evt) -> None:
         order = {"info": 0, "warn": 1, "high": 2, "critical": 3}
@@ -245,13 +317,16 @@ class Resolver:
             up = self._forward(packet, tcp)
             return up if up is not None else packet
         self._log_query(client_ip, q)
-        try:
-            decision = self.decide(client_ip, q.name, q.qtype_name)
-        except Exception as exc:  # noqa: BLE001
-            # FAIL OPEN: a bug in scoring/state must never take DNS down.
-            self.stats["failopen"] += 1
-            print(f"[ghost-dns] decide() failed for {q.name}: {exc!r}; forwarding", file=sys.stderr, flush=True)
-            decision = Decision("allow", "failopen")
+        if self._score_after_answer(client_ip, q):
+            decision = Decision("allow", "scored after the answer")
+        else:
+            try:
+                decision = self.decide(client_ip, q.name, q.qtype_name)
+            except Exception as exc:  # noqa: BLE001
+                # FAIL OPEN: a bug in scoring/state must never take DNS down.
+                self.stats["failopen"] += 1
+                print(f"[ghost-dns] decide() failed for {q.name}: {exc!r}; forwarding", file=sys.stderr, flush=True)
+                decision = Decision("allow", "failopen")
         if decision.action == "block":
             if self.cfg.get("block_response") == "nxdomain":
                 return dnsmsg.build_nxdomain(packet, q.end)
@@ -264,6 +339,43 @@ class Resolver:
         self.stats["forwarded"] += 1
         self._record_resolved(client_ip, q.name, up)
         return up
+
+    def _score_after_answer(self, client_ip: str, q) -> bool:
+        """Learning mode (alerts only) can block nothing but names on the confirmed
+        blocklist, a set lookup. So a new name doesn't wait for the models (milliseconds
+        each, more on a Pi) before its answer: it is queued and scored right after, and
+        alerts come out the same. Returns False (score now) when blocking is on, for a
+        blocklisted name, with score_after_answer off, or when the queue is full."""
+        if self.shadow or not self.cfg.get("score_after_answer", True) or not self.state.learning:
+            return False
+        if self.state.is_blocked(q.name.rstrip(".").lower()):
+            return False
+        if self._later is None:
+            with self._later_lock:
+                if self._later is None:
+                    self._later = queue.Queue(maxsize=4096)
+                    threading.Thread(target=self._score_worker, name="ghost-dns-score", daemon=True).start()
+        try:
+            self._later.put_nowait((client_ip, q.name, q.qtype_name))
+        except queue.Full:   # a flood: score in line again, slower answers but no lost alerts
+            return False
+        return True
+
+    def _score_worker(self) -> None:
+        while True:
+            client_ip, name, qtype = self._later.get()
+            try:
+                self.decide(client_ip, name, qtype)
+            except Exception as exc:  # noqa: BLE001 (the answer went out; say why no alert)
+                self.stats["failopen"] += 1
+                print(f"[ghost-dns] decide() failed for {name}: {exc!r}", file=sys.stderr, flush=True)
+            finally:
+                self._later.task_done()
+
+    def drain(self) -> None:
+        """Wait until every query answered before scoring has been scored."""
+        if self._later is not None:
+            self._later.join()
 
     def _upstreams(self) -> list[tuple[str, int]]:
         """Primary first, then fallbacks. A primary that just failed is skipped
@@ -354,8 +466,7 @@ class Resolver:
                 self._recent_ip[ip] = now
                 fresh.append(ip)
             if len(self._recent_ip) > 50000:  # bound the dedupe map too
-                cutoff = now - window
-                self._recent_ip = {k: v for k, v in self._recent_ip.items() if v >= cutoff}
+                self._recent_ip = _prune(self._recent_ip, now - window, 50000)
             if not fresh:
                 return
             try:

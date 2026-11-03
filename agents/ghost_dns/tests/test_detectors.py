@@ -251,6 +251,36 @@ class ResolverWiringTests(unittest.TestCase):
         self.assertEqual(r.decide("192.168.1.30", "bad.cdn.example", "A").reason, "threat_feed")
         self.assertEqual(r.decide("192.168.1.30", "x.partner.test", "A").action, "allow")
 
+    def test_trusting_the_listed_name_itself_silences_it(self):
+        # The list names some link shorteners and apps as a whole. `ghostwall allow` on
+        # exactly that name must work (it used to say "no more alerts" and change nothing),
+        # also when blocking; a listed child of it still alerts.
+        r = self.build(["short.example", "bad.short.example"], allow=["short.example"], learning=False)
+        self.state.set_learning(False)
+        self.assertEqual(r.decide("192.168.1.30", "short.example", "A").action, "allow")
+        self.assertEqual(r.decide("192.168.1.30", "x.short.example", "A").action, "allow")
+        self.assertEqual(r.decide("192.168.1.30", "bad.short.example", "A").action, "block")
+
+    def test_feed_alert_says_how_to_trust_it(self):
+        r = self.build(["evil.example"])
+        self.assertIn("sudo ghostwall allow evil.example", " ".join(r.decide("192.168.1.30", "x.evil.example", "A").event["reasons"]))
+
+    def test_doh_bypass_alerts_once_a_month_not_daily(self):
+        from datetime import datetime, timedelta, timezone
+        r = self.build()
+        t0 = datetime(2026, 11, 3, tzinfo=timezone.utc)
+        written = lambda rule: sum(e["rule"] == rule for e in self.events())   # noqa: E731
+        for days, total in ((0, 1), (1, 1), (29, 1), (31, 2)):     # written, not suppressed
+            self.state.clock = lambda d=days: t0 + timedelta(days=d)
+            r.decide("192.168.1.30", "dns.google", "A")
+            self.assertEqual(written("doh_bypass"), total, days)
+        self.assertIn("not a sign of infection", " ".join(self.events()[0]["reasons"]))
+        r.scorer = FakeScorer(0.99)                                    # other rules: still daily
+        for days, total in ((32, 1), (32.5, 1), (33.1, 2)):
+            self.state.clock = lambda d=days: t0 + timedelta(days=d)
+            r.decide("192.168.1.30", "kq7zx2wvplmh.biz", "A")
+            self.assertEqual(written("dga_suspect"), total, days)
+
     def test_doh_bypass_alert(self):
         r = self.build()
         d = r.decide("192.168.1.30", "dns.google", "A")
@@ -275,14 +305,14 @@ class ResolverWiringTests(unittest.TestCase):
     def test_established_domain_does_not_raise_plain_suspect(self):
         r = self.build()
         r.scorer = FakeScorer(0.97)                          # between recommend (0.96) and block (0.995)
-        self.state.first_seen["longtime.example"] = "2020-01-01T00:00:00Z"   # seen for years
+        self.state.set_first_seen("longtime.example", "2020-01-01T00:00:00Z")   # seen for years
         self.assertEqual(r.decide("192.168.1.30", "longtime.example", "A").action, "allow")
         self.assertEqual(r.decide("192.168.1.30", "brandnew.example", "A").reason, "dga_suspect")
 
     def test_suspect_only_new_can_be_turned_off(self):
         r = self.build(suspect_only_new=False)
         r.scorer = FakeScorer(0.97)
-        self.state.first_seen["longtime.example"] = "2020-01-01T00:00:00Z"
+        self.state.set_first_seen("longtime.example", "2020-01-01T00:00:00Z")
         self.assertEqual(r.decide("192.168.1.30", "longtime.example", "A").reason, "dga_suspect")
 
     def test_internal_names_are_never_scored_or_beaconed(self):

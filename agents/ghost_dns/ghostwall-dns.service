@@ -40,6 +40,14 @@ RestrictNamespaces=true
 RestrictRealtime=true
 RestrictSUIDSGID=true
 LockPersonality=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelLogs=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0027
+# AF_NETLINK: the nft enforcement backend (gateway mode) talks to the kernel with it
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target

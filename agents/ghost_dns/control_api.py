@@ -5,19 +5,33 @@ one GhostState / Enforcer / DeviceMap with the resolver, so a change here takes
 effect on the resolver's next query. Every handler returns {"ok": true, ...} or
 a non-2xx {"ok": false, "error": ...}.
 
-No auth does not mean any caller: a web page in a browser on the same machine can
-reach loopback too. So a request must name a loopback Host (a DNS-rebinding page
-names its own domain), and a POST must be JSON (a cross-site form or a no-cors
-fetch cannot send that content type without a CORS preflight, which is never
-answered here).
+Loopback is not one caller, though: every local user and process on the box can
+reach it, and so can a web page in a browser there. So:
+  * a request must name a loopback Host (a DNS-rebinding page names its own domain);
+  * a POST must be JSON (a cross-site form or a no-cors fetch cannot send that
+    content type without a CORS preflight, which is never answered here);
+  * every action (anything but /status) needs `Authorization: Bearer <token>`. The
+    token is generated on first start into a file only the ghostwall user can read
+    (control_token_path, /var/lib/ghostwall/control_token when installed), so the
+    dashboard and the Telegram bot can act and other local users cannot;
+  * /status without the token is a summary (mode, counters, how many devices): the
+    device list (names, IPs, MACs, when each was last online) needs the token too.
 """
 from __future__ import annotations
 
+import hmac
 import ipaddress
 import json
+import os
+import re
+import secrets
 import urllib.parse
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+# A hostname: dot-separated labels of letters, digits, '-' and '_' (some real names
+# have it), 253 characters at most. Anything else can't be a name worth trusting.
+DOMAIN_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?)(\.[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?)*$")
 
 ENFORCEMENT_OFF = ('enforcement is off: isolation and lockdown need "enforce": "nft" and '
                    'gateway mode (docs/OPERATIONS.md)')
@@ -36,8 +50,38 @@ def loopback_host(host_header: str | None) -> bool:
         return False
 
 
+def ensure_token(path: str) -> str:
+    """Read the control token from path, creating it (mode 0600) on first use."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            tok = f.read().strip()
+        if tok:
+            return tok
+    except FileNotFoundError:
+        pass
+    tok = secrets.token_urlsafe(32)
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(tok + "\n")
+    os.replace(tmp, path)
+    return tok
+
+
+def token_path(cfg: dict) -> str | None:
+    """The configured token file; by default next to state.json. "" or false disables auth."""
+    p = cfg.get("control_token_path", None)
+    if p is None:
+        return os.path.join(os.path.dirname(os.path.abspath(cfg["state_path"])), "control_token")
+    return p or None
+
+
 class ControlHandler(BaseHTTPRequestHandler):
-    state = {}  # injected: {"gstate":.., "enforcer":.., "devices":.., "cfg":.., "resolver":..}
+    timeout = 10  # an idle local connection must not hold a thread forever
+    state = {}  # injected: {"gstate":.., "enforcer":.., "devices":.., "cfg":.., "resolver":.., "token":..}
 
     # -- helpers ----------------------------------------------------------
     def _send(self, code: int, obj: dict) -> None:
@@ -73,7 +117,7 @@ class ControlHandler(BaseHTTPRequestHandler):
         if not loopback_host(self.headers.get("Host")):
             self._send(403, {"ok": False, "error": "use 127.0.0.1"})
         elif self.path == "/status":
-            self._send(200, self._status())
+            self._send(200, self._status(full=self._authorized()))
         else:
             self._send(404, {"ok": False, "error": "not found"})
 
@@ -91,12 +135,21 @@ class ControlHandler(BaseHTTPRequestHandler):
         if body.get("__bad_json__"):
             self._send(400, {"ok": False, "error": "bad JSON"})
             return
+        if self.path == "/status" and not self._authorized():
+            self._send(200, self._status(full=False))
+            return
+        if not self._authorized():
+            self._send(401, {"ok": False, "error": "need Authorization: Bearer <token> "
+                             "(the token is in control_token next to state.json)"})
+            return
         routes = {
-            "/status": self._status,
+            "/status": lambda: self._status(full=True),   # (unauthorized: answered below)
             "/device": lambda: self._device(body),
             "/isolate": lambda: self._isolate(body),
             "/release": lambda: self._release(body),
             "/allow": lambda: self._allow(body),
+            "/trusted": self._trusted,
+            "/untrust": lambda: self._untrust(body),
             "/lockdown": self._lockdown,
             "/learning": lambda: self._learning(body),
             "/unblock": lambda: self._unblock(body),
@@ -115,8 +168,19 @@ class ControlHandler(BaseHTTPRequestHandler):
             return
         self._send(code, obj)
 
+    def _authorized(self) -> bool:
+        token = self.state.get("token")
+        if not token:
+            return True  # auth switched off (control_token_path: "")
+        given = self.headers.get("Authorization") or ""
+        if not given.startswith("Bearer "):
+            return False
+        return hmac.compare_digest(given[7:].strip().encode("utf-8"), token.encode("utf-8"))
+
     # -- endpoint implementations ----------------------------------------
-    def _status(self) -> dict:
+    def _status(self, full: bool = True) -> dict:
+        """full: with the device list (needs the token). Without it, anyone on the box
+        could learn every device's name, IP and MAC and when each was last online."""
         g = self.state["gstate"]
         dmap = self.state["devices"]
         res = self.state.get("resolver")
@@ -124,13 +188,17 @@ class ControlHandler(BaseHTTPRequestHandler):
         blocked = sorted(g.blocklist)
         devices = []
         for d in dmap.all():
+            ip = self._current_ip(d)
             devices.append({
-                "name": d.name, "ip": d.ip, "mac": d.mac,
+                "name": d.name, "ip": ip, "mac": d.mac,
                 "isolated": g.is_isolated(d.name),
-                "last_seen": seen.get(d.ip),
+                "last_seen": seen.get(ip),
                 "blocked_domains": blocked,
             })
-        out = {"ok": True, "devices": devices,
+        named = {self._current_ip(d) for d in dmap.all()}
+        # clients seen but not named yet (for `ghostwall devices` / `ghostwall name`)
+        clients = sorted(((t, ip) for ip, t in seen.items() if ip not in named), reverse=True)[:50]
+        out = {"ok": True, "named_devices": len(devices), "unnamed_clients": len(clients),
                "lockdown": g.lockdown, "learning": g.learning,
                "shadow": bool(getattr(res, "shadow", False)),
                "source": getattr(res, "source", None),
@@ -145,6 +213,11 @@ class ControlHandler(BaseHTTPRequestHandler):
             n, mtime = feed.info()
             out["feed"] = {"domains": n, "updated": datetime.fromtimestamp(mtime, timezone.utc)
                            .strftime("%Y-%m-%dT%H:%M:%SZ") if mtime else None}
+        if full:
+            out["devices"] = devices
+            out["clients"] = [{"ip": ip, "last_seen": t} for t, ip in clients]
+        else:
+            out["devices_hidden"] = True   # "send the token to see them", not "no devices"
         return out
 
     def _device(self, body):
@@ -154,9 +227,10 @@ class ControlHandler(BaseHTTPRequestHandler):
             raise _ApiError(404, "unknown device")
         g = self.state["gstate"]
         seen = getattr(self.state.get("resolver"), "last_seen", {})
-        return 200, {"ok": True, "name": d.name, "ip": d.ip, "mac": d.mac,
+        ip = self._current_ip(d)
+        return 200, {"ok": True, "name": d.name, "ip": ip, "mac": d.mac,
                      "isolated": g.is_isolated(d.name),
-                     "last_seen": seen.get(d.ip),
+                     "last_seen": seen.get(ip),
                      "blocked_domains": sorted(g.blocklist)}
 
     def _require_enforcement(self) -> None:
@@ -168,14 +242,23 @@ class ControlHandler(BaseHTTPRequestHandler):
     def _isolate(self, body):
         d = self._require_device(body)
         self._require_enforcement()
-        self.state["enforcer"].isolate(d.ip)
+        ip = self._current_ip(d)   # where it is now: its old address may be another device's
+        self.state["enforcer"].isolate(ip)
         self.state["gstate"].isolate(d.name)
-        return 200, {"ok": True, "name": d.name, "isolated": True}
+        return 200, {"ok": True, "name": d.name, "ip": ip, "isolated": True}
 
     def _release(self, body):
         # Allowed without enforcement too, so state left by an older version can be cleared.
         d = self._require_device(body)
-        self.state["enforcer"].release(d.ip)
+        ips = [self._current_ip(d)] + ([d.ip] if d.ip != self._current_ip(d) else [])
+        released = False
+        for ip in ips:   # wherever it was isolated: now, or at its address in devices.json
+            try:
+                self.state["enforcer"].release(ip)
+                released = True
+            except Exception:  # noqa: BLE001 (that address was not in the set)
+                if ip == ips[-1] and not released:
+                    raise
         self.state["gstate"].release(d.name)
         return 200, {"ok": True, "name": d.name, "isolated": False}
 
@@ -183,8 +266,24 @@ class ControlHandler(BaseHTTPRequestHandler):
         domain = str(body.get("domain", "")).strip().rstrip(".").lower()
         if not domain:
             raise _ApiError(400, "need domain")
+        if not DOMAIN_RE.match(domain):
+            raise _ApiError(400, "not a domain name")
         self.state["gstate"].allow(domain)
         return 200, {"ok": True, "domain": domain, "allowed": True}
+
+    def _trusted(self):
+        return 200, {"ok": True, "domains": self.state["gstate"].trusted()}
+
+    def _untrust(self, body):
+        domain = str(body.get("domain", "")).strip().rstrip(".").lower()
+        if not DOMAIN_RE.match(domain):
+            raise _ApiError(400, "not a domain name")
+        g = self.state["gstate"]
+        if domain in g.static_allow:
+            raise _ApiError(409, f"{domain} is in the starter allowlist file (allowlist_path); remove it there")
+        if not g.untrust(domain):
+            raise _ApiError(404, f"{domain} is not trusted")
+        return 200, {"ok": True, "domain": domain, "allowed": False}
 
     def _lockdown(self):
         self._require_enforcement()
@@ -213,9 +312,17 @@ class ControlHandler(BaseHTTPRequestHandler):
                 domain = evt["domain"]
         if not domain:
             raise _ApiError(400, "need domain or a known event_id")
+        if not DOMAIN_RE.match(domain):
+            raise _ApiError(400, "not a domain name")
         self.state["gstate"].unblock(domain)
         return 200, {"ok": True, "event_id": event_id, "domain": domain,
                      "unblocked": True}
+
+    def _current_ip(self, d) -> str:
+        """The address a named device last queried from (its name follows its MAC,
+        devices.py), else the one in devices.json."""
+        cur = getattr(self.state.get("resolver"), "current_ip", None) or {}
+        return cur.get(d.name, d.ip)
 
     def _require_device(self, body):
         name = str(body.get("name", "")).strip()
@@ -233,9 +340,13 @@ class _ApiError(Exception):
 
 
 class ControlServer:
-    def __init__(self, cfg, gstate, enforcer, devices, resolver=None):
+    def __init__(self, cfg, gstate, enforcer, devices, resolver=None, token: str | None = None):
+        host = cfg["control_host"]
+        if not loopback_host(host if ":" not in host else f"[{host}]"):
+            # No TLS and one shared token: this API must never be reachable from the LAN.
+            raise ValueError(f"control_host must be a loopback address, not {host!r}")
         inject = {"cfg": cfg, "gstate": gstate, "enforcer": enforcer,
-                  "devices": devices, "resolver": resolver}
+                  "devices": devices, "resolver": resolver, "token": token}
         handler = type("H", (ControlHandler,), {"state": inject})
         self.httpd = ThreadingHTTPServer((cfg["control_host"], int(cfg["control_port"])),
                                          handler)

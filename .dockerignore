@@ -1,9 +1,11 @@
 # Only what the image needs (see Dockerfile).
 *
-!requirements.txt
+!requirements.lock
+!pyproject.toml
 !ghostwall/models
 !agents/ghost_dns
 !agents/web_ui
+!agents/fw_bot
 !docker
 **/__pycache__
 **/state.json
@@ -12,3 +14,10 @@
 **/queries.log
 **/threat_feed.txt
 **/ghost_dns.json
+**/control_token
+**/novelty_key
+**/fw_bot.env
+**/owner.json
+**/fw_bot_follow.json
+**/labels.jsonl
+**/digest.jsonl

@@ -13,12 +13,16 @@ from config import (DEFAULTS, load_config, load_devices, per_device_files,
 
 class TestConfig(unittest.TestCase):
     def test_defaults_and_overrides(self):
-        cfg = load_config({})
-        self.assertEqual(cfg["http_port"], 5381)
-        cfg2 = load_config({"ring_seconds": 5})
-        self.assertEqual(cfg["ring_seconds"], 30)
-        self.assertEqual(cfg["ring_seconds_override"], 5) if False else None
-        self.assertEqual(cfg.get("ring_seconds"), 30)  # override dict key mismatch safe
+        # (not this machine's /etc/ghostwall/capture.json)
+        os.environ["GHOSTWALL_CAPTURE_CONF"] = os.path.join(tempfile.mkdtemp(), "none.json")
+        try:
+            cfg = load_config({})
+            self.assertEqual(cfg["http_port"], 5381)
+            self.assertEqual(cfg["ring_seconds"], 30)
+            self.assertEqual(load_config({"ring_seconds": 5})["ring_seconds"], 5)
+            self.assertEqual(load_config({"ring_seconds": None})["ring_seconds"], 30)   # unset flag
+        finally:
+            del os.environ["GHOSTWALL_CAPTURE_CONF"]
 
     def test_load_devices(self):
         with tempfile.TemporaryDirectory() as d:
@@ -75,3 +79,33 @@ class TestConfig(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeviceValidationTests(unittest.TestCase):
+    def _load(self, devs):
+        import json, tempfile
+        p = os.path.join(tempfile.mkdtemp(), "d.json")
+        with open(p, "w") as f:
+            json.dump(devs, f)
+        return load_devices(p, 32)
+
+    def test_only_plain_addresses_reach_tcpdump(self):
+        for bad in ("192.168.1.5\tor\tport\t22", "192.168.1.5 or port 22", "host", "10.0.0.0/8", "1.2.3.4;id"):
+            with self.assertRaises(ValueError, msg=bad):
+                self._load([{"name": "pc", "ip": bad}])
+        self.assertEqual(self._load([{"name": "pc", "ip": " 192.168.1.5 "}])[0]["ip"], "192.168.1.5")
+        self.assertEqual(self._load([{"name": "pc", "ip": "FD00::0005"}])[0]["ip"], "fd00::5")
+
+    def test_names_sharing_a_capture_folder_refused(self):
+        with self.assertRaises(ValueError):
+            self._load([{"name": "my laptop", "ip": "192.168.1.5"}, {"name": "my_laptop", "ip": "192.168.1.6"}])
+
+
+class SharedDevicesFileTests(unittest.TestCase):
+    def test_reads_ghost_dns_devices_format(self):
+        import json, tempfile
+        p = os.path.join(tempfile.mkdtemp(), "devices.json")
+        with open(p, "w") as f:
+            json.dump({"devices": [{"name": "laptop", "ip": "192.168.1.50", "mac": "aa:bb:cc:dd:ee:01"}],
+                       "_pending": [{"name": "tv", "ip": "192.168.1.51", "mac": None}]}, f)
+        self.assertEqual([d["name"] for d in load_devices(p, 32)], ["laptop", "tv"])

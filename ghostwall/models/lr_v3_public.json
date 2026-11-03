@@ -1,0 +1,21 @@
+{
+ "intercept": -8.545586016997193,
+ "buckets": 1048576,
+ "ngram_max": 5,
+ "boundary": false,
+ "strip_dot": true,
+ "alpha": 3e-06,
+ "thresholds": {
+  "recommend_threshold": 0.981287,
+  "block_threshold": 0.998903,
+  "corroborated_threshold": 0.860945,
+  "burst_min_score": 0.860945,
+  "beacon_min_dga": 0.419535
+ },
+ "trained_on": "agents/dga_eval/train_public.py: 25 Netlab 360 DGA families (chrmor/DGA_domains_dataset) and Tranco V354N, minus 200,000 held-out normal names",
+ "data_sha256": {
+  "dga_domains_full.csv": "e8bbe54f180cd127a07abaa3dbddcd843e7b7943dff2f18628619b1bd22e8253",
+  "tranco_V354N.csv": "d6ab280c73d5a954cfbb38b4c371f75d72a69d04e6627590f0ea343b663aebd8"
+ },
+ "weights_sha256": "337e5b98940bf22500823658174b7f0dc16066f60de666fe124d67bcbfd4fcd6"
+}

@@ -1,4 +1,4 @@
-"""Unit tests for gen.py — stdlib unittest, runs on Windows:
+r"""Unit tests for gen.py — stdlib unittest, runs on Windows:
     .venv\Scripts\python.exe -m unittest agents.netconf.test_gen -v
 (also pytest-compatible).
 
@@ -244,7 +244,38 @@ class TestBreakglassRestore(unittest.TestCase):
         h = (OUT / "health.sh").read_text()
         self.assertIn("nft list table inet ghostwall", h)
         nft = (OUT / "ghostwall.nft").read_text()
-        self.assertIn("destroy table inet ghostwall", nft)
+        # idempotent on nftables 1.0.6 too (Debian 12): no "destroy", declare-then-delete
+        self.assertNotIn("destroy table", nft)
+        self.assertIn("table inet ghostwall {}\ndelete table inet ghostwall", nft)
+
+
+class TestLanInterface(unittest.TestCase):
+    """The LAN interface was eth0 written into every file; it comes from config.json."""
+
+    def render(self, iface):
+        import json
+        d = tempfile.mkdtemp(prefix="netconf_iface_")
+        cfg = json.loads((HERE / "config.json").read_text(encoding="utf-8"))
+        cfg["lan_iface"] = iface
+        cfg_path = Path(d) / "config.json"
+        cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+        out = Path(d) / "out"
+        r = subprocess.run([sys.executable, str(HERE / "gen.py"), "--devices", str(HERE / "devices.example.json"),
+                            "--config", str(cfg_path), "--out", str(out)], capture_output=True, text=True, cwd=str(HERE))
+        return r, out
+
+    def test_interface_is_configurable(self):
+        r, out = self.render("enp1s0")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for p in out.iterdir():
+            self.assertNotIn("eth0", p.read_text(), p.name)
+        self.assertIn('iifname "enp1s0"', (out / "ghostwall.nft").read_text())
+        self.assertIn("interface=enp1s0", (out / "dnsmasq.conf").read_text())
+
+    def test_interface_name_cannot_inject_rules(self):
+        r, _ = self.render('eth0" accept; #')
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("is not an interface name", r.stderr)
 
 
 if __name__ == "__main__":

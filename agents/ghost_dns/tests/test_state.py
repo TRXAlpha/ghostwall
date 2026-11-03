@@ -54,7 +54,7 @@ class StateTests(unittest.TestCase):
         s.note_seen("fresh.example")
         s.flush()
         s2 = GhostState(self.path)
-        self.assertIn("fresh.example", s2.first_seen)
+        self.assertTrue(s2.was_seen("fresh.example"))
         self.assertFalse(s2.note_seen("fresh.example"))  # already known on reload
 
     def test_confirm_block_promotion(self):
@@ -90,3 +90,30 @@ class StateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NoveltyPrivacyTests(unittest.TestCase):
+    def test_state_json_holds_no_domain_names(self):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "state.json")
+        s = GhostState(p)
+        s.note_seen("www.private-clinic.example")
+        s.save()
+        with open(p) as f:
+            self.assertNotIn("private-clinic", f.read())
+        self.assertEqual(os.stat(os.path.join(d, "novelty_key")).st_mode & 0o777, 0o600)
+        s2 = GhostState(p)                        # same key after a restart
+        self.assertTrue(s2.was_seen("private-clinic.example"))
+        self.assertFalse(s2.is_new("x.private-clinic.example", 0))
+
+    def test_old_plain_entries_are_converted(self):
+        import json
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "state.json")
+        with open(p, "w") as f:
+            json.dump({"first_seen": {"old.example": "2020-01-01T00:00:00Z"}}, f)
+        s = GhostState(p)
+        with open(p) as f:                        # on disk at once, not at some later save
+            self.assertNotIn("old.example", f.read())
+        self.assertTrue(s.was_seen("www.old.example"))
+        self.assertFalse(s.is_new("old.example", 7))

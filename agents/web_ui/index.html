@@ -116,6 +116,9 @@
     .stat:last-child { grid-column:1 / -1; }
   }
   @media (max-width:520px) { .wrap { padding:0 16px; } .alert .side .tag { display:none; } }
+.trusted ul { list-style: none; margin: 4px 0 0; padding: 0; }
+.trusted li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 2px 0; word-break: break-all; }
+.trusted button { padding: 0 8px; }
 </style>
 </head>
 <body>
@@ -162,6 +165,7 @@
           <input id="domain" placeholder="trust a domain, e.g. fbsbx.com" autocomplete="off" spellcheck="false">
           <button class="primary" type="submit">Trust</button>
         </form>
+        <div class="trusted" id="trustedBox" hidden><p class="sub">Trusted by you (no alerts for these):</p><ul id="trusted"></ul></div>
       </div>
     </aside>
   </div>
@@ -177,8 +181,12 @@ const RULES = {
   dga_high: "very random-looking new domain", dga_suspect: "random-looking new domain",
   dga_corroborated: "random name on a risky TLD", doh_bypass: "may be bypassing your DNS filter (DoH)",
   dns_tunnel: "possible data over DNS (tunnel)", dns_beacon: "looked up on a fixed timer",
+  abused_service: "started using a service malware favours", doh_ip: "connected to a DNS-over-HTTPS server directly",
   blocklist: "on your blocklist", raw_ip: "connected to a raw IP", beacon: "connects on a fixed timer",
 };
+// No Trust button: a phishing-list hit is trusted with a typed `ghostwall allow` (its alert
+// says so), not one click; a burst is many different names.
+const NO_TRUST = new Set(["threat_feed", "dga_burst"]);
 let cur = { learning: null, lockdown: null };
 
 function toast(msg, bad) {
@@ -220,9 +228,10 @@ function renderStatus(st) {
   const stats = st.stats || {};
   $("queries").textContent = fmt(stats.queries);
   const devs = st.devices || [];
-  $("devCount").textContent = devs.length;
+  $("devCount").textContent = st.devices_hidden ? fmt(st.named_devices) : devs.length;
   const iso = devs.filter(d => d.isolated).length;
-  $("devSub").innerHTML = iso ? `<span class="red">${iso} isolated</span>` : "named in devices.json";
+  $("devSub").innerHTML = st.devices_hidden ? '<span class="amber">list hidden: the dashboard can\'t read the control token</span>'
+    : iso ? `<span class="red">${iso} isolated</span>` : "named in devices.json";
   if (enforcing) {
     $("k5").textContent = "Lockdown";
     $("v5").innerHTML = st.lockdown ? '<span class="red">on</span>' : "off";
@@ -267,14 +276,20 @@ function renderEvents(evs) {
   $("bars").innerHTML = hours.map(n => `<i class="${n >= 3 ? "hot" : n ? "hit" : ""}" style="height:${n ? 12 + 88 * n / max : 4}%" title="${n} alert${n === 1 ? "" : "s"}"></i>`).join("");
   $("stripMax").textContent = "peak " + Math.max(...hours);
 
+  // A burst already names the random-looking names it was made of: fold that device's
+  // single-name alerts from the 10 minutes before it into the burst row.
+  const bursts = alerts.filter(e => e.rule === "dga_burst");
+  const covered = (e) => (e.rule === "dga_suspect" || e.rule === "dga_high") && bursts.some(b =>
+    b.device === e.device && Date.parse(e.time) <= Date.parse(b.time) && Date.parse(b.time) - Date.parse(e.time) <= 600e3);
+  const folded = alerts.filter(covered).length;
   // collapse repeats of the same device + domain + rule into one row (newest first)
   const groups = new Map();
-  for (const e of alerts) {
+  for (const e of alerts.filter(e => !covered(e))) {
     const k = e.device + "|" + e.domain + "|" + e.rule;
     if (groups.has(k)) groups.get(k).n++; else groups.set(k, { ...e, n: 1 });
   }
   const rows = [...groups.values()];
-  $("feedCount").textContent = rows.length ? rows.length + " recent" : "";
+  $("feedCount").textContent = rows.length ? rows.length + " recent" + (folded ? ` · ${folded} folded into bursts` : "") : "";
   $("feed").innerHTML = rows.map(e => {
     const score = e.scores && e.scores.dga != null ? ` · score ${e.scores.dga.toFixed(2)}` : "";
     const why = (e.reasons || []).slice(0, 3).join(" · ");
@@ -283,7 +298,7 @@ function renderEvents(evs) {
       <div class="dom">${esc(e.domain)}</div>
       <div class="side"><span class="when" title="${esc(e.time)}">${ago(e.time)}</span>
         <span class="tag ${e.action === "block" ? "block" : ""}">${e.action === "block" ? "blocked" : "flagged"}</span>
-        <button data-act="allow" data-domain="${esc(e.domain)}">Trust</button></div>
+        ${NO_TRUST.has(e.rule) ? "" : `<button data-act="allow" data-domain="${esc(e.trust || e.domain)}"${e.trust ? ` title="trusts ${esc(e.trust)} and everything under it"` : ""}>Trust</button>`}</div>
       <div class="meta"><b>${esc(e.device)}</b>: ${esc(RULES[e.rule] || e.rule)}${score}${e.n > 1 ? ` · ×${e.n}` : ""}</div>
       ${why ? `<div class="why">${esc(why)}</div>` : ""}
     </li>`;
@@ -297,6 +312,7 @@ document.addEventListener("click", (ev) => {
   else if (a === "lockdown") act("lockdown", {}, cur.lockdown ? "Lockdown released" : "Lockdown on");
   else if (a === "isolate" || a === "release") act(a, { name: b.dataset.name }, `${b.dataset.name}: ${a}d`);
   else if (a === "allow") act("allow", { domain: b.dataset.domain }, "Trusted " + b.dataset.domain);
+  else if (a === "untrust") act("untrust", { domain: b.dataset.domain }, "No longer trusted: " + b.dataset.domain);
 });
 $("allowForm").addEventListener("submit", (ev) => {
   ev.preventDefault();
@@ -309,6 +325,13 @@ async function refresh() {
   try {
     const [s, e] = await Promise.all([api("/api/status"), api("/api/events?limit=200")]);
     renderStatus(s.resolver); renderEvents(e.events);
+    try {  // the user's own trusted domains, with an undo
+      const t = await api("/api/action", { method: "POST", headers: {"Content-Type": "application/json"},
+                                            body: JSON.stringify({ action: "trusted", params: {} }) });
+      const doms = t.domains || [];
+      $("trustedBox").hidden = !doms.length;
+      $("trusted").innerHTML = doms.map(d => `<li><span>${esc(d)}</span> <button data-act="untrust" data-domain="${esc(d)}" title="stop trusting">×</button></li>`).join("");
+    } catch (_) { $("trustedBox").hidden = true; }
     $("dot").className = "dot on"; $("conn").textContent = "live";
   } catch (err) {
     $("dot").className = "dot off"; $("conn").textContent = "resolver unreachable";

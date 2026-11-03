@@ -60,6 +60,7 @@ if [ "$SOURCE" = adguard ] && [ -f "$YAML" ]; then
     echo "   backup of the original: $backup"
     case " $changes " in *" port "*) moved=1 ;; esac
     case "$changes" in *flush:*) echo "   AdGuard now writes its query log every $FLUSH queries (was ${changes##*flush:}), so alerts arrive in seconds" ;; esac
+    echo "   restarting $NAME to apply it: a few seconds without DNS (ADGUARD_FLUSH_EVERY=0 skips this)"
     $RESTART >/dev/null
   fi
 fi
@@ -78,6 +79,11 @@ if [ "$n" = "ERR" ] || [ "$n" -lt 1 ]; then
   echo "   note: nothing answers DNS on 127.0.0.1:53 (fine if $NAME listens on another address)"
 else
   echo "   DNS answers on :53 ($n records for google.com)"
+fi
+if [ "$SOURCE" = adguard ] && [ -f "$YAML" ]; then
+  "$PY" /opt/ghostwall/agents/ghost_dns/adguard_conf.py "$YAML" --check | while IFS= read -r p; do
+    [ -n "$p" ] && echo "   WARNING: $p" >&2
+  done
 fi
 if [ ! -f "$QUERYLOG" ]; then
   if [ "$SOURCE" = pihole ]; then
@@ -110,9 +116,13 @@ c = json.load(open(p))
 c.update({"shadow": True, "learning": True, "enforce": "null",
           "querylog": querylog, "querylog_format": fmt, "threat_feed_path": feed})
 c.pop("dns_host", None); c.pop("dns_port", None)   # shadow serves no DNS
-# Drop thresholds pinned by older configs so the measured defaults in config.py apply.
-for k in ("recommend_threshold", "block_threshold"):
-    c.pop(k, None)
+# Drop the thresholds the first versions pinned (0.60 / 0.90: far too noisy) so the
+# measured defaults in config.py apply. Anything else is a choice (yours, or
+# `ghostwall calibrate --apply`, which also sets "thresholds_from") and is kept.
+if "thresholds_from" not in c:
+    for k, legacy in (("recommend_threshold", (0.6, 0.85)), ("block_threshold", (0.9, 0.95))):
+        if c.get(k) in legacy:
+            c.pop(k)
 # Paths outside /opt/ghostwall, unless you chose your own.
 old = "/opt/ghostwall/agents/"
 for key, new in (("state_path", f"{data}/state.json"), ("events_path", f"{data}/events.jsonl"),

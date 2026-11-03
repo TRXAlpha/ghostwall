@@ -17,6 +17,9 @@ class FakeTelegram:
         self.edits: list[dict] = []         # editMessageText calls
         self.requests: list[tuple[str, dict]] = []  # (method, payload)
         self._offset = 0
+        self.fail_sends = 0                 # answer this many sendMessage calls with fail_status
+        self.fail_status = 502
+        self.fail_updates = 0               # likewise for getUpdates
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -37,6 +40,10 @@ class FakeTelegram:
                 parts = self.path.split("/")
                 method = parts[-1]
                 outer.requests.append((method, payload))
+                if method == "sendMessage" and outer.fail_sends > 0:
+                    outer.fail_sends -= 1
+                    self._fail()
+                    return
                 if method == "sendMessage":
                     outer.sent.append(payload)
                     outer._offset += 1
@@ -46,12 +53,24 @@ class FakeTelegram:
                     outer.edits.append(payload)
                     self._reply(True)
                 else:
-                    outer._reply({})
+                    self._reply({})
+
+            def _fail(self):
+                body = json.dumps({"ok": False, "error_code": outer.fail_status,
+                                   "description": "scripted failure"}).encode()
+                self.send_response(outer.fail_status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
 
             def do_GET(self):
-                if "getUpdates" in self.path:
+                if "getUpdates" in self.path and outer.fail_updates > 0:
+                    outer.fail_updates -= 1
+                    self._fail()
+                elif "getUpdates" in self.path:
                     batch, outer.updates = outer.updates, []
-                    outer._reply(batch)
+                    self._reply(batch)
                 else:
                     self._reply({})
 

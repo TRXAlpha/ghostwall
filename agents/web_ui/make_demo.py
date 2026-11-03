@@ -56,6 +56,7 @@ def script(rng: random.Random) -> list[tuple[float, str, str]]:
                              "hv7qkz3mwpxr.biz", "zrqk4vhw9tjx.info"]):
         q.append((ago(9) + 45 * i, "tv", dom))
     q.append((ago(41), "phone", "dns.google"))                   # DNS-over-HTTPS
+    q.append((ago(130), "tv", "api.telegram.org"))               # the implant's commands, via a bot
     q.append((ago(96), "laptop", "qzxkvwjhplrtm5746.top"))       # one very random new name
     for i in range(12):                                          # a call-home every 5 minutes
         q.append((ago(240) + 300 * i, "printer", "sync.xpqv.com"))
@@ -94,6 +95,13 @@ def generate(seed: int = 7) -> dict:
 
     state = GhostState(cfg["state_path"], learning_default=True)
     state.load_allowlist_file(cfg["allowlist_path"])
+    # The demo day's own clock (a fixed date), and devices that have been on the network
+    # for a week, so per-device baselines (abused_service) are over, as they would be.
+    from datetime import datetime, timedelta, timezone
+    day0 = datetime(2026, 10, 30, tzinfo=timezone.utc)
+    state.clock = lambda: day0 + timedelta(seconds=clock["t"])
+    for d in DEVICES:
+        state.device_since[d["name"]] = (day0 - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
     scorer = Scorer(cfg["onnx_model"], cfg["lr_coef"], cfg["lr_meta"])
     memo: dict = {}
     score_one = scorer.score_one

@@ -49,7 +49,7 @@ class ValidatorTests(unittest.TestCase):
         with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
             import json
             f.write(json.dumps(GOOD) + "\n")
-            f.write(json.dumps(GOOD, event_id := None) if False else json.dumps(dict(GOOD, action="nope")) + "\n")
+            f.write(json.dumps(dict(GOOD, action="nope")) + "\n")
             path = f.name
         try:
             r = subprocess.run([sys.executable, os.path.join(HERE, "..", "validate_events.py"), path],

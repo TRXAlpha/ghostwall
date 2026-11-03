@@ -8,10 +8,31 @@ Type=oneshot
 User=ghostwall
 WorkingDirectory=/opt/ghostwall/agents/ghost_dns
 # Keeps the old feed if the download fails or looks wrong (see update_feed.py).
+# GHOSTWALL_FEEDS in ghostwall.env (space-separated URLs) replaces the default list.
+EnvironmentFile=-/etc/ghostwall/ghostwall.env
 ExecStart=/opt/ghostwall/.venv/bin/python update_feed.py --out /var/lib/ghostwall/threat_feed.txt
 StateDirectory=ghostwall
 StateDirectoryMode=0750
+# It downloads and parses files from the internet: no capabilities, no devices, only
+# the network and its own output file.
 NoNewPrivileges=true
+CapabilityBoundingSet=
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0022

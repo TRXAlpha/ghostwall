@@ -18,8 +18,8 @@ import re
 import sys
 import tempfile
 import time
-from collections import Counter, defaultdict
-from datetime import datetime
+from collections import Counter
+from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -29,7 +29,7 @@ from enforce import Enforcer, NullBackend
 from events import EventLog
 from resolver import Resolver
 from scoring import Scorer
-from shadow import detect_format, parse_adguard_line, parse_pihole_line
+from shadow import detect_format, parse_adguard_entry, parse_pihole_line, pihole_blocked_host
 from state import GhostState
 
 _FRAC = re.compile(r"(\.\d{6})\d+")
@@ -103,35 +103,55 @@ def main() -> int:
                  Enforcer(NullBackend()), dm, EventLog(cfg["events_path"]))
     clock = {"t": 0.0}
     r.clock = lambda: clock["t"]
+    # novelty, device baselines and alert de-duplication follow the log's time too
+    state.clock = lambda: datetime.fromtimestamp(clock["t"], timezone.utc)
 
     fmt = detect_format(a.querylog) if a.format == "auto" else a.format
     opener = gzip.open if a.querylog.endswith(".gz") else open
     n = bad = 0
     first = last = None
+    held = None   # Pi-hole: the last query, until we know whether a "blocked" line follows
+
+    def run(q):
+        nonlocal n
+        ip, host, qtype, blocked, ts = q
+        clock["t"] = ts
+        try:
+            r.decide(ip, host, qtype, upstream_blocked=blocked)
+        except Exception as exc:  # noqa: BLE001
+            print("decide failed:", host, repr(exc), file=sys.stderr)
+        n += 1
+
     with opener(a.querylog, "rt", encoding="utf-8", errors="replace") as f:
         for line in f:
             if a.max_lines and n >= a.max_lines:
                 break
             if fmt == "pihole":
+                bh = pihole_blocked_host(line)
+                if bh:
+                    if held and held[1] == bh:
+                        held[3] = True
+                    continue
                 parsed = parse_pihole_line(line)
                 ts = parse_syslog_time(line) if parsed else None
+                if not parsed or ts is None:
+                    continue
+                if held:
+                    run(held)
+                held = list(parsed) + [False, ts]
             else:
-                parsed = parse_adguard_line(line)
+                parsed = parse_adguard_entry(line)
                 if not parsed:
                     bad += 1
                     continue
                 ts = parse_time(json.loads(line).get("T", ""))
-            if not parsed or ts is None:
-                continue
-            clock["t"] = ts
+                if ts is None:
+                    continue
+                run(list(parsed) + [ts])
             first = first or ts
             last = ts
-            ip, host, qtype = parsed
-            try:
-                r.decide(ip, host, qtype)
-            except Exception as exc:  # noqa: BLE001
-                print("decide failed:", host, repr(exc), file=sys.stderr)
-            n += 1
+    if held:
+        run(held)
 
     evs = []
     with open(cfg["events_path"], encoding="utf-8") as f:

@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
-# Ghostwall in a container: ghost-dns in shadow mode plus the dashboard, state in /data.
+# Ghostwall in a container: ghost-dns in shadow mode plus the dashboard, state in /data,
+# and the Telegram bot once `docker compose exec ghostwall ghostwall telegram` set it up.
 #
 # Environment (all optional):
 #   GHOSTWALL_QUERYLOG         the DNS server's log as mounted here
 #                              (default /adguard/work/data/querylog.json; Pi-hole: /pihole/log/pihole.log)
 #   GHOSTWALL_QUERYLOG_FORMAT  adguard, pihole or auto (default auto)
 #   GHOSTWALL_WEB_PASSWORD     dashboard password (default: generated once, kept in /data/web_password)
-#   GHOSTWALL_ADGUARD_YAML     AdGuard's config, mounted writable, so its log buffer can be lowered
-#                              (default /adguard/conf/AdGuardHome.yaml; skipped if absent)
+#   GHOSTWALL_ADGUARD_YAML     AdGuard's config, so its log buffer can be lowered
+#                              (default /adguard/conf/AdGuardHome.yaml; skipped if absent).
+#                              compose.yaml mounts it only into the adguard-tune service,
+#                              which runs this script as `entrypoint.sh tune-adguard`.
 #   ADGUARD_FLUSH_EVERY        the buffer size to set (default 10; 0 = leave AdGuard alone)
 set -euo pipefail
 cd /opt/ghostwall
@@ -16,7 +19,47 @@ QUERYLOG=${GHOSTWALL_QUERYLOG:-/adguard/work/data/querylog.json}
 FORMAT=${GHOSTWALL_QUERYLOG_FORMAT:-auto}
 YAML=${GHOSTWALL_ADGUARD_YAML:-/adguard/conf/AdGuardHome.yaml}
 FLUSH=${ADGUARD_FLUSH_EVERY:-10}
+
+tune_adguard() {  # lower AdGuard's query-log buffer; AdGuard applies it on its next restart
+  [ "$FLUSH" -gt 0 ] && [ -f "$YAML" ] && [ -w "$YAML" ] || return 0
+  local changed
+  changed=$(python agents/ghost_dns/adguard_conf.py "$YAML" --flush "$FLUSH" 2>&1) \
+    || { echo "[ghostwall] could not tune AdGuard: $changed"; return 0; }
+  case "$changed" in
+    *flush:*) echo "[ghostwall] AdGuard was buffering ${changed##*flush:} queries before writing its log; set to $FLUSH." \
+                   "Restart AdGuard once so alerts arrive in seconds: docker compose restart adguardhome" ;;
+  esac
+}
+
+# compose.yaml's adguard-tune service: only lower AdGuard's buffer, nothing else.
+if [ "${1:-}" = "tune-adguard" ]; then
+  echo "[ghostwall] adguard-tune: watching $YAML (every 10 s until AdGuard's setup is done, then every 5 min)"
+  while :; do
+    if [ -f "$YAML" ] && [ ! -w "$YAML" ]; then
+      [ -n "${warned:-}" ] || echo "[ghostwall] adguard-tune: $YAML is not writable here; lower querylog.size_memory by hand"; warned=1
+    fi
+    tune_adguard
+    # quickly at first: people restart AdGuard right after its setup wizard
+    if [ -f "$YAML" ] && grep -Eq "^[[:space:]]+size_memory:[[:space:]]*([0-9]|10)$" "$YAML"; then
+      sleep 300
+    else
+      sleep 10
+    fi
+  done
+fi
+
 mkdir -p "$D"
+# No capabilities (compose.yaml): only what this container's root owns can be written or read.
+if ! ( : > "$D/.writable" ) 2>/dev/null; then
+  echo "[ghostwall] can't write $D: the ghostwall-data folder belongs to another user." >&2
+  echo "            sudo chown -R root:root ./ghostwall-data   (or add cap_add: [DAC_OVERRIDE])" >&2
+  exit 1
+fi
+rm -f "$D/.writable"
+if [ -e "$QUERYLOG" ] && [ ! -r "$QUERYLOG" ]; then
+  echo "[ghostwall] can't read $QUERYLOG: your DNS server runs as another user. Add" >&2
+  echo "            cap_add: [DAC_OVERRIDE] to the ghostwall service in compose.yaml" >&2
+fi
 
 # The password is never printed: container logs are kept, shipped and pasted into issues.
 if [ -z "${GHOSTWALL_WEB_PASSWORD:-}" ]; then
@@ -29,6 +72,21 @@ if [ -z "${GHOSTWALL_WEB_PASSWORD:-}" ]; then
        "(docker compose exec ghostwall cat $D/web_password)"
 else
   echo "[ghostwall] dashboard on port 8088, user ghostwall, password from GHOSTWALL_WEB_PASSWORD"
+fi
+
+# HTTPS with a self-signed certificate made on first start (GHOSTWALL_WEB_TLS=off: HTTP).
+if [ "${GHOSTWALL_WEB_TLS:-on}" != off ] && [ -z "${GHOSTWALL_WEB_TLS_CERT:-}" ]; then
+  if [ ! -s "$D/tls/cert.pem" ] && command -v openssl >/dev/null; then
+    mkdir -p "$D/tls"
+    (umask 077; openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=Ghostwall" \
+       -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
+       -keyout "$D/tls/key.pem" -out "$D/tls/cert.pem" >/dev/null 2>&1) || rm -f "$D/tls/cert.pem"
+  fi
+  if [ -s "$D/tls/cert.pem" ]; then
+    export GHOSTWALL_WEB_TLS_CERT="$D/tls/cert.pem" GHOSTWALL_WEB_TLS_KEY="$D/tls/key.pem"
+    echo "[ghostwall] dashboard is HTTPS (self-signed; SHA-256" \
+         "$(openssl x509 -noout -fingerprint -sha256 -in "$D/tls/cert.pem" | cut -d= -f2))"
+  fi
 fi
 
 # Config lives in /data so edits (thresholds, learning) survive image updates; the
@@ -45,23 +103,30 @@ c.update({"shadow": True, "querylog": querylog, "querylog_format": fmt, "enforce
 json.dump(c, open(p, "w"), indent=2)
 PY
 
-tune_adguard() {  # lower AdGuard's query-log buffer; AdGuard applies it on its next restart
-  [ "$FLUSH" -gt 0 ] && [ -f "$YAML" ] && [ -w "$YAML" ] || return 0
-  local changed
-  changed=$(python agents/ghost_dns/adguard_conf.py "$YAML" --flush "$FLUSH" 2>/dev/null) || return 0
-  case "$changed" in
-    *flush:*) echo "[ghostwall] AdGuard was buffering ${changed##*flush:} queries before writing its log; set to $FLUSH." \
-                   "Restart AdGuard once so alerts arrive in seconds: docker compose restart adguardhome" ;;
-  esac
-}
-
 # Threat feed now and daily; AdGuard's buffer every few minutes (its setup wizard writes
 # the YAML after this container starts). ghost-dns reloads the feed when it changes.
 ( while :; do python agents/ghost_dns/update_feed.py --out "$D/threat_feed.txt" || true; sleep 86400; done ) &
-( while :; do tune_adguard; sleep 300; done ) &
+# Older compose files mount AdGuard's config into this container; tune it from here then.
+# (No `[ -d ] && ... &` here: a job that exits at once would end `wait -n` below.)
+if [ -d "$(dirname "$YAML")" ]; then
+  ( while :; do tune_adguard; sleep 300; done ) &
+fi
+
+# Telegram alerts, once `ghostwall telegram` has written its two files here (it says to
+# restart the container then). A bad file is retried every 30 s, not a restart of everything.
+if [ -f "$D/fw_bot.env" ] && [ -f "$D/owner.json" ]; then
+  echo "[ghostwall] Telegram alerts on ($D/fw_bot.env)"
+  ( while :; do
+      FW_BOT_CONTROL_TOKEN_FILE="$D/control_token" python agents/fw_bot/fw_bot.py \
+        --env-file "$D/fw_bot.env" --owner-file "$D/owner.json" --labels "$D/labels.jsonl" \
+        --digest "$D/digest.jsonl" --follow "$D/events.jsonl" --commands || true
+      sleep 30
+    done ) &
+fi
 
 python agents/ghost_dns/app.py --config "$D/ghost_dns.json" &
-python agents/web_ui/app.py --bind 0.0.0.0 --port 8088 --events "$D/events.jsonl" &
+python agents/web_ui/app.py --bind 0.0.0.0 --port 8088 --events "$D/events.jsonl" \
+  --control-token-file "$D/control_token" &
 # If either service exits, stop the container so Docker's restart policy brings it back.
 wait -n
 exit 1

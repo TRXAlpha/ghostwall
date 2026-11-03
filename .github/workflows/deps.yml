@@ -1,0 +1,23 @@
+name: dependencies
+
+# The Python lock files pin exact versions with hashes, so nothing updates them by
+# itself and Dependabot doesn't read them (.github/dependabot.yml covers actions and
+# images). This checks every pinned version against the OSV vulnerability database
+# weekly, and on any change to the locks: a failed run means an advisory to act on.
+on:
+  schedule:
+    - cron: "23 5 * * 1"     # Mondays
+  workflow_dispatch:
+  pull_request:
+    paths: ["requirements*.lock", "tests/requirements-lint.txt", "tests/osv_audit.py", ".github/workflows/deps.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  osv:
+    name: known vulnerabilities in pinned Python packages
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - run: python3 tests/osv_audit.py requirements.lock requirements-gateway.lock tests/requirements-lint.txt

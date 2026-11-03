@@ -3,6 +3,7 @@ import json, os, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 import fw_bot
+from config import Config
 
 
 class FakeBot:
@@ -65,6 +66,17 @@ class FollowTests(unittest.TestCase):
         fo.poll()
         self.assertEqual(self.bot.calls[-1], ("evt_5", 42))
 
+    def test_rotation_sends_the_old_files_last_lines_then_the_new_file(self):
+        fo = fw_bot.Follower(self.bot, self.path, 42)
+        self._append(evt(1))
+        self.assertEqual(fo.poll(), 1)
+        self._append(evt(2))                      # written, not yet seen...
+        os.replace(self.path, self.path + ".1")   # ...when ghost-dns rotates
+        self._append(evt(3), evt(4))
+        self.assertEqual(fo.poll(), 3)
+        self.assertEqual([c[0] for c in self.bot.calls], ["evt_1", "evt_2", "evt_3", "evt_4"])
+        self.assertEqual(fo.poll(), 0)
+
     def test_skips_garbage_lines(self):
         fo = fw_bot.Follower(self.bot, self.path, 42)
         self._append(raw="not json\n")
@@ -76,6 +88,8 @@ class FollowTests(unittest.TestCase):
 class FakeCfg:
     def is_owner(self, chat_id):
         return chat_id == 42
+
+    is_owner_message = Config.is_owner_message
 
 
 class FakeDispatcher:
@@ -91,8 +105,18 @@ class CommandRouterTests(unittest.TestCase):
         self.sent = []
         self.r = fw_bot.CommandRouter(FakeCfg(), FakeDispatcher(), lambda c, t: self.sent.append((c, t)))
 
-    def msg(self, chat_id, text):
-        return {"update_id": 1, "message": {"chat": {"id": chat_id}, "text": text}}
+    def msg(self, chat_id, text, sender=None):
+        return {"update_id": 1, "message": {"chat": {"id": chat_id},
+                                            "from": {"id": chat_id if sender is None else sender},
+                                            "text": text}}
+
+    def test_stranger_in_owner_chat_is_ignored(self):
+        # A group chat whose id is the owner id: other members must not give commands.
+        self.assertEqual(self.r.handle(self.msg(42, "/fw lockdown", sender=7)), "ignored: not owner")
+        self.assertEqual(self.sent, [])
+
+    def test_owner_writing_in_another_chat_is_ignored(self):
+        self.assertEqual(self.r.handle(self.msg(-100, "/fw lockdown", sender=42)), "ignored: not owner")
 
     def test_owner_command_gets_reply(self):
         self.assertEqual(self.r.handle(self.msg(42, "/fw log 5")), "replied")

@@ -15,14 +15,16 @@ import argparse
 import os
 import sys
 import threading
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 import config as config_mod          # noqa: E402
 from capture_client import CaptureClient  # noqa: E402
-from control_api import ControlServer     # noqa: E402
+from control_api import ControlServer, ensure_token, token_path  # noqa: E402
 from devices import DeviceMap             # noqa: E402
+from neighbours import Neighbours         # noqa: E402
 from enforce import Enforcer, NftBackend, NullBackend  # noqa: E402
 from events import EventLog               # noqa: E402
 from resolver import Resolver             # noqa: E402
@@ -43,7 +45,8 @@ def build(cfg: dict):
     enforcer.lockdown = gstate.lockdown
     event_log = EventLog(cfg["events_path"])
     capture = CaptureClient(cfg["capture_url"], enabled=bool(cfg.get("capture_enabled")))
-    resolver = Resolver(cfg, gstate, scorer, enforcer, devices, event_log, capture)
+    neigh = Neighbours(cfg["neighbours_path"]) if cfg.get("neighbours_path") else None
+    resolver = Resolver(cfg, gstate, scorer, enforcer, devices, event_log, capture, neigh)
     return devices, gstate, scorer, enforcer, event_log, capture, resolver
 
 
@@ -101,9 +104,22 @@ def main(argv=None):
         resolver.source = follower.fmt
         print(f"[ghost-dns] query log format: {follower.fmt}", flush=True)
 
-    control = ControlServer(cfg, gstate, enforcer, devices, resolver)
+    tpath = token_path(cfg)
+    token = ensure_token(tpath) if tpath else None
+    if not token:
+        print("[ghost-dns] WARNING control API actions need no token (control_token_path is off)", flush=True)
+    control = ControlServer(cfg, gstate, enforcer, devices, resolver, token=token)
     t = threading.Thread(target=control.serve_forever, daemon=True)
     t.start()
+
+    def flusher():  # throttled state changes reach the disk within a minute, even when idle
+        while True:
+            time.sleep(60)
+            try:
+                gstate.flush()
+            except OSError as exc:
+                print(f"[ghost-dns] state flush failed: {exc}", file=sys.stderr, flush=True)
+    threading.Thread(target=flusher, daemon=True).start()
     try:
         if follower:
             follower.run()

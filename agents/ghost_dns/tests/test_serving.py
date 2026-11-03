@@ -237,9 +237,59 @@ class FailoverTests(Base):
             raise RuntimeError("model crashed")
 
         self.r.scorer.score_one = boom
-        reply = self.r.handle_packet("127.0.0.1", build_query("example.com"))
+        reply = self.r.handle_packet("127.0.0.1", build_query("example.com"))   # learning: scored after
         self.assertEqual(struct.unpack(">H", reply[6:8])[0], 1, "must still resolve")
+        self.r.drain()
         self.assertEqual(self.r.stats["failopen"], 1)
+        self.state.set_learning(False)                                          # blocking: scored first
+        reply = self.r.handle_packet("127.0.0.1", build_query("example.org"))
+        self.assertEqual(struct.unpack(">H", reply[6:8])[0], 1, "must still resolve")
+        self.assertEqual(self.r.stats["failopen"], 2)
+
+
+class ScoreAfterAnswerTests(Base):
+    """Learning mode can block only confirmed-blocklist names, so a new name's answer
+    must not wait for the models; blocking mode must (the score decides the answer)."""
+
+    def setUp(self):
+        self.up = FakeUpstream(free_port())
+        self.addCleanup(self.up.close)
+        self.build(self.up.port, free_port())
+
+        class Slow(FakeScorer):
+            def score_one(self, name):
+                time.sleep(0.4)
+                return {"dga": 0.95, "dga_trm": 0.95, "dga_lr": 0.95}
+        self.r.scorer = Slow()
+
+    def answers(self, reply):
+        return struct.unpack(">H", reply[6:8])[0]
+
+    def test_learning_answers_first_and_still_alerts(self):
+        t = time.time()
+        reply = self.r.handle_packet("127.0.0.1", build_query("kq7zx2wvplm.example"))
+        self.assertLess(time.time() - t, 0.3, "the answer waited for the model")
+        self.assertEqual(self.answers(reply), 1)
+        self.r.drain()
+        self.assertEqual([e["domain"] for e in self.read_events()], ["kq7zx2wvplm.example"])
+
+    def test_blocklist_still_blocks_at_once_in_learning(self):
+        self.state.add_block("bad.example")
+        reply = self.r.handle_packet("127.0.0.1", build_query("bad.example"))
+        self.assertEqual(reply[-4:], socket.inet_aton(self.cfg["sinkhole_ip4"]))
+
+    def test_blocking_mode_scores_before_answering(self):
+        self.state.set_learning(False)
+        t = time.time()
+        reply = self.r.handle_packet("127.0.0.1", build_query("kq7zx2wvplm.example"))
+        self.assertGreaterEqual(time.time() - t, 0.4)
+        self.assertEqual(reply[-4:], socket.inet_aton(self.cfg["sinkhole_ip4"]))   # 0.95 >= block 0.90
+
+    def test_can_be_turned_off(self):
+        self.cfg["score_after_answer"] = False
+        t = time.time()
+        self.r.handle_packet("127.0.0.1", build_query("kq7zx2wvplm.example"))
+        self.assertGreaterEqual(time.time() - t, 0.4)
 
 
 class DedupeTests(Base):
@@ -317,7 +367,58 @@ class ShadowTests(Base):
         self._write({"IP": "127.0.0.1", "QH": "q.example", "QT": "A"})
         self.assertEqual(f.poll_once(), 1)
 
+    def test_anonymized_client_ips_are_said_once(self):
+        f = QueryLogFollower(self.r, self.log)
+        self._write({"IP": "192.168.1.0", "QH": "a.example", "QT": "A"},
+                    {"IP": "192.168.1.0", "QH": "b.example", "QT": "A"})
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            f.poll_once()
+        self.assertEqual(err.getvalue().count("Anonymize client IP"), 1)
+
+    def test_an_unreadable_log_is_said_once_not_silently_skipped(self):
+        import shutil
+        f = QueryLogFollower(self.r, self.log)
+        os.remove(self.log)
+        os.mkdir(self.log)               # exists, can't be read as a file (root reads any file)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(f.poll_once(), 0)
+            self.assertEqual(f.poll_once(), 0)
+            shutil.rmtree(self.log)
+            self._write({"IP": "127.0.0.1", "QH": "back.example", "QT": "A"})
+            f.poll_once()
+        self.assertEqual(err.getvalue().count("can't read"), 1)
+        self.assertIn("DAC_OVERRIDE", err.getvalue())
+        self.assertIn("readable again", err.getvalue())
+
+    def test_lines_written_just_before_a_rotation_are_scored(self):
+        # The follower looks every 2 s. AdGuard renaming querylog.json to .1 (or Pi-hole's
+        # logrotate copying and truncating) in between must not lose what came last.
+        self.r.scorer = FakeScorer(0.7)
+        f = QueryLogFollower(self.r, self.log)
+        self._write({"IP": "127.0.0.1", "QH": "a1.example", "QT": "A"})
+        self.assertEqual(f.poll_once(), 1)
+        self._write({"IP": "127.0.0.1", "QH": "b2.example", "QT": "A"})     # unseen yet...
+        os.replace(self.log, self.log + ".1")                              # ...AdGuard rotates
+        self._write({"IP": "127.0.0.1", "QH": "c3.example", "QT": "A"})
+        self.assertEqual(f.poll_once(), 2)
+        import shutil
+        self._write({"IP": "127.0.0.1", "QH": "d4.example", "QT": "A"})     # unseen yet...
+        shutil.copy(self.log, self.log + ".1")                             # ...copytruncate
+        open(self.log, "w").close()
+        self._write({"IP": "127.0.0.1", "QH": "e5.example", "QT": "A"})
+        self.assertEqual(f.poll_once(), 2)
+        self.assertEqual([e["domain"] for e in self.read_events()],
+                         ["a1.example", "b2.example", "c3.example", "d4.example", "e5.example"])
+
     def test_parse_pihole_line(self):
+        # A name crafted to look like the end of a line must not move the alert to
+        # another client, nor may a name sneak a second query[] into one line.
+        self.assertIsNone(parse_pihole_line(
+            "Oct 31 12:00:00 dnsmasq[812]: query[A] x.example from 192.168.1.66 from 192.168.1.10"))
+        self.assertIsNone(parse_pihole_line(
+            "Oct 31 12:00:00 dnsmasq[812]: reply query[A] x.example from 192.168.1.66 is 1.2.3.4"))
         self.assertEqual(parse_pihole_line("Oct 31 12:00:00 dnsmasq[812]: query[AAAA] Example.COM from 192.168.1.10"),
                          ("192.168.1.10", "example.com", "AAAA"))
         # log-queries=extra: serial and client/port before the query

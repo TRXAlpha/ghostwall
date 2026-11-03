@@ -83,7 +83,8 @@ setenv() {  # setenv KEY VALUE: replace or append KEY in ghostwall.env
 import re, shlex, sys
 path, key, val = sys.argv[1:4]
 lines = open(path, encoding="utf-8").read().splitlines()
-new = f"{key}={shlex.quote(val) if re.search(r'''[\s"'$`\\]''', val) else val}"
+needs_quotes = re.search(r"[\s\"'$`\\]", val)  # (no quotes nested in an f-string: Python < 3.12)
+new = key + "=" + (shlex.quote(val) if needs_quotes else val)
 for i, line in enumerate(lines):
     if line.startswith(key + "="):
         lines[i] = new
@@ -129,8 +130,17 @@ say "2) copy to $DEST"
 if [ "$SRC" != "$DEST" ]; then
   mkdir -p "$DEST"
   tar -C "$SRC" --exclude=./.git --exclude=./.venv --exclude=./data --exclude=./runs \
-      -cf - . | tar -C "$DEST" -xf -
+      -cf - . | tar -C "$DEST" --no-same-owner --no-same-permissions -xf -
 fi
+# What is installed, for `ghostwall version` (the version in pyproject.toml + the commit).
+VER=$(sed -n 's/^version = "\(.*\)"/\1/p' "$SRC/pyproject.toml" | head -1)
+REV=$(git -C "$SRC" describe --always --dirty 2>/dev/null || echo "no git")
+printf '%s (%s), installed %s\n' "${VER:-unknown}" "$REV" "$(date -u +%Y-%m-%d)" > "$DEST/VERSION"
+# The code runs as the ghostwall user (with the right to read any file) and uninstall.sh
+# runs as root, so nobody but root may change it. A clone keeps the cloning user's
+# ownership, which would let that user (or anything running as them) edit it.
+chown -R root:root "$DEST"
+chmod -R u+rwX,go+rX,go-w "$DEST"
 
 say "3) python environment"
 if ! python3 -c 'import ensurepip' 2>/dev/null; then
@@ -139,10 +149,21 @@ if ! python3 -c 'import ensurepip' 2>/dev/null; then
   apt-get install -y -qq python3-venv >/dev/null || { apt-get update -qq && apt-get install -y -qq python3-venv >/dev/null; }
 fi
 [ -x "$DEST/.venv/bin/python" ] || python3 -m venv "$DEST/.venv"
-"$DEST/.venv/bin/pip" install -q --disable-pip-version-check --upgrade pip
-if ! "$DEST/.venv/bin/pip" install -q --disable-pip-version-check -r "$DEST/requirements.txt"; then
+# Exact versions, checked by hash (requirements.lock): a compromised or replaced
+# package on PyPI fails the install instead of running as part of Ghostwall.
+if ! "$DEST/.venv/bin/pip" install -q --disable-pip-version-check --require-hashes -r "$DEST/requirements.lock"; then
   # onnxruntime has no wheel for some platforms (32-bit ARM, brand-new Python): run on numpy alone.
-  "$DEST/.venv/bin/pip" install -q --disable-pip-version-check "numpy>=1.24,<3"
+  # numpy alone, still from the lock (pip picks the entry for this Python); if no locked
+  # file fits this platform either, the locked version without a hash check.
+  NPLOCK=$(mktemp)
+  awk '/^numpy==/{p=1} /^[a-z]/ && !/^numpy==/{p=0} p' "$DEST/requirements.lock" > "$NPLOCK"
+  if ! "$DEST/.venv/bin/pip" install -q --disable-pip-version-check --require-hashes -r "$NPLOCK"; then
+    NPV=$(sed -n 's/^numpy==\([0-9.]*\).*/\1/p' "$NPLOCK" | head -1)
+    say "   WARNING: no hash-checked numpy build fits this platform; installing numpy==${NPV:-2} unchecked"
+    "$DEST/.venv/bin/pip" install -q --disable-pip-version-check "numpy==${NPV:-2.2.6}" \
+      || "$DEST/.venv/bin/pip" install -q --disable-pip-version-check "numpy>=1.24,<3"
+  fi
+  rm -f "$NPLOCK"
   say "   onnxruntime is not available here: scoring uses the n-gram model only (catches fewer DGA names)"
 fi
 # The services can't write next to the code, so compile it once here.
@@ -155,6 +176,28 @@ if ! grep -q '^GHOSTWALL_WEB_PASSWORD=.' "$ENVF"; then
   setenv GHOSTWALL_WEB_PASSWORD "$(python3 -c 'import secrets; print(secrets.token_urlsafe(12))')"
   [ "$FRESH" = 1 ] && setenv GHOSTWALL_WEB_BIND 0.0.0.0
 fi
+# HTTPS for the dashboard, so its password doesn't cross the network readable. The
+# certificate is self-signed: browsers warn once; the fingerprint printed at the end
+# lets you check it's really this box. GHOSTWALL_WEB_TLS=off in ghostwall.env keeps HTTP.
+TLS=/etc/ghostwall/tls
+if ! grep -q '^GHOSTWALL_WEB_TLS=off' "$ENVF" && command -v openssl >/dev/null \
+   && { [ ! -s "$TLS/cert.pem" ] || [ ! -s "$TLS/key.pem" ]; }; then
+  install -d -m 750 -o root -g ghostwall "$TLS"
+  HN=$(hostname)
+  SAN="DNS:$HN,DNS:$HN.local,DNS:localhost,IP:127.0.0.1"
+  for ip in $(hostname -I 2>/dev/null); do SAN="$SAN,IP:$ip"; done
+  if (umask 077; openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=$HN (Ghostwall)" \
+        -addext "subjectAltName=$SAN" -keyout "$TLS/key.pem" -out "$TLS/cert.pem" >/dev/null 2>&1); then
+    chown root:ghostwall "$TLS/key.pem" "$TLS/cert.pem"
+    chmod 640 "$TLS/key.pem"; chmod 644 "$TLS/cert.pem"
+  else
+    say "   could not make a TLS certificate; the dashboard stays on plain HTTP"
+  fi
+fi
+if [ -s "$TLS/cert.pem" ] && [ -s "$TLS/key.pem" ] && ! grep -q '^GHOSTWALL_WEB_TLS=off' "$ENVF"; then
+  setenv GHOSTWALL_WEB_TLS_CERT "$TLS/cert.pem"
+  setenv GHOSTWALL_WEB_TLS_KEY "$TLS/key.pem"
+fi
 chown root:ghostwall "$ENVF"
 chmod 640 "$ENVF"
 . "$ENVF"
@@ -166,6 +209,13 @@ for u in agents/ghost_dns/ghostwall-dns.service agents/ghost_dns/ghostwall-feed.
   install -m 644 "$DEST/$u" /etc/systemd/system/
 done
 systemctl daemon-reload
+
+# `ghostwall status`, `sudo ghostwall allow example.com`, `sudo ghostwall telegram`, ...
+cat > /usr/local/bin/ghostwall <<'SH'
+#!/bin/sh
+exec /opt/ghostwall/.venv/bin/python /opt/ghostwall/agents/ghost_dns/ghostwall_cli.py "$@"
+SH
+chmod 755 /usr/local/bin/ghostwall
 
 say "6) threat feed (daily)"
 systemctl enable --now ghostwall-feed.timer >/dev/null
@@ -187,15 +237,25 @@ if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active
   say "   ufw is on; to reach the dashboard from your network: sudo ufw allow 8088/tcp"
 fi
 
+SCHEME=http FPR=""
+if [ -n "${GHOSTWALL_WEB_TLS_CERT:-}" ] && [ -s "$GHOSTWALL_WEB_TLS_CERT" ]; then
+  SCHEME=https
+  FPR="
+              The browser will warn about the certificate once (it is this box's own).
+              Its SHA-256 fingerprint: $(openssl x509 -noout -fingerprint -sha256 -in "$GHOSTWALL_WEB_TLS_CERT" | cut -d= -f2)"
+fi
 cat <<EOF
 
 Installed. Ghostwall is watching your DNS server's query log; it cannot block anything.
 
-  Dashboard:  http://$HOST:8088   user: ghostwall   password: ${GHOSTWALL_WEB_PASSWORD:-(none, loopback only)}
-              (the password is GHOSTWALL_WEB_PASSWORD in $ENVF)
+  Dashboard:  $SCHEME://$HOST:8088   user: ghostwall   password: ${GHOSTWALL_WEB_PASSWORD:-(none, loopback only)}
+              (again later: sudo ghostwall password)$FPR
   Alerts:     sudo tail -f /var/lib/ghostwall/events.jsonl
-  Health:     curl -s http://127.0.0.1:5380/status   ("stats.queries" should keep going up)
+  Health:     ghostwall status   ("scored" should keep going up)
 
-Next steps (README.md): name your devices, add Telegram alerts, replay your history.
+Next steps:  ghostwall status              is it scoring?
+             sudo ghostwall telegram      alerts on your phone (2 minutes)
+             sudo ghostwall alerts        what it found so far
+More in README.md: name your devices, replay your history.
 Remove it again: sudo $DEST/uninstall.sh
 EOF

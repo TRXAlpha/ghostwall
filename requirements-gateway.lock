@@ -1,0 +1,4 @@
+# Gateway mode only (ghost-flow): NetfilterQueue, exact version and hashes. Needs libnetfilter-queue-dev
+# and a compiler (it builds from source). Refresh: printf 'NetfilterQueue==1.1.0\n' | uv pip compile - --universal --python-version 3.10 --generate-hashes -o requirements-gateway.lock
+netfilterqueue==1.1.0 \
+    --hash=sha256:e30eff999325617f54bd95b3d8d3353214cc77b5e3188f90ec3a6f6288888d72

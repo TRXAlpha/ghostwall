@@ -60,8 +60,8 @@ def resolve_devices_path(dev_path=None):
     return real if real.exists() else HERE / "devices.example.json"
 
 
-def load_ctx(dev_path=None):
-    cfg = json.loads((HERE / "config.json").read_text(encoding="utf-8"))
+def load_ctx(dev_path=None, cfg_path=None):
+    cfg = json.loads(Path(cfg_path or HERE / "config.json").read_text(encoding="utf-8"))
     dev = json.loads(resolve_devices_path(dev_path).read_text(encoding="utf-8"))
     pi_ip = cfg["pi_ip"]
     seen_macs, seen_ips = set(), set()
@@ -100,11 +100,16 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="render netconf template files")
     ap.add_argument("--devices", help="devices JSON (default: devices.json, else devices.example.json)")
     ap.add_argument("--out", help="output directory (default: ./out)")
+    ap.add_argument("--config", help="network settings (default: config.json next to gen.py)")
     args = ap.parse_args(argv)
     out_dir = Path(args.out) if args.out else OUT
 
-    cfg, static_leases = load_ctx(args.devices)
+    cfg, static_leases = load_ctx(args.devices, args.config)
+    lan_iface = str(cfg.get("lan_iface", "eth0"))
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", lan_iface):   # it ends up inside firewall rules
+        raise SystemExit(f"lan_iface {lan_iface!r} is not an interface name")
     ctx = {
+        "lan_iface": lan_iface,
         "pi_ip": cfg["pi_ip"],
         "lan_cidr": cfg["lan_cidr"],
         "dhcp_start": cfg["dhcp_start"],

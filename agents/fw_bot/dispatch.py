@@ -41,25 +41,31 @@ HELP = (
 
 
 def read_events(path: str, limit: int | None = None) -> list[dict]:
-    """Newest-first list of parsed events from the tail of the log."""
-    if not os.path.exists(path):
-        return []
-    with open(path, "rb") as f:
-        f.seek(0, os.SEEK_END)
-        size = f.tell()
-        f.seek(max(0, size - TAIL_BYTES))
-        lines = f.read().decode("utf-8", "replace").splitlines()
+    """Newest-first events from the end of the log, continuing into <path>.1 after
+    ghost-dns rotated it, so a fresh file doesn't make recent history look empty."""
     out: list[dict] = []
-    for line in reversed(lines):
-        line = line.strip()
-        if not line:
+    for p in (path, path + ".1"):
+        if not os.path.exists(p):
             continue
-        try:
-            out.append(json.loads(line))
-        except ValueError:
-            continue
-        if limit is not None and len(out) >= limit:
-            break
+        with open(p, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - TAIL_BYTES))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+        if size > TAIL_BYTES and lines:
+            lines = lines[1:]  # the first line is probably cut off
+        for line in reversed(lines):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except ValueError:
+                continue
+            if limit is not None and len(out) >= limit:
+                return out
+        if size > TAIL_BYTES:
+            break  # the tail of this file alone was enough history
     return out
 
 
@@ -87,7 +93,8 @@ def format_log(events: list[dict]) -> str:
     for e in events:
         score = (e.get("scores") or {}).get("dga")
         s = f" {score:.2f}" if isinstance(score, (int, float)) else ""
-        lines.append(f"{_ts(e)}  {e.get('device', '?')}  {e.get('domain', '?')}\n"
+        dom = "(domain hidden)" if alerts.minimal() else e.get("domain", "?")
+        lines.append(f"{_ts(e)}  {e.get('device', '?')}  {dom}\n"
                      f"    {e.get('action', '?')} · {e.get('rule', '?')}{s} · {e.get('severity', '?')}")
     return "\n".join(lines)
 
@@ -115,7 +122,7 @@ def format_summary(events: list[dict], now: datetime | None = None) -> str:
         f"actions: {', '.join(f'{k} {v}' for k, v in actions.items())}\n"
         f"rules: {top(rules)}\n"
         f"devices: {top(devices)}\n"
-        f"domains: {top(domains)}"
+        f"domains: {'(hidden: privacy mode)' if alerts.minimal() else top(domains)}"
     )
 
 

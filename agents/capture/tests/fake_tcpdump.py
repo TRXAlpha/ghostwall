@@ -45,52 +45,38 @@ def write_pcap(path, npackets=3):
 
 
 def main():
+    """Behaves like the real tcpdump: with -G and a strftime pattern in -w, a new file
+    every G seconds (accelerated here), forever; with -W as well, it EXITS after W files
+    (that is what -W means together with -G)."""
     argv = sys.argv[1:]
     o = parse_args(argv)
     out_dir = os.path.dirname(o["w"]) or "."
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, "argv.txt"), "w") as f:
         f.write(" ".join(argv))
-    interval = max(1, int(o["G"]))
-    count = max(1, int(o["W"]))
-    rotating = o["G"] not in (0, None)
-    idx = 0
+    interval = max(1, int(o["G"])) if o["G"] else 0
+    limit = int(o["W"]) if "-W" in argv else 0
     stop = {"flag": False}
 
     def handler(sig, frm):
         stop["flag"] = True
-    try:
-        import signal
-        signal.signal(signal.SIGINT, handler)
-        signal.signal(signal.SIGTERM, handler)
-    except (ImportError, ValueError):
-        pass
-    # first file immediately
-    path = rotate_file(out_dir)
-    with open(path, "wb") as f:
-        f.write(PCAP_HDR)
-        for k in range(3):
-            f.write(PKT.pack(int(time.time()), k, 60, 60))
-            f.write(b"\x00" * 60)
-    if not rotating:
-        while not stop["flag"]:
-            time.sleep(0.2)
-        return
-    n = 1
-    while not stop["flag"] and n < count:
-        time.sleep(interval)
-        if stop["flag"]:
-            break
-        # rotate: reuse same names in a ring (cap_%d), oldest overwritten
-        path = os.path.join(out_dir, "cap_%d.pcap" % (n % count))
-        with open(path, "wb") as f:
-            f.write(PCAP_HDR)
-            for k in range(3):
-                f.write(PKT.pack(int(time.time()), k, 60, 60))
-                f.write(b"\x00" * 60)
-        n += 1
+    signal.signal(signal.SIGINT, handler)
+    signal.signal(signal.SIGTERM, handler)
+    n = 0
     while not stop["flag"]:
-        time.sleep(0.2)
+        name = time.strftime(os.path.basename(o["w"])) if interval else os.path.basename(o["w"])
+        write_pcap(os.path.join(out_dir, name))
+        n += 1
+        if limit and n >= limit:
+            print("Maximum file limit reached: %d" % limit, file=sys.stderr)
+            return
+        if not interval:
+            while not stop["flag"]:
+                time.sleep(0.2)
+            return
+        t = time.time()
+        while not stop["flag"] and time.time() - t < interval:
+            time.sleep(0.05)
 
 
 if __name__ == "__main__":

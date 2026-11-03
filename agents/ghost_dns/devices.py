@@ -4,11 +4,18 @@ Accepts either the netconf devices.json shape ({"devices": [...], "_pending":
 [...]}) or a bare list (the capture devices format). Only active devices (with
 an IP) are indexed. Unknown clients fall back to their IP string as the name so
 events are still emitted.
+
+A device with a MAC is known by that MAC when the caller knows which MAC is at an
+address (neighbours.py, IPv4 and IPv6): its name follows it to a new address (DHCP, IPv6
+privacy addresses), and an address it used to have no longer carries its name once
+another device has it. Without a MAC the name stays with the address.
 """
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+
+from neighbours import canonical_ip, normalize_mac
 
 
 @dataclass
@@ -23,11 +30,15 @@ class DeviceMap:
     def __init__(self, devices: list[Device]):
         self._by_ip: dict[str, Device] = {}
         self._by_name: dict[str, Device] = {}
+        self._by_mac: dict[str, Device] = {}
         for d in devices:
+            d.mac = normalize_mac(d.mac)
             if d.ip:
-                self._by_ip[d.ip] = d
+                self._by_ip[canonical_ip(d.ip)] = d
             if d.name:
                 self._by_name[d.name] = d
+            if d.mac:
+                self._by_mac[d.mac] = d
 
     @classmethod
     def from_json(cls, raw) -> "DeviceMap":
@@ -53,12 +64,21 @@ class DeviceMap:
         with open(path, "r", encoding="utf-8") as f:
             return cls.from_json(json.load(f))
 
-    def device_for_ip(self, ip: str) -> Device:
-        d = self._by_ip.get(ip)
+    def device_for_ip(self, ip: str, mac: str | None = None) -> Device:
+        """The device at `ip`. `mac`: the MAC the neighbour table shows at that address
+        right now, if known."""
+        d = self._by_ip.get(canonical_ip(ip))
+        mac = normalize_mac(mac)
+        if mac:
+            owner = self._by_mac.get(mac)
+            if owner is not None:   # a named device, wherever DHCP put it now
+                return owner if owner.ip == ip else replace(owner, ip=ip)
+            if d is not None and d.mac and d.mac != mac:
+                d = None            # its old address, now another device's: not its name
         if d is not None:
             return d
         # Unknown client: synthesise a device named after its IP.
-        return Device(name=ip, ip=ip, mac=None, profile="normal")
+        return Device(name=ip, ip=ip, mac=mac, profile="normal")
 
     def device_for_name(self, name: str) -> Device | None:
         return self._by_name.get(name)

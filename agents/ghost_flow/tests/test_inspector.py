@@ -15,7 +15,8 @@ import app                             # imports inspector (adds ghost_dns to pa
 import validate_events as V
 from _helpers import ipv4_tcp, client_hello, SYN, PSH_ACK
 
-PUB = "8.8.8.8"
+PUB = "93.184.215.14"     # an ordinary public IP (8.8.8.8 is a DoH resolver: see doh tests)
+DOH = "1.1.1.1"
 BEAC = "185.199.108.153"
 
 
@@ -49,10 +50,27 @@ class InspectorTests(unittest.TestCase):
         self.assertEqual(evs[0]["dst_ip"], PUB)
 
     def test_known_ip_no_alert(self):
-        self.resolved.add(PUB, domain="dns.google", when=1.0)
+        self.resolved.add(PUB, domain="example.com", when=1.0)
         v = self.insp.inspect(ipv4_tcp("192.168.1.30", PUB, 51000, 443, SYN), when=1.0)
         self.assertEqual(v, "accept")
         self.assertEqual(self._events(), [])
+
+    def test_hardcoded_doh_is_named(self):
+        self.insp.inspect(ipv4_tcp("192.168.1.30", DOH, 51000, 443, SYN), when=1.0)
+        self.insp.inspect(ipv4_tcp("192.168.1.30", DOH, 51001, 443, SYN), when=3600.0)  # same day: quiet
+        evs = self._events()
+        self.assertEqual([e["rule"] for e in evs], ["doh_ip"])
+        self.assertIn("DNS-over-HTTPS", evs[0]["reasons"][0])
+        self.assertEqual(V.validate_event(evs[0]), [])
+
+    def test_doh_resolver_looked_up_by_name_is_left_to_ghost_dns(self):
+        self.resolved.add(DOH, domain="one.one.one.one", when=1.0)   # ghost-dns already said doh_bypass
+        self.insp.inspect(ipv4_tcp("192.168.1.30", DOH, 51000, 443, SYN), when=1.0)
+        self.assertEqual(self._events(), [])
+
+    def test_resolver_ip_on_other_ports_is_plain_raw_ip(self):
+        self.insp.inspect(ipv4_tcp("192.168.1.30", DOH, 51000, 80, SYN), when=1.0)
+        self.assertEqual([e["rule"] for e in self._events()], ["raw_ip"])
 
     def test_beacon_high_severity(self):
         self.resolved.add(BEAC, domain="cdn.example", when=1.0)

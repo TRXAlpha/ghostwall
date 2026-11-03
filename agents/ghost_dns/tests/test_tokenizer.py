@@ -48,3 +48,27 @@ class TokenizerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SuffixTests(unittest.TestCase):
+    """The scored label must be the part someone chose, not a provider's name."""
+
+    def test_dynamic_dns_hosts_are_scored_by_their_own_label(self):
+        from tokenizer import registrable_label, registrable_part
+        self.assertEqual(registrable_label("cvyh1po636avyrsxebwbkn7.ddns.net"), "cvyh1po636avyrsxebwbkn7")
+        self.assertEqual(registrable_part("a.b.cvyh1po636.duckdns.org"), "cvyh1po636.duckdns.org")
+        self.assertEqual(registrable_label("bqlqscpqwsh.mooo.com"), "bqlqscpqwsh")
+
+    def test_country_second_levels(self):
+        from tokenizer import registrable_label
+        self.assertEqual(registrable_label("shop.example.com.ua"), "example")
+        self.assertEqual(registrable_label("www.portal.gov.br"), "portal")
+        self.assertEqual(registrable_label("xpunqr.com.hn"), "xpunqr")
+
+    def test_unchanged_cases(self):
+        from tokenizer import registrable_label, registrable_part
+        self.assertEqual(registrable_part("www.example.com"), "example.com")
+        self.assertEqual(registrable_part("a.bbc.co.uk"), "bbc.co.uk")
+        self.assertEqual(registrable_part("example.com"), "example.com")
+        # hosting/CDN names stay grouped under the provider: their hosts are machine-made
+        self.assertEqual(registrable_label("d1a2b3c4d5e6f7.cloudfront.net"), "cloudfront")

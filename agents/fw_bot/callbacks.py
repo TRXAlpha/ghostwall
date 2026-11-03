@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 
-from config import Config
+from alerts import minimal
 from control_client import ControlClient, ControlError
 from signing import CallbackError, parse_callback
 
@@ -61,7 +61,7 @@ class CallbackHandler:
                 self.client.unblock(event_id, domain)
                 text = f"Unblocked {domain} (event {event_id})."
             elif action == "trust":
-                r = self.client.allow(domain)
+                r = self.client.allow(str(event.get("trust") or domain))   # a tunnel: its zone
                 text = f"Trusted {r.get('domain', domain)}: no more alerts for it."
             elif action == "keep":
                 text = f"Kept blocked: {domain}."
@@ -74,6 +74,8 @@ class CallbackHandler:
                 return "ignored: unknown action"
         except ControlError as exc:
             text = self._err_text(action, exc)
+        if minimal() and domain != "?":
+            text = text.replace(domain, "the domain")
         if isinstance(chat_id, int) and isinstance(message_id, int):
             self.api.edit_alert(chat_id, message_id, text)
         append_label(
@@ -85,6 +87,10 @@ class CallbackHandler:
     def _details(self, event_id: str, event: dict) -> str:
         if not event:
             return f"event {event_id}: no details available"
+        if minimal():
+            return (f"event {event_id}\ndevice: {event.get('device', '?')}\nrule: {event.get('rule', '?')} "
+                    f"action: {event.get('action', '?')}\ntime: {event.get('time', '?')}\n"
+                    "privacy mode: domain, IP and scores are on the dashboard only")
         scores = event.get("scores") or {}
         score_s = ", ".join(f"{k}={v}" for k, v in scores.items())
         lines = [

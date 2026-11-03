@@ -66,20 +66,27 @@ For each query, in order. The first rule that returns wins.
    parent-domain match respects it. → `threat_feed`, high.
 2. **DoH lookup** (`DohDetector`): the name is a known DNS-over-HTTPS endpoint.
    → `doh_bypass`, warn.
-3. **Allowlist** (exact or parent). → allow, no event.
-4. **Internal names** (`is_internal`): single labels, `.local`, `.lan`, `.home.arpa`,
+3. **Abused service** (`detectors.abused_service`, `GhostState.first_service_use`): the
+   name is a service malware favours (Telegram bot API, Discord CDN, paste sites,
+   tunnels, file drops, raw GitHub, public-IP lookups, Tor gateways, workers.dev) and
+   this device, on the network for `service_baseline_days` (3) or more, has never used
+   it. Checked before the allowlist, because the starter list trusts `discordapp.com`
+   and `githubusercontent.com` as a whole; trusting the exact host silences it.
+   → `abused_service`, warn, once per device and service.
+4. **Allowlist** (exact or parent). → allow, no event.
+5. **Internal names** (`is_internal`): single labels, `.local`, `.lan`, `.home.arpa`,
    `.internal`, `.ts.net`, reverse lookups, `_service` records. → allow, never scored.
-5. **Blocklist** (confirmed blocks). → block (inline) or recommend (shadow).
-6. **Score** the registrable label and record novelty (`first_seen`).
-7. **Behaviour**: `TunnelDetector` (many distinct long high-entropy subdomains of one
+6. **Blocklist** (confirmed blocks). → block (inline) or recommend (shadow).
+7. **Score** the registrable label and record novelty (`first_seen`).
+8. **Behaviour**: `TunnelDetector` (many distinct long high-entropy subdomains of one
    apex in 10 minutes) and `BeaconDetector` (a name repeated on a near-constant
    interval, only if it scores ≥ 0.5 or uses a rare TLD, because apps poll on timers).
-8. **DGA burst** (`DgaBurst`): one device, ≥ 5 different names scoring ≥ 0.80 within
+9. **DGA burst** (`DgaBurst`): one device, ≥ 5 different names scoring ≥ 0.80 within
    10 minutes. This catches DGA malware even when each name is only moderately odd.
-9. **Single high score**: ≥ `block_threshold` (0.995) and new → `dga_high`; it blocks
+10. **Single high score**: ≥ `block_threshold` (0.995) and new → `dga_high`; it blocks
    only in inline mode with learning off. ≥ `recommend_threshold` (0.96) and new →
    `dga_suspect`.
-10. **Corroborated**: ≥ 0.80 on a rarely-legitimate TLD → `dga_corroborated`.
+11. **Corroborated**: ≥ 0.80 on a rarely-legitimate TLD → `dga_corroborated`.
 11. Otherwise allow.
 
 A score alone never blocks an established domain: blocking needs a new name (first
@@ -89,12 +96,22 @@ events are deduplicated per device, registrable domain and rule for 24 hours.
 ### Scoring (`tokenizer.py`, `scoring.py`)
 
 The score is the mean of two models over the registrable label (dots stripped, the
-same tokenizer as training):
+same tokenizer as training). The registrable label is the one left of the public
+suffix: `example` in `www.example.co.uk`. A small built-in suffix list covers common
+TLDs, country second levels such as `com.ua` or `gov.br`, and dynamic-DNS providers
+such as `ddns.net` or `duckdns.org`, whose hosts belong to different people: without
+them, `x7kq2v9w.ddns.net` would be scored as `ddns`. Hosting and CDN suffixes are left
+out on purpose (their host names are machine-made and would be flagged).
 
 - **TRM** (`ghostwall/models/trm_dga_v2.onnx`): a tiny recursive model, ~108k
   parameters, run with onnxruntime on the CPU.
 - **LR** (`lr_coef.npy`, `lr_meta.json`): hashed character 1–3-gram logistic
-  regression, reimplemented in numpy so the Pi needs no scikit-learn.
+  regression, reimplemented in numpy so the Pi needs no scikit-learn. The features
+  (`ngram.py`) are shared with the trainers; `lr_meta.json` can also select 1–5-grams
+  and start/end markers (`train_lr.py --v3`). On public data the 1–5-gram model catches
+  more than both shipped models and matches an Endgame-style LSTM
+  ([results_public.md](../agents/dga_eval/results_public.md)); it is not shipped until it
+  has been retrained and measured on DRIFT.
 
 If one model is missing the other is used; if both are, a lexical-entropy heuristic
 keeps the pipeline running.
@@ -199,8 +216,9 @@ captures only `src host <device>`.
 
 - **ghost-flow** reads the first packet of each new forwarded flow from NFQUEUE 100
   (`queue ... bypass`, so traffic flows if the daemon is down). It flags a connection
-  to a public IP that ghost-dns never resolved (`raw_ip`), regular call-home
-  intervals (`beacon`), and attaches a JA4 TLS fingerprint. It accepts every packet
+  to a public IP that ghost-dns never resolved (`raw_ip`; `doh_ip` when that IP is a
+  public DNS-over-HTTPS/TLS resolver on 443/853, i.e. DoH built into the device),
+  regular call-home intervals (`beacon`), and attaches a JA4 TLS fingerprint. It accepts every packet
   unless enforcement, learning-off and `--autoblock` are all set, and even then drops
   only confirmed beacons.
 - **capture** keeps a 5-minute per-device pcap ring in RAM and, on a high-severity
@@ -220,11 +238,18 @@ Both are tested on crafted and recorded traffic only.
 - `ghost-flow` never drops by default; its queue rule uses `bypass`.
 - Everything is reversible: `go_shadow.sh` returns DNS to AdGuard, and
   `ghostwall-breakglass` removes the nftables table and restores sysctl.
+- A flood of made-up names (any web page can make a browser send one) is capped at
+  `alert_rate_per_device` alerts a minute, and state changes it causes are written
+  at most once a minute, so it can't fill the disk or wear out an SD card.
+- `/opt/ghostwall` is owned by root, so the user who cloned the repository can't
+  change code that the services or `uninstall.sh` later run.
 - Inputs that reach the kernel or the filesystem are validated: IPs before `nft`,
   event ids before capture writes, callback buttons by HMAC with a constant-time check.
-- The control API and capture API have no authentication by design and listen on
-  loopback only. The control API also refuses non-JSON POSTs and non-loopback Host
-  headers, so a web page in a browser on the same machine can't drive it. The dashboard needs a password (HTTP Basic, constant-time compare) on
+- The control API and capture API listen on loopback only and refuse non-JSON POSTs
+  and non-loopback Host headers, so a web page in a browser on the same machine can't
+  drive them. Control API actions also need a token from a file only the `ghostwall`
+  user can read, so other local users and processes can't either; the capture API
+  runs at most four freezes at a time. The dashboard needs a password (HTTP Basic, constant-time compare) on
   any address but loopback and refuses to start without one; it accepts actions only
   as JSON from its own origin, and without a password it answers only IP or
   `localhost` Host headers, which stops DNS rebinding.

@@ -22,3 +22,18 @@ class ParseTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FeedSourceTests(unittest.TestCase):
+    def test_env_feeds_used_and_plain_http_refused(self):
+        import contextlib, io, tempfile
+        out = os.path.join(tempfile.mkdtemp(), "feed.txt")
+        os.environ["GHOSTWALL_FEEDS"] = "http://feeds.example/list.txt"
+        try:
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(U.main(["--out", out]), 1)
+            self.assertIn("only https://", err.getvalue())
+            self.assertFalse(os.path.exists(out))
+        finally:
+            del os.environ["GHOSTWALL_FEEDS"]

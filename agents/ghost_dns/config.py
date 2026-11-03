@@ -33,6 +33,10 @@ DEFAULTS = {
     "upstream_fallbacks": ["9.9.9.9"],
     "primary_retry_seconds": 10,    # skip a failed primary this long before retrying
     "event_dedupe_seconds": 86400,  # one alert per device per domain family per day
+    # ...except where a daily repeat is only noise: a phone with "Private DNS" or a browser
+    # with "secure DNS" on keeps using its DoH provider; say so once a month, not daily.
+    "rule_dedupe_seconds": {"doh_bypass": 30 * 86400},
+    "alert_rate_per_device": 30,    # alerts per device per minute at most (0 = no cap)
     "workers": 16,                  # concurrent in-flight queries
     "resolved_dedupe_seconds": 300,  # min gap before re-logging a resolved IP
     "block_response": "sinkhole",   # "sinkhole" or "nxdomain"
@@ -40,10 +44,16 @@ DEFAULTS = {
     "sinkhole_ip6": "::",
 
     # --- control API (docs/REFERENCE.md) ---
-    "control_host": "127.0.0.1",
+    "control_host": "127.0.0.1",    # loopback only; anything else is refused
     "control_port": 5380,
+    "control_token_path": None,     # None: control_token next to state.json; "" turns auth off
 
     # --- models / scoring ---
+    # "default": the shipped TRM + n-gram ensemble (measured on DRIFT).
+    # "v3-public": the 1-5-gram model trained on public data, alone (no onnxruntime, about
+    # 100 MB less RAM), with thresholds calibrated to the same false-positive rates;
+    # see agents/dga_eval/results_v3_public.md. Opt-in: never measured on DRIFT.
+    "models": "default",
     "onnx_model": os.path.join(ROOT, "ghostwall", "models", "trm_dga_v2.onnx"),
     "lr_coef": os.path.join(ROOT, "ghostwall", "models", "lr_coef.npy"),
     "lr_meta": os.path.join(ROOT, "ghostwall", "models", "lr_meta.json"),
@@ -65,6 +75,7 @@ DEFAULTS = {
     "burst_min_distinct": 5,          # ...and how many different ones from one device
     "tunnel_min_distinct": 30,        # distinct subdomains of one apex per 10 min
     "beacon_min_samples": 8,          # regular repeats of one name before alerting
+    "service_baseline_days": 3,       # abused_service: learn each device's normal services this long
     "beacon_min_dga": 0.5,            # ...and only if the name itself looks odd (apps poll on timers)
     "tunnel_min_long": 12,            # distinct 40+ char random subdomains of one apex per 10 min
     "threat_feed_path": os.path.join(HERE, "threat_feed.txt"),  # built by update_feed.py
@@ -84,6 +95,9 @@ DEFAULTS = {
     "events_path": os.path.join(HERE, "events.jsonl"),
     "query_log": None,         # inline mode: a text log of every query (your DNS server keeps one already)
     "devices_json": os.path.join(os.path.dirname(HERE), "netconf", "devices.json"),
+    # The kernel's neighbour table (netlink; IPv4 and IPv6): lets a device's name follow
+    # its MAC to a new address (devices.py). "" turns that off: names stay with addresses.
+    "neighbours_path": "/proc/net/arp",
     "allowlist_path": os.path.join(HERE, "allowlist.txt"),
     "resolved_ips_path": os.path.join(HERE, "resolved_ips.jsonl"),  # inline mode, read by ghost-flow
     "log_max_bytes": 16 * 2**20,  # query_log / resolved_ips_path start over (one .1 kept) past this
@@ -95,11 +109,37 @@ DEFAULTS = {
 }
 
 
+V3_PUBLIC = {
+    "onnx_model": None,
+    "lr_coef": os.path.join(ROOT, "ghostwall", "models", "lr_v3_public.npy"),
+    "lr_meta": os.path.join(ROOT, "ghostwall", "models", "lr_v3_public.json"),
+}
+
+
 def load_config(path: str | None = None, overrides: dict | None = None) -> dict:
     cfg = dict(DEFAULTS)
+    mine: set = set()   # keys the user set; a model preset never overrides those
     if path and os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
-            cfg.update(json.load(f))
+            user = json.load(f)
+        cfg.update(user)
+        mine |= set(user)
     if overrides:
-        cfg.update({k: v for k, v in overrides.items() if v is not None})
+        given = {k: v for k, v in overrides.items() if v is not None}
+        cfg.update(given)
+        mine |= set(given)
+    if cfg.get("models") == "v3-public":
+        for k, v in V3_PUBLIC.items():
+            if k not in mine:
+                cfg[k] = v
+        try:
+            with open(cfg["lr_meta"], encoding="utf-8") as f:
+                calibrated = json.load(f).get("thresholds", {})
+        except (OSError, ValueError):
+            calibrated = {}
+        for k, v in calibrated.items():
+            if k in DEFAULTS and k not in mine:
+                cfg[k] = float(v)
+    elif cfg.get("models") not in (None, "default"):
+        raise ValueError(f'models must be "default" or "v3-public", not {cfg.get("models")!r}')
     return cfg
