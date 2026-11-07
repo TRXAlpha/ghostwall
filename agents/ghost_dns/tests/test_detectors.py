@@ -165,6 +165,13 @@ class TunnelTests(unittest.TestCase):
         for i, host in enumerate(self.SERVICES):
             self.assertIsNone(t.observe("laptop", host, i, popular=True), host)
 
+    def test_popular_list_asked_only_when_it_matters(self):
+        asked = []
+        t = D.TunnelDetector(min_distinct=30)
+        for i, host in enumerate(self.SERVICES):
+            t.observe("laptop", host, i, popular=lambda: asked.append(1) or True)
+        self.assertEqual(len(asked), 1)   # only when the 30th name would have alerted
+
     def test_same_names_on_an_unknown_apex_still_flagged(self):
         t = D.TunnelDetector(min_distinct=30)
         hits = [t.observe("laptop", host, i) for i, host in enumerate(self.SERVICES)]

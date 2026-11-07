@@ -427,8 +427,9 @@ class TunnelDetector:
         self._seen: dict[tuple, deque] = defaultdict(deque)   # (dev, apex) -> (t, host, labellen, entropy)
         self._flagged: dict[tuple, float] = {}
 
-    def observe(self, device: str, host: str, now: float, popular: bool = False) -> Hit | None:
-        """popular: the apex is on the popular-domain list. A tunnel needs a zone its
+    def observe(self, device: str, host: str, now: float, popular=False) -> Hit | None:
+        """popular: the apex is on the popular-domain list (a bool, or a callable asked
+        only when the many-subdomains test would fire, so most queries never look it up). A tunnel needs a zone its
         operator runs, and a big site's own many word-based service names (one host
         per microservice) are long and distinct too, so there only the long random
         labels of real payload count."""
@@ -451,7 +452,9 @@ class TunnelDetector:
         n = len(distinct)
         avg = sum(l for _, _, l, _ in q) / len(q)
         long_hi = len({h for _, h, l, e in q if l >= self.long_label and e >= 3.2})   # DISTINCT long random hosts
-        many = n >= self.min_distinct and avg >= self.min_avg_label and not popular
+        many = n >= self.min_distinct and avg >= self.min_avg_label
+        if many and (popular() if callable(popular) else popular):
+            many = False
         exfil = long_hi >= self.min_long
         if not (many or exfil):
             return None
