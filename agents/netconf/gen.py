@@ -90,6 +90,31 @@ TEMPLATES = [
     ("health.sh.j2", "health.sh"),
 ]
 
+def doh_ips(path=HERE / "doh_ips.txt"):
+    """(IPv4, IPv6) resolver addresses from doh_ips.txt, de-duplicated, in file order.
+    Anything that doesn't parse as a single public address is refused: it would end up
+    inside a firewall rule."""
+    v4, v6 = [], []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        for tok in line.split("#", 1)[0].split():
+            try:
+                ip = ipaddress.ip_address(tok)
+            except ValueError as e:
+                raise GenError(f"doh_ips.txt: {tok!r} is not an IP address") from e
+            if not ip.is_global:
+                raise GenError(f"doh_ips.txt: {tok} is not a public address")
+            out = v4 if ip.version == 4 else v6
+            if str(ip) not in out:
+                out.append(str(ip))
+    if not v4 or not v6:
+        raise GenError("doh_ips.txt needs IPv4 and IPv6 resolver addresses")
+    return v4, v6
+
+
+def _elements(ips):
+    return ",\n".join(f"            {ip}" for ip in ips)
+
+
 def render(name, ctx):
     text = (HERE / "templates" / name).read_text(encoding="utf-8")
     for k, v in ctx.items():
@@ -108,6 +133,7 @@ def main(argv=None):
     lan_iface = str(cfg.get("lan_iface", "eth0"))
     if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", lan_iface):   # it ends up inside firewall rules
         raise SystemExit(f"lan_iface {lan_iface!r} is not an interface name")
+    v4, v6 = doh_ips()
     ctx = {
         "lan_iface": lan_iface,
         "pi_ip": cfg["pi_ip"],
@@ -117,6 +143,8 @@ def main(argv=None):
         "default_lease_time": cfg["default_lease_time"],
         "static_leases": static_leases,
         "lease_log_file": cfg["lease_log_file"],
+        "doh_ip4_elements": _elements(v4),
+        "doh_ip6_elements": _elements(v6),
     }
     if out_dir.exists():
         # Don't rmtree: on Windows the out/ dir may be open (explorer/cwd)

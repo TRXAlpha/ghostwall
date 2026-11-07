@@ -276,6 +276,16 @@ whole network; read it fully first, and keep the router's admin page open.
 4. On the router: disable its DHCP server and IPv6 router advertisements. Renew a
    client's lease and check it gets an address in your DHCP range with the Pi as
    gateway and DNS.
+
+   From then on every device's DNS goes through your filter: plain DNS (port 53) to any
+   server is answered by the Pi, DNS-over-TLS and DNS-over-QUIC (853) are dropped, and
+   DNS-over-HTTPS to the public resolvers in `agents/netconf/doh_ips.txt` (Cloudflare,
+   Google, Quad9, NextDNS, Mullvad, Control D, AdGuard and about a dozen more) is dropped,
+   so browsers and apps with DoH built in fall back to it. The list holds only addresses
+   dedicated to DNS: a resolver on a shared CDN address isn't in it, because blocking that
+   would break websites; DoH by name is stopped at DNS instead (the bypass list). The Pi
+   doesn't forward IPv6, so IPv6 can't get around it while the router's advertisements are
+   off. Re-run `gen.py` after updating the code to pick up a longer list.
 5. **ghost-flow:** `sudo apt install libnetfilter-queue-dev build-essential python3-dev`,
    `sudo /opt/ghostwall/.venv/bin/pip install --require-hashes -r /opt/ghostwall/requirements-gateway.lock`,
    `sudo install -m 640 -g ghostwall /opt/ghostwall/agents/ghost_flow/ghost_flow.example.json /etc/ghostwall/ghost_flow.json`,

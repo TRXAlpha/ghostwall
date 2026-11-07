@@ -72,6 +72,11 @@ in Docker, shadow mode) on 2026-11-07: [docs/FIELD_RESULTS.md](docs/FIELD_RESULT
 
 ### Changed
 
+- **Gateway mode blocks DoH to about 90 public resolver addresses** (91, was 19): one list,
+  `agents/netconf/doh_ips.txt`, for the firewall's `doh_ip4` / `doh_ip6` sets and
+  ghost-flow's `doh_ip` alert, which had drifted apart. Adds Cloudflare's security and
+  family resolvers, NextDNS, Mullvad, Control D, CIRA, dns0.eu, DNS.SB and more; only
+  addresses dedicated to DNS. Re-run `gen.py` to apply.
 - Privacy mode: the Trust reply no longer names a tunnel's or IoT alert's parent domain.
 - **`dns_beacon` skips popular sites.** All 3 `dns_beacon` alerts in the field test were
   false: a script polling a weather site every 15 min (2) and a course website polled
