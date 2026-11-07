@@ -26,8 +26,10 @@ import os
 import re
 import secrets
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from tokenizer import registrable_part
 
 # A hostname: dot-separated labels of letters, digits, '-' and '_' (some real names
 # have it), 253 characters at most. Anything else can't be a name worth trusting.
@@ -158,6 +160,7 @@ class ControlHandler(BaseHTTPRequestHandler):
             "/lockdown": self._lockdown,
             "/learning": lambda: self._learning(body),
             "/unblock": lambda: self._unblock(body),
+            "/relearn": lambda: self._relearn(body),
         }
         fn = routes.get(self.path)
         if fn is None:
@@ -199,6 +202,7 @@ class ControlHandler(BaseHTTPRequestHandler):
                 "isolated": g.is_isolated(d.name),
                 "last_seen": seen.get(ip),
                 "blocked_domains": blocked,
+                **self._iot_status(d),
             })
         named = {self._current_ip(d) for d in dmap.all()}
         # clients seen but not named yet (for `ghostwall devices` / `ghostwall name`)
@@ -210,6 +214,7 @@ class ControlHandler(BaseHTTPRequestHandler):
                "enforce": self.state["enforcer"].backend.name,
                # counters since start; "queries" rising proves queries are being scored
                "stats": dict(getattr(res, "stats", None) or {})}
+        out["iot_enforce"] = self.state["cfg"].get("iot_enforce", "off")
         scorer = getattr(res, "scorer", None)
         if scorer is not None:
             out["models"] = getattr(scorer, "backend", None)
@@ -228,6 +233,22 @@ class ControlHandler(BaseHTTPRequestHandler):
             out["clients"] = [{"ip": ip, "last_seen": t} for t, ip in clients]
         else:
             out["devices_hidden"] = True   # "send the token to see them", not "no devices"
+        return out
+
+    def _iot_status(self, d) -> dict:
+        """An IoT device's profile, how many domain families it has, and until when it learns."""
+        if str(d.profile).lower() != "iot":
+            return {}
+        g = self.state["gstate"]
+        out = {"profile": "iot", "iot_domains": g.iot_count(d.name), "iot_learning_until": None}
+        since = g.iot_since(d.name)
+        if since:
+            try:
+                start = datetime.strptime(since, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                days = float(self.state["cfg"].get("iot_learn_days", 7))
+                out["iot_learning_until"] = (start + timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            except ValueError:
+                pass
         return out
 
     def _device(self, body):
@@ -278,8 +299,29 @@ class ControlHandler(BaseHTTPRequestHandler):
             raise _ApiError(400, "need domain")
         if not DOMAIN_RE.match(domain):
             raise _ApiError(400, "not a domain name")
+        if str(body.get("device", "")).strip():
+            # Trust on an iot_new_domain alert: that device's set only, not the allowlist
+            d = self._iot_device(body)
+            reg = registrable_part(domain)
+            self.state["gstate"].iot_allow(d.name, reg)
+            return 200, {"ok": True, "domain": reg, "device": d.name, "allowed": True}
         self.state["gstate"].allow(domain)
         return 200, {"ok": True, "domain": domain, "allowed": True}
+
+    def _iot_device(self, body):
+        name = str(body.get("device", "")).strip()
+        d = self.state["devices"].device_for_name(name)
+        if d is None:
+            raise _ApiError(404, "unknown device")
+        if str(d.profile).lower() != "iot":
+            raise _ApiError(409, f'{d.name} is not marked "profile": "iot" in devices.json')
+        return d
+
+    def _relearn(self, body):
+        """Forget what an IoT device normally talks to: it learns again from its next lookup."""
+        d = self._iot_device({"device": body.get("name", "")})
+        self.state["gstate"].iot_relearn(d.name)
+        return 200, {"ok": True, "name": d.name, "relearning": True}
 
     def _trusted(self):
         return 200, {"ok": True, "domains": self.state["gstate"].trusted()}
@@ -289,6 +331,11 @@ class ControlHandler(BaseHTTPRequestHandler):
         if not DOMAIN_RE.match(domain):
             raise _ApiError(400, "not a domain name")
         g = self.state["gstate"]
+        if str(body.get("device", "")).strip():   # undo an "allow for this device"
+            d = self._iot_device(body)
+            if not g.iot_forget(d.name, domain):
+                raise _ApiError(404, f"{registrable_part(domain)} is not in what {d.name} normally talks to")
+            return 200, {"ok": True, "domain": registrable_part(domain), "device": d.name, "allowed": False}
         if domain in g.static_allow:
             raise _ApiError(409, f"{domain} is in the starter allowlist file (allowlist_path); remove it there")
         if not g.untrust(domain):

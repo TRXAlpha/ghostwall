@@ -17,6 +17,9 @@ docs/ARCHITECTURE.md):
   (a name whose registrable domain is on the popular list, Tranco top N, gets neither:
    its score alone raises nothing, nor does a timer on it (dns_beacon); the feed, tunnel
    and nx_burst rules still apply)
+  * a device marked "profile": "iot", after iot_learn_days, looking up a registrable
+    domain outside what it learned -> RECOMMEND, event rule=iot_new_domain (BLOCK with
+    iot_enforce "on", inline mode, learning off); only when no other rule alerted
   * everything else                -> ALLOW, no event
 """
 from __future__ import annotations
@@ -36,7 +39,7 @@ import sys
 
 import dnsmsg
 import events as events_mod
-from detectors import RARE_TLDS, Detectors, abused_service, is_internal, nx_countable, tld_of
+from detectors import RARE_TLDS, Detectors, abused_service, is_internal, iot_builtin_allowed, nx_countable, tld_of
 from tokenizer import registrable_part
 
 
@@ -147,8 +150,17 @@ class Resolver:
         if svc:
             return svc
 
+        # IoT default-deny (a device marked "profile": "iot"). Before the allowlist on
+        # purpose: the allowlist is network-wide (and its starter file trusts whole clouds),
+        # an IoT device's set is its own; Trust on its alert adds to that set. A refusal
+        # is final here. Otherwise the alert is raised only if no other rule below
+        # alerts on the same lookup: one lookup, one alert.
+        iot = self._iot_check(client_ip, dev, domain, rcode, upstream_blocked)
+        if iot is not None and iot["block"]:
+            return self._iot_alert(dev, domain, iot)
+
         if self.state.is_allowed(domain):
-            return Decision("allow", "allowlist")
+            return self._iot_alert(dev, domain, iot) or Decision("allow", "allowlist")
 
         if is_internal(domain):          # homepi, *.ts.net, *.local, _svc._tcp... not internet names
             return Decision("allow", "internal")
@@ -215,7 +227,7 @@ class Resolver:
         # nx_burst rules.
         if dga >= min(rec_thr, corr_thr) and self.det.popular.match(domain, now):
             self.stats["popular"] += 1
-            return behaviour or Decision("allow", "popular")
+            return behaviour or self._iot_alert(dev, domain, iot) or Decision("allow", "popular")
 
         if dga >= block_thr:
             can_block = (not self.state.learning) and is_new and not self.shadow
@@ -250,7 +262,7 @@ class Resolver:
                               reasons=reasons + [f"rarely-legitimate TLD .{tld_of(domain)}"])
             return Decision("recommend", "dga_corroborated", evt)
 
-        return behaviour or Decision("allow", "clean")
+        return behaviour or self._iot_alert(dev, domain, iot) or Decision("allow", "clean")
 
     def _device(self, client_ip: str):
         mac = self.neighbours.mac(client_ip) if self.neighbours is not None else None
@@ -312,6 +324,51 @@ class Resolver:
                                    "trust it if you know why this device started"])
         return Decision("recommend", "abused_service", evt)
 
+    def _iot_check(self, client_ip: str, dev, domain: str, rcode: str | None,
+                   upstream_blocked: bool) -> dict | None:
+        """iot_new_domain, the finding without its alert. A device marked "profile": "iot"
+        talks to a small, stable set of domains. During iot_learn_days from its first
+        lookup they are learned (hashed, in state.json); after that a registrable domain
+        outside the set is a finding, and with iot_enforce "on" a refusal (inline mode,
+        learning off; shadow mode answers nothing, so never). Callers have already let the
+        threat feed, DoH and abused-service rules speak: those names are never learned."""
+        if str(dev.profile).lower() != "iot" or client_ip == self.cfg.get("pi_ip"):
+            return None
+        if upstream_blocked or rcode == "NXDOMAIN":
+            return None    # no connection followed (your DNS server refused it, or no such name)
+        if is_internal(domain) or iot_builtin_allowed(domain) or abused_service(domain):
+            return None    # LAN names; clock sync; abused services keep their own rule
+        if self.state.is_blocked(domain):
+            return None    # the blocklist rule refuses it anyway; never learned either
+        days = float(self.cfg.get("iot_learn_days", 7))
+        if self.state.iot_observe(dev.name, domain, days) != "new":
+            return None
+        mode = str(self.cfg.get("iot_enforce", "off")).strip().lower()
+        block = mode == "on" and not self.shadow and not self.state.learning
+        reg = registrable_part(domain)
+        why = [f"{dev.name} normally talks to {self.state.iot_count(dev.name)} domains; {reg} is not one of them",
+               f"allow it for this device only: Trust, or sudo ghostwall allow {reg} --device {dev.name}"]
+        if mode == "on" and not block:
+            why.append("not blocked (" + ("shadow mode" if self.shadow else "learning mode") + ")")
+        elif mode == "dry-run":
+            why.append('iot_enforce is "dry-run": it would be refused')
+        return {"block": block, "would_block": mode in ("on", "dry-run") and not block,
+                "reasons": why, "trust": reg}
+
+    def _iot_alert(self, dev, domain: str, iot: dict | None):
+        """The Decision for an _iot_check() finding, alert included (None without one).
+        One alert per device and domain family (rule_dedupe_seconds); a refused name
+        is refused on every retry, its alert is not repeated."""
+        if iot is None:
+            return None
+        if iot["block"] and self._is_repeat(dev.name, domain, "iot_new_domain"):
+            self.stats["blocked"] += 1
+            return Decision("block", "iot_new_domain")
+        action = "block" if iot["block"] else "recommend"
+        evt = self._event(dev, domain, rule="iot_new_domain", action=action, severity="warn",
+                          reasons=iot["reasons"], trust=iot["trust"], would_block=iot["would_block"])
+        return Decision(action, "iot_new_domain", evt)
+
     def _emit_hit(self, dev, domain, hit) -> dict:
         # A tunnel uses a new subdomain for every query: trusting the one name in the
         # alert would never match the next, so Trust means the zone it goes to.
@@ -325,11 +382,11 @@ class Resolver:
         return None
 
     def _event(self, dev, domain, *, rule, action, severity, scores=None,
-               reasons=None, trust=None) -> dict:
+               reasons=None, trust=None, would_block=False) -> dict:
         evt = events_mod.make_event(
             device=dev.name, ip=dev.ip, mac=dev.mac, domain=domain,
             rule=rule, action=action, severity=severity, scores=scores,
-            reasons=reasons, trust=trust)
+            reasons=reasons, trust=trust, would_block=would_block)
         # Any web page can make a browser look up thousands of made-up names, so one
         # device's alerts are capped per minute (a block still happens; only its alert
         # is dropped). The flood itself still shows up as a dga_burst alert.

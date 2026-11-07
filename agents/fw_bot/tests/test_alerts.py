@@ -72,6 +72,12 @@ if __name__ == "__main__":
 
 
 class TrustButtonTests(unittest.TestCase):
+    def test_iot_alert_offers_allow_for_the_device_even_when_refused(self):
+        for action in ("recommend", "block"):
+            evt = {"event_id": "evt_1", "rule": "iot_new_domain", "action": action}
+            labels = [b["text"] for row in inline_keyboard(evt, b"k") for b in row]
+            self.assertEqual(labels, ["Allow for this device", "Isolate device", "Details"])
+
     def test_no_trust_button_for_phishing_feed_hits(self):
         evt = {"event_id": "evt_1", "rule": "threat_feed", "action": "recommend"}
         labels = [b["text"] for row in inline_keyboard(evt, b"k") for b in row]

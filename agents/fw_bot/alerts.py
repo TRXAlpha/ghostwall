@@ -19,6 +19,7 @@ RULE_WORDS = {
     "abused_service": "started using a service malware favours", "dns_tunnel": "possible data over DNS",
     "dns_beacon": "looked up on a fixed timer", "blocklist": "on your blocklist",
     "raw_ip": "connected to a raw IP", "doh_ip": "uses its own DNS-over-HTTPS", "beacon": "connects on a fixed timer",
+    "iot_new_domain": "IoT device looked up a domain it never used",
 }
 
 
@@ -91,6 +92,8 @@ def inline_keyboard(event: dict, secret: bytes) -> list[list[dict]]:
             "callback_data": make_callback(action, event["event_id"], secret),
         }
 
+    if event.get("rule") == "iot_new_domain":   # refused or not, the way out is allowing it for the device
+        return [[btn("Allow for this device", "trust"), btn("Isolate device", "isolate"), btn("Details", "details")]]
     if not is_block(event):
         # On the threat feed: trusting one takes a typed `ghostwall allow` (the alert
         # says so), not one tap on a phone. A burst is many different
