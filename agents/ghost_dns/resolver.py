@@ -93,19 +93,25 @@ class Resolver:
 
     # -- policy (pure, no I/O except event log + state + enforcer) --------
     def decide(self, client_ip: str, domain: str, qtype: str, upstream_blocked: bool = False,
-               rcode: str | None = None, nx_zone: str | None = None) -> Decision:
+               rcode: str | None = None, nx_zone: str | None = None,
+               when: float | None = None) -> Decision:
         """upstream_blocked: the DNS server (AdGuard) already refused this name, so no
         connection happened: a single random-looking score is then not worth an alert
         (most of those are ad and tracker junk). Bursts and every other rule still count.
 
         rcode: the answer's response code ("NOERROR", "NXDOMAIN", ...) when it is known
         (shadow mode, or inline mode scoring after the answer); None when not. nx_zone:
-        the SOA owner of an NXDOMAIN answer, if it carried one. Both feed nx_burst only."""
+        the SOA owner of an NXDOMAIN answer, if it carried one. Both feed nx_burst only.
+
+        when: the time the query was made, on self.clock()'s scale, when it is known and
+        differs from now (shadow mode reads queries in batches, after the fact). The
+        timing rules (tunnel, beacon, nx_burst, dga_burst) use it; None means now."""
         domain = domain.rstrip(".").lower()
         if not domain:
             return Decision("allow", "empty")
         dev = self._device(client_ip)
         now = self.clock()
+        t = now if when is None else when    # when the query happened, for timing rules
         if len(self.last_seen) > 10000:      # a LAN has far fewer clients; bound it anyway
             self.last_seen.clear()
         self.last_seen[client_ip] = events_mod.now_iso()
@@ -168,9 +174,9 @@ class Resolver:
         # also odd: it scores as random-looking, or sits on a rarely-legitimate TLD.
         behaviour = None
         with self.det.lock:
-            tun = self.det.tunnel.observe(dev.name, domain, now,
+            tun = self.det.tunnel.observe(dev.name, domain, t,
                                           popular=lambda: self.det.popular.match(domain, now))
-            bea = self.det.beacon.observe(dev.name, domain, now)
+            bea = self.det.beacon.observe(dev.name, domain, t)
         if bea and not (dga >= float(self.cfg.get("beacon_min_dga", 0.5)) or tld_of(domain) in RARE_TLDS):
             bea = None
         for hit in (tun, bea):
@@ -183,15 +189,15 @@ class Resolver:
         # One storm raises one alert: dga_burst wins when both fire. A popular site's
         # name (Tranco top N) never feeds dga_burst: a portal loading qq.com, gtimg.cn and
         # qpic.cn is not malware, and no public DGA name is on the list.
-        nx = None if upstream_blocked else self._nx_observe(dev, domain, rcode, nx_zone, now)
+        nx = None if upstream_blocked else self._nx_observe(dev, domain, rcode, nx_zone, t)
         burst_score = dga
         if dga >= self.det.burst.min_score and self.det.popular.match(domain, now):
             burst_score = 0.0
         with self.det.lock:
-            burst = self.det.burst.observe(dev.name, domain, burst_score, now)
+            burst = self.det.burst.observe(dev.name, domain, burst_score, t)
         if burst:
             return Decision("recommend", burst.rule, self._emit_hit(dev, domain, burst))
-        if nx and not self.det.burst.recently_flagged(dev.name, now):
+        if nx and not self.det.burst.recently_flagged(dev.name, t):
             return Decision("recommend", nx.rule, self._emit_hit(dev, domain, nx))
 
         block_thr = float(self.cfg["block_threshold"])

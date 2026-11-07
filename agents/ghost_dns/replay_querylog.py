@@ -31,10 +31,9 @@ from enforce import Enforcer, NullBackend
 from events import EventLog
 from resolver import Resolver
 from scoring import Scorer
-from shadow import detect_format, parse_adguard_entry, parse_pihole_line, pihole_blocked_host, pihole_reply
+from shadow import detect_format, parse_adguard_timed, parse_pihole_line, pihole_blocked_host, pihole_reply
 from state import GhostState
 
-_FRAC = re.compile(r"(\.\d{6})\d+")
 _SYSLOG_TS = re.compile(r"^([A-Z][a-z]{2})\s+(\d{1,2}) (\d\d:\d\d:\d\d)")
 
 
@@ -49,13 +48,6 @@ class MemoScorer:
         if r is None:
             r = self.cache[domain] = self.inner.score_one(domain)
         return r
-
-
-def parse_time(s: str) -> float | None:
-    try:
-        return datetime.fromisoformat(_FRAC.sub(r"\1", s.replace("Z", "+00:00"))).timestamp()
-    except (ValueError, TypeError):
-        return None
 
 
 def parse_syslog_time(line: str) -> float | None:
@@ -219,11 +211,11 @@ def run_replay(a, wd: str) -> int:
                     run(held.pop(0))
                 held.append(list(parsed) + [False, None, None, ts])
             else:
-                parsed = parse_adguard_entry(line)
-                if not parsed:
+                timed = parse_adguard_timed(line)
+                if not timed:
                     bad += 1
                     continue
-                ts = parse_time(json.loads(line).get("T", ""))
+                parsed, ts = timed
                 if ts is None:
                     continue
                 run(list(parsed) + [ts])

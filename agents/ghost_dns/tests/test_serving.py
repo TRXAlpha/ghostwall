@@ -465,5 +465,72 @@ class ShadowTests(Base):
         self.assertEqual(err.getvalue().count("querylog not found"), 1)
 
 
+def iso(ts):
+    """Unix time -> AdGuard's `T` form (nanoseconds, trailing zeros dropped, UTC)."""
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f").rstrip("0") + "Z"
+
+
+class QueryTimeTests(Base):
+    """AdGuard writes its log in batches, so the follower reads queries asked a minute
+    apart in one go. The timing rules must see when each query was asked."""
+
+    def setUp(self):
+        self.build(free_port(), free_port(), shadow=True)
+        self.log = os.path.join(self.dir, "querylog.json")
+        open(self.log, "w").close()
+        self.seen = []
+        real = self.r.det.beacon.observe
+        self.r.det.beacon.observe = lambda dev, host, t: (self.seen.append(t), real(dev, host, t))[1]
+
+    def _write(self, rows):
+        with open(self.log, "a", encoding="utf-8") as f:
+            f.writelines(json.dumps(r) + "\n" for r in rows)
+
+    def test_parse_time(self):
+        from shadow import parse_time
+        base = parse_time("2026-11-05T10:00:00Z")
+        self.assertEqual(base, 1793872800.0)
+        self.assertAlmostEqual(parse_time("2026-11-05T10:00:00.12345Z") - base, 0.12345, places=5)
+        self.assertAlmostEqual(parse_time("2026-11-05T12:00:00.123456789+02:00") - base, 0.123456, places=5)
+        self.assertAlmostEqual(parse_time("2026-11-05T10:00:00.5Z") - base, 0.5)
+        for bad in ("", None, "garbage", "2026-13-45T99:00:00Z"):
+            self.assertIsNone(parse_time(bad))
+
+    def test_batched_beacon_keeps_its_rhythm(self):
+        self.r.scorer = FakeScorer(0.7)
+        f = QueryLogFollower(self.r, self.log)
+        start = time.time() - 9 * 60
+        self._write({"T": iso(start + 60 * i), "IP": "127.0.0.1", "QH": "kq7vz3xw9pfj.example",
+                     "QT": "A"} for i in range(9))
+        self.assertEqual(f.poll_once(), 9)          # all nine read in one poll
+        gaps = [b - a for a, b in zip(self.seen, self.seen[1:])]
+        self.assertEqual(len(gaps), 8)
+        for g in gaps:
+            self.assertAlmostEqual(g, 60.0, delta=0.5)
+        self.assertIn("dns_beacon", [e.get("rule") for e in self.read_events()])
+
+    def test_never_in_the_future_never_backwards(self):
+        f = QueryLogFollower(self.r, self.log)
+        now = time.time()
+        self._write([{"T": iso(now - 30), "IP": "127.0.0.1", "QH": "a.example", "QT": "A"},
+                     {"T": iso(now - 40), "IP": "127.0.0.1", "QH": "b.example", "QT": "A"},   # out of order
+                     {"T": iso(now + 3600), "IP": "127.0.0.1", "QH": "c.example", "QT": "A"}])  # clock skew
+        before = self.r.clock()
+        f.poll_once()
+        after = self.r.clock()
+        self.assertAlmostEqual(self.seen[0], before - 30, delta=1.0)
+        self.assertEqual(self.seen[1], self.seen[0])
+        self.assertGreaterEqual(self.seen[2], before)
+        self.assertLessEqual(self.seen[2], after)
+
+    def test_no_time_means_now(self):
+        f = QueryLogFollower(self.r, self.log)
+        self._write([{"IP": "127.0.0.1", "QH": "a.example", "QT": "A"}])
+        before = self.r.clock()
+        f.poll_once()
+        self.assertGreaterEqual(self.seen[0], before)
+
+
 if __name__ == "__main__":
     unittest.main()

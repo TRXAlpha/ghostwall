@@ -89,7 +89,7 @@ the next 10 queries.
 | `doh_bypass`: two DoH providers | one alert each, or monthly dedupe | pass: 1 new, 1 deduped (seen the day before) | 2.0 s |
 | `dns_tunnel`: 35 random 45-character labels under one made-up domain | one alert | pass, at the 12th label | 0.6 s |
 | trust: `ghostwall allow` one new random name, then look up it and a control | alert for the control only | pass | 12 s |
-| `dns_beacon`: one made-up name every 31 s, 9 times | one alert | none seen within 4 min of the last lookup: inconclusive (31 s is at the detector's 30 s minimum, and the log buffer may not have flushed) | |
+| `dns_beacon`: one made-up name every 31 s, 9 times | one alert | **fail, a bug**: none live. AdGuard's batched log reached ghost-dns a batch at a time and the timing rules used the read time, so the lookups looked like retries. Replayed by their own query times, the same lookups raise `dns_beacon` (n=8, jitter 0.00). Fixed | |
 
 ## Resilience
 
@@ -110,5 +110,7 @@ All fixed in the same change ([CHANGELOG](../CHANGELOG.md), "Unreleased"):
 - the replay ignored `ghost_dns.json`, and on upgraded installs replayed with a stale feed
   and without the popular-domain guard; its alerts carried the replay's time;
 - `dns_tunnel` flagged a game launcher's service names;
+- in shadow mode on AdGuard Home the timing rules used the time a query was read, not
+  asked, so `dns_beacon` could not fire (AdGuard writes its log in batches);
 - `ghostwall status` timed out after the daily feed update (the request reloaded the lists);
 - `ghostwall version` named the wrong release; a harmless traceback in the journal.

@@ -54,6 +54,8 @@ AdGuard keeps `querylog.size_memory` queries in memory before writing them (1,00
 default), which delayed alerts by hours on a home network. The installer lowers it to
 10 (`ADGUARD_FLUSH_EVERY` in `ghostwall.env`; `0` leaves it alone), keeps a backup of
 `AdGuardHome.yaml` next to it, and restarts AdGuard once (a few seconds without DNS).
+The batching delays alerts but does not blur them: the timing rules (beacon, tunnel,
+bursts) use each query's own time from the log, not the time Ghostwall read it.
 
 **Pi-hole:** Ghostwall reads `/var/log/pihole/pihole.log`, which Pi-hole writes as
 queries happen, so there is no delay and nothing in Pi-hole is changed.

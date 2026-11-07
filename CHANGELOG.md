@@ -30,6 +30,16 @@ in Docker, shadow mode) on 2026-11-07: [docs/FIELD_RESULTS.md](docs/FIELD_RESULT
   popular list only the long random labels a tunnel's payload needs count now; any other
   domain is checked as before. On the field log: 27 alerts before, 23 after, the 4
   launcher alerts gone and nothing else changed.
+- **`dns_beacon` could never fire in shadow mode on AdGuard Home.** The timing rules used
+  the time ghost-dns *read* each query, and AdGuard writes its log in batches (10 queries
+  since the installer's change), so lookups asked a minute apart arrived together and the
+  beacon rule took them for retries. They now use each query's own time from the log
+  (`T`), so beacon, tunnel, `nx_burst` and `dga_burst` windows match what the devices
+  did. On the field network a live test (9 lookups, 31 s apart) raised nothing; the same
+  queries replayed by their own times raise `dns_beacon`. Pi-hole was not affected (it
+  writes each line as it happens). Expect the beacon alerts the replay already showed:
+  3 in 20 days on the field network, all scripts polling a site on a timer (trust them
+  with `ghostwall allow`).
 - `ghostwall version` named the wrong release: release tags are lightweight and the
   installer's `git describe` skipped them (v0.3.0-beta.2 showed as
   `v0.2.0-beta.1-86-g...`).

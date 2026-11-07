@@ -25,6 +25,7 @@ import re
 import sys
 import threading
 import time
+from datetime import datetime
 
 import dnsmsg
 
@@ -57,10 +58,31 @@ def adguard_rcode(j: dict, host: str, blocked: bool) -> tuple[str | None, str | 
     return rcode, (dnsmsg.negative_zone(msg) if rcode == "NXDOMAIN" else None)
 
 
+# AdGuard writes up to 9 fraction digits ("...:08.12345+02:00", trailing zeros dropped);
+# Python 3.10's fromisoformat wants exactly 3 or 6
+_FRAC = re.compile(r"\.(\d+)")
+
+
+def parse_time(s) -> float | None:
+    """An AdGuard `T` value (RFC 3339) -> Unix time, or None."""
+    try:
+        s = _FRAC.sub(lambda m: "." + (m[1] + "00000")[:6], str(s).replace("Z", "+00:00"), count=1)
+        return datetime.fromisoformat(s).timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
 def parse_adguard_entry(line: str):
     """AdGuard querylog line -> (client_ip, host, qtype, blocked_by_adguard, rcode, nx_zone)
     or None. AdGuard marks what it blocked with Result.IsFiltered (rewrites don't set it);
     rcode and nx_zone are None when unknown (see adguard_rcode)."""
+    e = parse_adguard_timed(line)
+    return e[0] if e else None
+
+
+def parse_adguard_timed(line: str):
+    """AdGuard querylog line -> (parse_adguard_entry's tuple, Unix time of the query or
+    None), or None. One JSON parse for both."""
     try:
         j = json.loads(line)
     except ValueError:
@@ -74,7 +96,8 @@ def parse_adguard_entry(line: str):
     res = j.get("Result")
     blocked = isinstance(res, dict) and res.get("IsFiltered") is True
     host = str(host).rstrip(".").lower()
-    return (str(ip), host, str(j.get("QT") or "A"), blocked) + adguard_rcode(j, host, blocked)
+    entry = (str(ip), host, str(j.get("QT") or "A"), blocked) + adguard_rcode(j, host, blocked)
+    return entry, parse_time(j.get("T"))
 
 
 def parse_adguard_line(line: str):
@@ -146,6 +169,10 @@ PARSERS = {"adguard": parse_adguard_line, "pihole": parse_pihole_line}
 # first two on later lines; it never logs the SOA)
 ENTRY_PARSERS = {"adguard": parse_adguard_entry,
                  "pihole": lambda line: (lambda p: p + (False, None, None) if p else None)(parse_pihole_line(line))}
+# the same, with the query's Unix time when the log has one (AdGuard). Pi-hole writes each
+# line as it happens, so the time it is read is the time it was asked.
+TIMED_PARSERS = {"adguard": parse_adguard_timed,
+                 "pihole": lambda line: (lambda p: (p, None) if p else None)(ENTRY_PARSERS["pihole"](line))}
 
 
 def detect_format(path: str) -> str:
@@ -172,7 +199,11 @@ class QueryLogFollower:
         self.fmt = detect_format(path) if fmt in (None, "", "auto") else fmt
         if self.fmt not in PARSERS:
             raise ValueError(f"querylog_format must be adguard, pihole or auto, not {fmt!r}")
-        self.parse = ENTRY_PARSERS[self.fmt]
+        self.parse = TIMED_PARSERS[self.fmt]
+        # AdGuard writes its log in batches (querylog.size_memory queries at a time), so
+        # on a quiet network queries asked a minute apart are read here together. The
+        # timing rules get each query's own time, mapped onto the resolver's clock.
+        self._last_when = None
         self.poll = poll_seconds
         # Pi-hole: queries waiting for their "blocked" or "reply" line, kept across polls
         # (the reply can land in the next one) for at most `hold` seconds.
@@ -280,7 +311,7 @@ class QueryLogFollower:
                 parsed = self.parse(line)
                 if not parsed:
                     continue
-                pending.append(list(parsed) + [time.monotonic()])
+                pending.append(list(parsed[0]) + [time.monotonic(), parsed[1]])
                 if self.fmt != "pihole" or len(pending) > 64:
                     done += self._decide(pending.pop(0))
         # Pi-hole writes a query and its block in one go, and its reply right after:
@@ -294,6 +325,17 @@ class QueryLogFollower:
         pending[:] = keep
         return done
 
+    def _when(self, asked: float | None) -> float | None:
+        """The query's time on the resolver's clock: now, minus how long ago it was asked
+        (never in the future, never before the previous query). None if unknown."""
+        if asked is None:
+            return None
+        when = self.resolver.clock() - max(0.0, time.time() - asked)
+        if self._last_when is not None and when < self._last_when:
+            when = self._last_when
+        self._last_when = when
+        return when
+
     def _decide(self, q) -> int:
         ip, host, qtype, blocked, rcode, zone = q[:6]
         if not self.said_anonymized and self.fmt == "adguard" and str(ip).endswith(".0") and str(ip).count(".") == 3:
@@ -306,6 +348,9 @@ class QueryLogFollower:
         try:
             # the rcode only when there is a real upstream answer to report
             extra = {"rcode": rcode, "nx_zone": zone} if rcode and not blocked else {}
+            when = self._when(q[7] if len(q) > 7 else None)
+            if when is not None:
+                extra["when"] = when
             self.resolver.decide(ip, host, qtype, upstream_blocked=blocked, **extra)
         except Exception as exc:  # noqa: BLE001 - never die on one bad line
             print(f"[ghost-dns:shadow] decide failed for {host}: {exc!r}", file=sys.stderr, flush=True)
