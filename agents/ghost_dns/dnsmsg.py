@@ -219,3 +219,55 @@ def negative_zone(packet: bytes) -> str | None:
     except Exception:  # noqa: BLE001 - parsing untrusted bytes, never crash
         return None
     return None
+
+
+# RFC 8914 Extended DNS Error codes a filtering resolver attaches to an answer it made up:
+# 15 Blocked, 16 Censored, 17 Filtered. Measured 2026-11-07 over DoH: Quad9 answers a
+# listed name NXDOMAIN with no SOA and EDE 17; Cloudflare 1.1.1.2 answers 0.0.0.0 (A) or
+# :: (AAAA) with EDE 16. A real NXDOMAIN from either carries the zone's SOA.
+FILTER_EDE_CODES = (15, 16, 17)
+
+
+def filtered_by_upstream(packet: bytes, no_soa_filters: bool = False) -> bool:
+    """True when a reply from the upstream resolver is a protective-DNS block, not an
+    answer about the name: an EDE option with code 15, 16 or 17; every address in the
+    answer being 0.0.0.0 or ::; or, only with `no_soa_filters` (the upstream is Quad9),
+    an NXDOMAIN with no SOA. Never raises."""
+    try:
+        if len(packet) < 12 or not struct.unpack(">H", packet[2:4])[0] & 0x8000:
+            return False
+        rc = struct.unpack(">H", packet[2:4])[0] & 0x0F
+        qd, an, ns, ar = struct.unpack(">HHHH", packet[4:12])
+        off = 12
+        for _ in range(qd):
+            _, off = _parse_name(packet, off)
+            off += 4
+        addrs: list[bytes] = []
+        ede = False
+        soa = False
+        for i in range(an + ns + ar):
+            _, off = _parse_name(packet, off)
+            if off + 10 > len(packet):
+                break
+            rtype, _c, _ttl, rdlen = struct.unpack(">HHIH", packet[off: off + 10])
+            off += 10
+            rdata = packet[off: off + rdlen]
+            off += rdlen
+            if i < an and rtype in (1, 28):
+                addrs.append(rdata)
+            elif an <= i < an + ns and rtype == 6:
+                soa = True
+            elif i >= an + ns and rtype == 41:
+                o = 0
+                while o + 4 <= len(rdata):
+                    code, ln = struct.unpack(">HH", rdata[o: o + 4])
+                    if code == 15 and ln >= 2 and struct.unpack(">H", rdata[o + 4: o + 6])[0] in FILTER_EDE_CODES:
+                        ede = True
+                    o += 4 + ln
+        if ede:
+            return True
+        if rc == 0 and addrs and all(not any(a) for a in addrs):
+            return True
+        return bool(no_soa_filters and rc == 3 and not an and not soa)
+    except Exception:  # noqa: BLE001 - parsing untrusted bytes, never crash
+        return False

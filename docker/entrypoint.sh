@@ -12,6 +12,10 @@
 #                              compose.yaml mounts it only into the adguard-tune service,
 #                              which runs this script as `entrypoint.sh tune-adguard`.
 #   ADGUARD_FLUSH_EVERY        the buffer size to set (default 10; 0 = leave AdGuard alone)
+#   DNS_BLOCK_FEED / DNS_BLOCK_ADS / DNS_BLOCK_BYPASS / DNS_BLOCK_CANARIES / DNS_PROTECTIVE_UPSTREAM,
+#   ADGUARD_URL / ADGUARD_USER / ADGUARD_PASSWORD, PIHOLE_URL / PIHOLE_PASSWORD
+#                              let AdGuard or Pi-hole block with the feed (all off by default; see
+#                              compose.yaml and "Block with your DNS server" in docs/OPERATIONS.md)
 set -euo pipefail
 cd /opt/ghostwall
 D=/data
@@ -96,6 +100,12 @@ import json, os, sys
 d, querylog, fmt = sys.argv[1:4]
 p = os.path.join(d, "ghost_dns.json")
 c = json.load(open(p)) if os.path.exists(p) else {"learning": True}
+for key, env in (("dns_block_feed", "DNS_BLOCK_FEED"), ("dns_block_ads", "DNS_BLOCK_ADS"),
+                 ("dns_block_bypass", "DNS_BLOCK_BYPASS"), ("dns_block_canaries", "DNS_BLOCK_CANARIES")):
+    if os.environ.get(env):
+        c[key] = os.environ[env].strip().lower()
+if os.environ.get("DNS_PROTECTIVE_UPSTREAM", "").strip().lower() in ("quad9", "cloudflare"):
+    c["protective_upstream"] = os.environ["DNS_PROTECTIVE_UPSTREAM"].strip().lower()
 c.update({"shadow": True, "querylog": querylog, "querylog_format": fmt, "enforce": "null",
           "control_host": "127.0.0.1", "query_log": None, "resolved_ips_path": None,
           "state_path": f"{d}/state.json", "events_path": f"{d}/events.jsonl",
@@ -111,6 +121,14 @@ PY
 if [ -d "$(dirname "$YAML")" ]; then
   ( while :; do tune_adguard; sleep 300; done ) &
 fi
+
+# DNS-server blocklists (agents/ghost_dns/dns_block.py): idle unless DNS_BLOCK_FEED, DNS_BLOCK_ADS or
+# DNS_BLOCK_BYPASS is set in compose.yaml. It is restarted, never fatal: a DNS-server API problem must not
+# stop Ghostwall. DNS_PROTECTIVE_UPSTREAM is applied once per change (and "off" puts the old one back).
+( cd agents/ghost_dns
+  export GHOSTWALL_CONFIG="$D/ghost_dns.json"
+  [ -n "${DNS_PROTECTIVE_UPSTREAM:-}" ] && { python dns_block.py upstream --config "$D/ghost_dns.json" || true; }
+  while :; do python dns_block.py run --config "$D/ghost_dns.json" || true; sleep 30; done ) &
 
 # Telegram alerts, once `ghostwall telegram` has written its two files here (it says to
 # restart the container then). A bad file is retried every 30 s, not a restart of everything.

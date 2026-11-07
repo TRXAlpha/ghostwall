@@ -48,6 +48,7 @@ class GhostState:
         self.allowlist: set[str] = set()
         self.static_allow: set[str] = set()   # from allowlist.txt: reloaded at start, not "yours"
         self.blocklist: set[str] = set()
+        self.dns_exceptions: set[str] = set()   # `ghostwall unblock`: names the DNS server must not block
         self.isolated: set[str] = set()
         self.lockdown: bool = False
         self.learning: bool = learning_default
@@ -129,6 +130,7 @@ class GhostState:
             return
         self.allowlist = set(d.get("allowlist", []))
         self.blocklist = set(d.get("blocklist", []))
+        self.dns_exceptions = set(d.get("dns_exceptions", []))
         self.isolated = set(d.get("isolated", []))
         self.lockdown = bool(d.get("lockdown", False))
         self.learning = bool(d.get("learning", self.learning))
@@ -161,6 +163,7 @@ class GhostState:
         data = {
             "allowlist": sorted(self.allowlist),
             "blocklist": sorted(self.blocklist),
+            "dns_exceptions": sorted(self.dns_exceptions),
             "isolated": sorted(self.isolated),
             "lockdown": self.lockdown,
             "learning": self.learning,
@@ -180,6 +183,26 @@ class GhostState:
         os.replace(tmp, self.path)
         self._dirty = False
         self._last_flush = time.monotonic()
+        self._write_dns_view()
+
+    def _write_dns_view(self) -> None:
+        """dns_view.json next to state.json: the small part of the state dns_block.py needs
+        (what you trusted, unblocked, and Ghostwall's own blocklist), so it never parses the
+        big file. Written only when it changed; a failure here never costs the state."""
+        view = json.dumps({"trusted": sorted(self.allowlist - self.static_allow),
+                           "exceptions": sorted(self.dns_exceptions),
+                           "blocked": sorted(self.blocklist),
+                           "starter": sorted(self.static_allow)}, sort_keys=True)
+        if view == getattr(self, "_last_view", None):
+            return
+        path = os.path.join(os.path.dirname(os.path.abspath(self.path)), "dns_view.json")
+        try:
+            with open(path + ".tmp", "w", encoding="utf-8") as f:
+                f.write(view)
+            os.replace(path + ".tmp", path)
+            self._last_view = view
+        except OSError:
+            pass
 
     def save(self) -> None:
         with self._lock:
@@ -362,6 +385,16 @@ class GhostState:
             self.blocklist.discard(domain)
             self.confirmations.pop(domain, None)
             self._save_locked()
+
+    def set_dns_exception(self, domain: str, on: bool = True) -> bool:
+        """Add (or, with on=False, remove) a name the DNS server's blocklists must let
+        through. True if that changed anything."""
+        with self._lock:
+            if (domain in self.dns_exceptions) == on:
+                return False
+            (self.dns_exceptions.add if on else self.dns_exceptions.discard)(domain)
+            self._save_locked()
+            return True
 
     def set_learning(self, enabled: bool) -> None:
         with self._lock:

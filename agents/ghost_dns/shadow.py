@@ -36,11 +36,12 @@ import dnsmsg
 _ADGUARD_UPSTREAM_REASONS = (None, 0, 1, 2)
 
 
-def adguard_rcode(j: dict, host: str, blocked: bool) -> tuple[str | None, str | None]:
+def adguard_rcode(j: dict, host: str, blocked: bool, no_soa_filters: bool = False) -> tuple[str | None, str | None]:
     """(rcode, SOA zone of a negative answer) from an AdGuard entry's `Answer` (base64 of
     the reply message). (None, None) when unknown: no Answer, garbled, a reply to some
     other name, or an answer AdGuard made itself (a block in "NXDOMAIN" blocking mode
-    must never count as an unregistered domain)."""
+    must never count as an unregistered domain). ("FILTERED", None) when the upstream
+    resolver (Quad9, Cloudflare security) blocked the name itself: dnsmsg.filtered_by_upstream."""
     res = j.get("Result")
     if blocked or (isinstance(res, dict) and res.get("Reason") not in _ADGUARD_UPSTREAM_REASONS):
         return None, None
@@ -55,6 +56,8 @@ def adguard_rcode(j: dict, host: str, blocked: bool) -> tuple[str | None, str | 
     rcode = dnsmsg.reply_status(msg)
     if q is None or rcode is None or q.name != host:
         return None, None
+    if dnsmsg.filtered_by_upstream(msg, no_soa_filters):
+        return "FILTERED", None
     return rcode, (dnsmsg.negative_zone(msg) if rcode == "NXDOMAIN" else None)
 
 
@@ -72,15 +75,15 @@ def parse_time(s) -> float | None:
         return None
 
 
-def parse_adguard_entry(line: str):
+def parse_adguard_entry(line: str, no_soa_filters: bool = False):
     """AdGuard querylog line -> (client_ip, host, qtype, blocked_by_adguard, rcode, nx_zone)
     or None. AdGuard marks what it blocked with Result.IsFiltered (rewrites don't set it);
     rcode and nx_zone are None when unknown (see adguard_rcode)."""
-    e = parse_adguard_timed(line)
+    e = parse_adguard_timed(line, no_soa_filters)
     return e[0] if e else None
 
 
-def parse_adguard_timed(line: str):
+def parse_adguard_timed(line: str, no_soa_filters: bool = False):
     """AdGuard querylog line -> (parse_adguard_entry's tuple, Unix time of the query or
     None), or None. One JSON parse for both."""
     try:
@@ -96,7 +99,7 @@ def parse_adguard_timed(line: str):
     res = j.get("Result")
     blocked = isinstance(res, dict) and res.get("IsFiltered") is True
     host = str(host).rstrip(".").lower()
-    entry = (str(ip), host, str(j.get("QT") or "A"), blocked) + adguard_rcode(j, host, blocked)
+    entry = (str(ip), host, str(j.get("QT") or "A"), blocked) + adguard_rcode(j, host, blocked, no_soa_filters)
     return entry, parse_time(j.get("T"))
 
 
@@ -151,7 +154,9 @@ def pihole_reply(line: str) -> tuple[str, str] | None:
     if not m:
         return None
     what = m["what"]
-    if what == "NXDOMAIN":
+    if what in ("0.0.0.0", "::"):
+        rcode = "FILTERED"   # a protective upstream's block (Pi-hole's own are logged as blocked)
+    elif what == "NXDOMAIN":
         rcode = "NXDOMAIN"
     elif what in ("SERVFAIL", "REFUSED"):
         rcode = what
@@ -200,6 +205,10 @@ class QueryLogFollower:
         if self.fmt not in PARSERS:
             raise ValueError(f"querylog_format must be adguard, pihole or auto, not {fmt!r}")
         self.parse = TIMED_PARSERS[self.fmt]
+        if self.fmt == "adguard":
+            # Quad9 answers a blocked name NXDOMAIN with no SOA (genuine NXDOMAINs have one)
+            no_soa = str(getattr(resolver, "cfg", {}).get("protective_upstream") or "").lower() == "quad9"
+            self.parse = lambda line: parse_adguard_timed(line, no_soa)
         # AdGuard writes its log in batches (querylog.size_memory queries at a time), so
         # on a quiet network queries asked a minute apart are read here together. The
         # timing rules get each query's own time, mapped onto the resolver's clock.

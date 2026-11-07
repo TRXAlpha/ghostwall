@@ -82,7 +82,8 @@ jobs:
     # The real servers, not test fixtures: each logs real answers from a real upstream, and
     # Ghostwall must read their answer codes, ignore what the server blocked itself (here
     # answered NXDOMAIN, the hard case), and raise exactly one nx_burst for a storm of
-    # made-up domains (tests/realdns_e2e.py).
+    # made-up domains (tests/realdns_e2e.py). It also checks dns_block_feed: on against them: the
+    # feed reaches the real server's API, a listed name is refused, a Trusted one is not.
     name: real ${{ matrix.server }} logs (nx_burst end to end)
     runs-on: ubuntu-24.04
     strategy:
@@ -99,7 +100,7 @@ jobs:
         if: matrix.server == 'adguard'
         run: |
           mkdir -p ag/work ag/conf
-          docker run -d --name dns -p 127.0.0.1:5354:53/udp -p 127.0.0.1:3000:3000 \
+          docker run -d --name dns --add-host host.docker.internal:host-gateway -p 127.0.0.1:5354:53/udp -p 127.0.0.1:3000:3000 \
             -v "$PWD/ag/work:/opt/adguardhome/work" -v "$PWD/ag/conf:/opt/adguardhome/conf" \
             "$(sed -n 's/^ *image: \(adguard\/adguardhome:.*\)$/\1/p' compose.yaml)"
           for i in $(seq 60); do curl -sf http://127.0.0.1:3000/control/install/get_addresses >/dev/null && break; sleep 1; done
@@ -114,13 +115,23 @@ jobs:
         if: matrix.server == 'pihole'
         run: |
           mkdir -p phlog
-          docker run -d --name dns -p 127.0.0.1:5354:53/udp -e TZ=UTC \
+          docker run -d --name dns --add-host host.docker.internal:host-gateway -p 127.0.0.1:5354:53/udp \
+            -p 127.0.0.1:8081:80/tcp -e TZ=UTC \
             -e FTLCONF_dns_upstreams='9.9.9.9;1.1.1.1' -e FTLCONF_dns_listeningMode=all \
             -e FTLCONF_dns_blocking_mode=NXDOMAIN -e FTLCONF_webserver_api_password=ci-password-0123 \
             -v "$PWD/phlog:/var/log/pihole" \
             pihole/pihole:2026.10.0@sha256:d34134716fc32038b052a8674c7c6879e0ff21f0e6d8af345166fffa2c27c113
           for i in $(seq 90); do docker exec dns pihole status 2>/dev/null | grep -qi "listening\|enabled" && break; sleep 1; done
           docker exec dns pihole deny blockedtest-ghostwall.example
+      - name: block with the feed (dns_block_feed on) - the real server refuses a listed name, not a Trusted one
+        run: |
+          if [ "${{ matrix.server }}" = adguard ]; then
+            API=http://127.0.0.1:3000; USER=ci
+          else
+            API=http://127.0.0.1:8081; USER=
+            for i in $(seq 60); do curl -sf "$API/api/info/login" >/dev/null && break; sleep 1; done
+          fi
+          python tests/realdns_e2e.py block --server ${{ matrix.server }} --port 5354 --api "$API" --user "$USER" --password ci-password-0123
       - run: python tests/realdns_e2e.py query --port 5354
       - name: check what Ghostwall reads from the real log
         run: |

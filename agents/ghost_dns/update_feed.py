@@ -5,7 +5,10 @@
                           [--popular-top 100000] [--cache-top 1000000] [--tranco-id ID]
 
 Default sources: URLhaus (malware download hosts), Phishing Army (phishing) and
-HaGeZi's Threat Intelligence Feeds, mini version (malware, C2, phishing, scams). On
+HaGeZi's Threat Intelligence Feeds, mini version (malware, C2, phishing, scams). With
+DNS_BLOCK_FEED=on or dry-run (the DNS server blocks with this feed) the set grows:
+HaGeZi TIF medium on a machine with about 2 GB of RAM or more, CERT Polska, OpenPhish
+and, with a free abuse.ch key in THREATFOX_URL, ThreatFox (see feed_sources()). On
 2026-11-07 that was 267,422 domains, 3.3 MiB in the resolver (sorted hashes) and a 150 MB
 peak in this short-lived process, which also streams the Tranco top 1M to disk (64-bit, agents/dga_eval/results_feeds.md). Multi-million lists
 are deliberately not the default: they would cost hundreds of MB on a Raspberry Pi.
@@ -57,7 +60,10 @@ _IPV4 = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
 class Source:
     name: str      # shown in alerts: "on URLhaus (malware)"
     kind: str
-    url: str
+    url: str       # also the source's id in the feed file
+    fmt: str = "domains"      # "urls": one full URL per line (OpenPhish); the host is kept
+    secret_url: str = ""      # fetched instead of `url` when set: it carries a key, so it is
+                              # never printed or written to the feed file
 
     @property
     def label(self) -> str:
@@ -74,6 +80,65 @@ DEFAULT_SOURCES = (
            "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/tif.mini-onlydomains.txt"),
 )
 DEFAULT_FEEDS = [s.url for s in DEFAULT_SOURCES]
+
+# The expanded set (research: agents/dga_eval/results_dns_block.md). Used when the DNS
+# server blocks with the feed (DNS_BLOCK_FEED=on or dry-run), see feed_sources().
+TIF_MINI = DEFAULT_SOURCES[2]
+TIF_MEDIUM = Source("HaGeZi TIF", "malware, C2, phishing",   # GPL-3.0; downloaded, never redistributed
+                    "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/tif.medium-onlydomains.txt")
+EXTRA_SOURCES = (
+    # CERT Polska warning list: "may be used by any user for any purpose, including commercial",
+    # no attribution required (https://cert.pl/en/warning-list/). Active domains only.
+    Source("CERT Polska", "phishing, malware", "https://hole.cert.pl/domains/v2/domains.txt"),
+    # OpenPhish community feed: free for non-commercial use (a home network), full URLs,
+    # about 300 of them, refreshed every 12 hours.
+    Source("OpenPhish", "phishing", "https://openphish.com/feed.txt", fmt="urls"),
+)
+# abuse.ch ThreatFox needs a free Auth-Key since 2025 (its keyless hostfile URLs answer
+# 410 Gone). With THREATFOX_URL in ghostwall.env (the hostfile URL the abuse.ch portal
+# shows you, key included) it joins the set; the key stays out of logs and the feed file.
+THREATFOX_ID = "threatfox:hostfile"
+MEDIUM_MIN_RAM_KB = 1_500_000    # a "2 GB" Pi reports about 1.8 million kB; a "1 GB" one 0.9 million
+
+
+def total_ram_kb(meminfo: str = "/proc/meminfo") -> int:
+    try:
+        with open(meminfo, encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0
+
+
+def feed_sources(env=None, ram_kb: int | None = None) -> tuple[Source, ...]:
+    """The sources to download. GHOSTWALL_FEED_SET: "standard" (URLhaus, Phishing Army,
+    HaGeZi TIF mini: what versions before 0.4 downloaded), "extended" (TIF medium on a
+    machine with about 2 GB or more, else mini; CERT Polska; OpenPhish; ThreatFox if
+    THREATFOX_URL is set), or "auto" (the default): extended when the DNS server blocks
+    with the feed (DNS_BLOCK_FEED is on or dry-run), else standard. So an upgrade
+    changes nothing until you choose blocking. GHOSTWALL_TIF=mini|medium overrides the
+    RAM choice."""
+    env = os.environ if env is None else env
+    mode = (env.get("GHOSTWALL_FEED_SET") or "auto").strip().lower()
+    if mode not in ("standard", "extended", "auto"):
+        print(f"[feed] GHOSTWALL_FEED_SET={mode!r} is not standard, extended or auto; using auto", file=sys.stderr)
+        mode = "auto"
+    if mode == "auto":
+        mode = "extended" if (env.get("DNS_BLOCK_FEED") or "off").strip().lower() in ("on", "dry-run") else "standard"
+    if mode == "standard":
+        return DEFAULT_SOURCES
+    tif = (env.get("GHOSTWALL_TIF") or "").strip().lower()
+    if tif not in ("mini", "medium"):
+        tif = "medium" if (total_ram_kb() if ram_kb is None else ram_kb) >= MEDIUM_MIN_RAM_KB else "mini"
+    out = list(DEFAULT_SOURCES[:2]) + [TIF_MEDIUM if tif == "medium" else TIF_MINI] + list(EXTRA_SOURCES)
+    tf = (env.get("THREATFOX_URL") or "").strip()
+    if tf and not tf.startswith("https://"):
+        print("[feed] THREATFOX_URL must be an https:// URL; leaving ThreatFox out", file=sys.stderr)
+    elif tf:
+        out.append(Source("ThreatFox", "malware, C2", THREATFOX_ID, secret_url=tf))
+    return tuple(out)
 
 TRANCO_ID_URL = "https://tranco-list.eu/top-1m-id"
 TRANCO_LIST_URL = "https://tranco-list.eu/download/{id}/{n}"
@@ -124,17 +189,35 @@ def parse_domains(text: str) -> set[str]:
     return out
 
 
+def parse_url_hosts(text: str) -> set[str]:
+    """Hostnames of a list of full URLs (OpenPhish): `http://www.evil.example/login` ->
+    `www.evil.example`. Raw IP hosts, ports and userinfo are dealt with; junk is skipped."""
+    out = set()
+    for raw in io.StringIO(text):
+        line = raw.strip().lower()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            host = urllib.parse.urlsplit(line if "//" in line else "//" + line).hostname or ""
+        except ValueError:
+            continue
+        host = host.rstrip(".")
+        if "." in host and not _IPV4.match(host) and _HOST.match(host):
+            out.add(host)
+    return out
+
+
 def fetch(url: str, timeout: float = 90.0) -> str:
     req = urllib.request.Request(url, headers={"User-Agent": "ghostwall-feed/1.0"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         data = resp.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES:
-        raise ValueError(f"{url}: feed larger than {MAX_BYTES // (1024 * 1024)} MB, refusing")
+        raise ValueError(f"feed larger than {MAX_BYTES // (1024 * 1024)} MB, refusing")
     return data.decode("utf-8", "replace")
 
 
-def source_for(url: str) -> Source:
-    for s in DEFAULT_SOURCES:
+def source_for(url: str, known=()) -> Source:
+    for s in tuple(known) + DEFAULT_SOURCES + (TIF_MEDIUM,) + EXTRA_SOURCES:
         if s.url == url:
             return s
     return Source(urllib.parse.urlsplit(url).hostname or url, "", url)
@@ -331,9 +414,10 @@ def main(argv=None) -> int:
                     help="pin a Tranco list id instead of the latest")
     args = ap.parse_args(argv)
 
-    urls = args.feed or os.environ.get("GHOSTWALL_FEEDS", "").split() or DEFAULT_FEEDS
+    chosen = feed_sources()
+    urls = args.feed or os.environ.get("GHOSTWALL_FEEDS", "").split() or [s.url for s in chosen]
     for url in urls:
-        if not url.startswith("https://"):
+        if not (url.startswith("https://") or source_for(url, chosen).secret_url.startswith("https://")):
             print(f"[feed] refusing {url}: only https:// feeds (a list fetched in clear text could be swapped)",
                   file=sys.stderr)
             return 1
@@ -356,10 +440,12 @@ def main(argv=None) -> int:
     failed = fresh = 0
     dropped_total: set[str] = set()
     for url in urls:
-        src = source_for(url)
+        src = source_for(url, chosen)
         prev = previous.get(url)          # (fetched, count, domains not loaded yet)
         try:
-            got = parse_domains(fetch(url))
+            text = fetch(src.secret_url or url)
+            got = parse_url_hosts(text) if src.fmt == "urls" else parse_domains(text)
+            del text
             if not got:
                 raise ValueError("no domains in it")
             # A sudden shrink looks like a broken download, but only while the old copy
@@ -370,6 +456,7 @@ def main(argv=None) -> int:
             fresh += 1
         except Exception as exc:  # noqa: BLE001
             failed += 1
+            exc = str(exc).replace(src.secret_url, "<key>") if src.secret_url else exc
             if prev and prev[1] and _age_days(prev[0]) <= MAX_CARRY_DAYS:
                 print(f"[feed] FAILED {url}: {exc}; keeping its {prev[1]} domains from {prev[0]}",
                       file=sys.stderr)

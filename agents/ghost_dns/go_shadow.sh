@@ -15,7 +15,9 @@
 # kept them in /opt/ghostwall/agents/ghost_dns; they are moved on the first run.
 set -euo pipefail
 
+set -a   # exported, so dns_block.py (below) sees DNS_BLOCK_* and the DNS server's login
 [ -f /etc/ghostwall/ghostwall.env ] && . /etc/ghostwall/ghostwall.env
+set +a
 SOURCE=${DNS_SOURCE:-adguard}
 YAML=${ADGUARD_YAML:-/opt/AdGuardHome/AdGuardHome.yaml}
 RESTART=${ADGUARD_RESTART:-systemctl restart AdGuardHome}
@@ -142,6 +144,16 @@ for key, new in (("state_path", f"{data}/state.json"), ("events_path", f"{data}/
         c[key] = new
 if str(c.get("query_log") or "").startswith(old):
     c["query_log"] = None   # old inline-mode copy of every query; the DNS server keeps its own
+# DNS-server blocking (dns_block.py): copied from ghostwall.env when set there, otherwise
+# whatever the config already says (default off). Nothing here changes a DNS upstream.
+import os
+for key, env in (("dns_block_feed", "DNS_BLOCK_FEED"), ("dns_block_ads", "DNS_BLOCK_ADS"),
+                 ("dns_block_bypass", "DNS_BLOCK_BYPASS"), ("dns_block_canaries", "DNS_BLOCK_CANARIES")):
+    if os.environ.get(env):
+        c[key] = os.environ[env].strip().lower()
+up = os.environ.get("DNS_PROTECTIVE_UPSTREAM", "").strip().lower()
+if up in ("quad9", "cloudflare"):
+    c["protective_upstream"] = up
 json.dump(c, open(p, "w"), indent=2)
 print(f"   shadow=true, learning=true, enforce=null, source={fmt}")
 PYEOF
@@ -167,4 +179,20 @@ PYEOF
 done
 echo "   control API reports: $state"
 [ "$state" = "shadow" ] || { echo "FAIL: ghost-dns is not in shadow mode (journalctl -u ghostwall-dns)" >&2; exit 1; }
+echo "5) DNS-server blocklists and protective upstream (only if you asked for them in ghostwall.env)"
+# Idle unless DNS_BLOCK_FEED / DNS_BLOCK_ADS / DNS_BLOCK_BYPASS is set. Never fatal: Ghostwall keeps
+# watching whatever the DNS server's API says. The upstream changes only when DNS_PROTECTIVE_UPSTREAM
+# says so (and "off" puts back what Ghostwall changed).
+if [ -f /etc/systemd/system/ghostwall-dnsblock.service ]; then
+  systemctl enable ghostwall-dnsblock >/dev/null 2>&1 || true
+  systemctl restart ghostwall-dnsblock || echo "   WARNING: ghostwall-dnsblock did not start (journalctl -u ghostwall-dnsblock)" >&2
+  case "${DNS_BLOCK_FEED:-off}/${DNS_BLOCK_ADS:-off}/${DNS_BLOCK_BYPASS:-off}" in
+    off/off/off) echo "   blocking with your DNS server is off (DNS_BLOCK_FEED=dry-run shows what it would do first)" ;;
+    *) echo "   feed=${DNS_BLOCK_FEED:-off} ads=${DNS_BLOCK_ADS:-off} bypass=${DNS_BLOCK_BYPASS:-off}: sudo ghostwall blocking" ;;
+  esac
+  if [ -n "${DNS_PROTECTIVE_UPSTREAM:-}" ]; then
+    (cd /opt/ghostwall/agents/ghost_dns && "$PY" dns_block.py upstream --config "$CFG") \
+      || echo "   WARNING: could not set the upstream (see above); nothing was changed" >&2
+  fi
+fi
 echo "DONE: $NAME serves DNS; Ghostwall is watching from the side."

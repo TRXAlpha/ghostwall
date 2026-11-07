@@ -7,7 +7,9 @@
     ghostwall name IP NAME           name a device, so alerts say "laptop" instead of an address
     ghostwall allow DOMAIN           trust a domain network-wide (no more alerts for it)
     ghostwall trusted                what you have trusted;  ghostwall untrust DOMAIN  undoes one
-    ghostwall unblock DOMAIN         take a domain off the blocklist (inline mode)
+    ghostwall unblock DOMAIN         let a domain through: off Ghostwall's blocklist (inline mode) and an
+                                     exception in the blocklists your DNS server uses (--undo takes it back)
+    ghostwall blocking               what the DNS-server blocklists hold and whether they are registered
     ghostwall learning on|off        alerts only (on) or allow blocking (off, inline mode)
     ghostwall password               the dashboard password
     ghostwall version                what is installed
@@ -275,8 +277,42 @@ def cmd_untrust(a) -> int:
 
 
 def cmd_unblock(a) -> int:
+    if a.undo:
+        r = control("/unblock", {"domain": _domain(a.domain), "undo": True})
+        print(f"{r.get('domain')} can be blocked by your DNS server's blocklists again "
+              "(within a minute or two).")
+        return 0
     r = control("/unblock", {"domain": _domain(a.domain)})
-    print(f"Unblocked {r.get('domain')}.")
+    print(f"Unblocked {r.get('domain')}: an exception for it and its subdomains is added to the "
+          "blocklists in your DNS server (if Ghostwall blocks there) within a minute or two.")
+    return 0
+
+
+def cmd_blocking(_a) -> int:
+    """The report dns_block.py keeps: mode, list sizes, whether the DNS server has it."""
+    path = os.path.join(DATA, "dns_block_report.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            rep = json.load(f)
+    except FileNotFoundError:
+        print("DNS-server blocking is off (dns_block_feed: off, dns_block_ads: off). "
+              "See 'Block with your DNS server' in docs/OPERATIONS.md.")
+        return 0
+    except (OSError, ValueError) as e:
+        raise CliError(f"can't read {path} ({e}); run this with sudo")
+    print(f"feed: {rep.get('mode_feed')}   ads: {rep.get('mode_ads')}   DNS server: {rep.get('server')}   "
+          f"updated {_ago(rep.get('time'))}")
+    print(f"blocklist: {rep.get('names', 0)} names, {rep.get('exceptions', 0)} exceptions "
+          f"(trusted or unblocked), registered: {'yes' if rep.get('registered') else 'no'}")
+    for src, n in sorted((rep.get("sources") or {}).items()):
+        print(f"  {n:>8}  {src}")
+    if rep.get("mode_feed") == "dry-run":
+        print("dry-run: nothing is registered. Switch on with DNS_BLOCK_FEED=on in /etc/ghostwall/ghostwall.env, "
+              "then sudo systemctl restart ghostwall-dnsblock")
+    if rep.get("hits_week") is not None:
+        print(f"names your devices asked for in the last 7 days that are on it: {rep['hits_week']}")
+    if rep.get("warning"):
+        print(f"WARNING: {rep['warning']}")
     return 0
 
 
@@ -553,9 +589,11 @@ def main(argv=None) -> int:
     p = sub.add_parser("untrust", help="undo a trust")
     p.add_argument("domain")
     p.set_defaults(fn=cmd_untrust)
-    p = sub.add_parser("unblock", help="take a domain off the blocklist")
+    p = sub.add_parser("unblock", help="let a domain through (also in your DNS server's blocklists)")
     p.add_argument("domain")
+    p.add_argument("--undo", action="store_true", help="let the DNS server block it again")
     p.set_defaults(fn=cmd_unblock)
+    sub.add_parser("blocking", help="DNS-server blocklists: sizes and whether they are in use").set_defaults(fn=cmd_blocking)
     p = sub.add_parser("learning", help="alerts only (on) or allow blocking (off)")
     p.add_argument("state", choices=["on", "off"])
     p.set_defaults(fn=cmd_learning)

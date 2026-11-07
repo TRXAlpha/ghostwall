@@ -192,6 +192,12 @@ class ControlApiTests(unittest.TestCase):
         self.assertTrue(r["unblocked"])
         self.assertFalse(self.state.is_blocked("bad.example"))
 
+    def test_unblock_adds_a_dns_server_exception_and_undo_removes_it(self):
+        self.client.unblock("evt_y", "ads.example.com")
+        self.assertIn("ads.example.com", self.state.dns_exceptions)
+        self.client._call("/unblock", {"domain": "ads.example.com", "undo": True})
+        self.assertNotIn("ads.example.com", self.state.dns_exceptions)
+
     def test_unblock_by_event_id(self):
         self.state.add_block("c2.example")
         self.state.record_event({"event_id": "evt_1", "domain": "c2.example",

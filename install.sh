@@ -204,7 +204,7 @@ chmod 640 "$ENVF"
 
 say "5) systemd units"
 for u in agents/ghost_dns/ghostwall-dns.service agents/ghost_dns/ghostwall-feed.service \
-         agents/ghost_dns/ghostwall-feed.timer agents/web_ui/ghostwall-web.service \
+         agents/ghost_dns/ghostwall-feed.timer agents/ghost_dns/ghostwall-dnsblock.service agents/web_ui/ghostwall-web.service \
          agents/fw_bot/ghostwall-fw-bot.service; do
   install -m 644 "$DEST/$u" /etc/systemd/system/
 done
