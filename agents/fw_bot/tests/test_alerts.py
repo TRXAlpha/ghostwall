@@ -2,6 +2,7 @@
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from alerts import format_alert, group_text, inline_keyboard
@@ -63,6 +64,17 @@ class FormatTests(unittest.TestCase):
         kb = inline_keyboard(evt, SECRET)[0]
         self.assertEqual([b["text"] for b in kb], ["Release device", "Details"])
         self.assertEqual([parse_callback(b["callback_data"], SECRET)[0] for b in kb], ["release", "details"])
+
+    def test_privacy_mode_still_says_isolated_and_how_to_undo(self):
+        evt = dict(EVENT, device="tv-box", rule="threat_feed", action="block", auto_isolated=True)
+        with mock.patch.dict(os.environ, {"FW_BOT_PRIVACY": "minimal"}):
+            text = format_alert(evt)
+            failed = format_alert(dict(EVENT, would_isolate=True, auto_isolate_failed=True))
+        self.assertTrue(text.startswith("ISOLATED · tv-box"))
+        self.assertIn("sudo ghostwall release tv-box", text)
+        self.assertNotIn(EVENT["domain"], text)
+        self.assertIn("Automatic isolation failed", failed)
+        self.assertTrue(failed.startswith("BLOCKED"))
 
     def test_would_isolate_alert_is_still_an_alert(self):
         evt = dict(EVENT, action="recommend", would_isolate=True)

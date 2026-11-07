@@ -286,7 +286,7 @@ function renderEvents(evs) {
   // collapse repeats of the same device + domain + rule into one row (newest first)
   const groups = new Map();
   for (const e of alerts.filter(e => !covered(e))) {
-    const k = e.device + "|" + e.domain + "|" + e.rule;
+    const k = e.device + "|" + e.domain + "|" + e.rule + (e.auto_isolated ? "|isolated" : "");
     if (groups.has(k)) groups.get(k).n++; else groups.set(k, { ...e, n: 1 });
   }
   const rows = [...groups.values()];
@@ -294,14 +294,21 @@ function renderEvents(evs) {
   $("feed").innerHTML = rows.map(e => {
     const score = e.scores && e.scores.dga != null ? ` · score ${e.scores.dga.toFixed(2)}` : "";
     const why = (e.reasons || []).slice(0, 3).join(" · ");
+    // auto_isolate: its sentence is the last reason, often past the three shown above
+    const isoReason = (e.reasons || []).filter(r => /isolat/i.test(r)).slice(-1)[0] || "";
+    const isoWhy = esc(isoReason);
+    const iso = e.auto_isolated ? `<span class="tag block" title="${isoWhy}">isolated</span>`
+      : e.auto_isolate_failed ? `<span class="tag block" title="${isoWhy}">isolation failed</span>`
+      : e.would_isolate ? `<span class="tag" title="${isoWhy}">would isolate</span>` : "";
     return `<li class="alert ${esc(e.severity || "warn")}">
       <span class="sev"></span>
       <div class="dom">${esc(e.domain)}</div>
       <div class="side"><span class="when" title="${esc(e.time)}">${ago(e.time)}</span>
-        <span class="tag ${e.action === "block" ? "block" : ""}">${e.action === "block" ? "blocked" : "flagged"}</span>
+        <span class="tag ${e.action === "block" ? "block" : ""}">${e.action === "block" ? "blocked" : "flagged"}</span>${iso}
         ${NO_TRUST.has(e.rule) ? "" : `<button data-act="allow" data-domain="${esc(e.trust || e.domain)}"${e.trust ? ` title="trusts ${esc(e.trust)} and everything under it"` : ""}>Trust</button>`}</div>
       <div class="meta"><b>${esc(e.device)}</b>: ${esc(RULES[e.rule] || e.rule)}${score}${e.n > 1 ? ` · ×${e.n}` : ""}</div>
       ${why ? `<div class="why">${esc(why)}</div>` : ""}
+      ${isoReason && !(e.reasons || []).slice(0, 3).includes(isoReason) ? `<div class="why">${isoWhy}</div>` : ""}
     </li>`;
   }).join("") || '<li class="empty">No alerts. Every query scored so far looked normal.</li>';
 }

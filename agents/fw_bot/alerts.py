@@ -70,6 +70,9 @@ def format_alert(event: dict, count: int = 1, now: float | None = None) -> str:
         return "\n".join([
             f"{head(event)} · {device}" + (f" (x{count})" if count > 1 else ""),
             f"{what} ({event.get('severity', 'warn')})",
+            *([f"Isolated automatically. Undo: Release device below, or sudo ghostwall release {device}"]
+              if event.get("auto_isolated") else []),
+            *(["Automatic isolation failed: see the dashboard."] if event.get("auto_isolate_failed") else []),
             *([late] if late else []),
             "Details on the dashboard (privacy mode: no domains are sent to Telegram).",
         ])

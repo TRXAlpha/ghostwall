@@ -10,9 +10,11 @@ def severity_of(event: dict) -> str:
 
 
 def group_key(event: dict) -> tuple:
-    """Collapse key: device + primary reason (rule), per spec."""
+    """Collapse key: device + primary reason (rule), per spec. An automatic isolation is
+    never folded into another alert (an edit does not notify, and the group's latest
+    event would drop its Release button), nor another alert into it."""
     rule = str(event.get("rule", ""))
-    return (str(event.get("device", "?")), rule, severity_of(event))
+    return (str(event.get("device", "?")), rule, severity_of(event), bool(event.get("auto_isolated")))
 
 
 class GroupState:

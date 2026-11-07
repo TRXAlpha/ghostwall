@@ -31,6 +31,11 @@ class ValidatorTests(unittest.TestCase):
         self.assertEqual(validate_event(dict(GOOD, auto_isolated=True, would_isolate=False)), [])
         self.assertTrue(validate_event(dict(GOOD, auto_isolated="yes")))
         self.assertTrue(validate_event(dict(GOOD, would_isolate=1)))
+        self.assertEqual(validate_event(dict(GOOD, would_isolate=True, auto_isolate_failed=True)), [])
+        self.assertTrue(validate_event(dict(GOOD, auto_isolate_failed="no")))
+        # isolated and "would isolate" / "failed" at once is a contradiction
+        self.assertTrue(validate_event(dict(GOOD, auto_isolated=True, would_isolate=True)))
+        self.assertTrue(validate_event(dict(GOOD, auto_isolated=True, auto_isolate_failed=True)))
 
     def test_missing_required(self):
         for f in ("time", "device", "domain", "rule", "action", "event_id"):

@@ -27,6 +27,14 @@ SET_BLOCKED_IP = "blocked_ip"
 LOCKDOWN_TAG = "ghostwall_lockdown"
 
 
+def _not_there(exc: Exception) -> bool:
+    """True if nft refused because the element (or the whole ghostwall table) is not
+    there: `delete element` of something absent fails with ENOENT. Absent means not
+    isolated, which is what a release wants."""
+    return isinstance(exc, subprocess.CalledProcessError) and \
+        "No such file or directory" in str(exc.stderr or "")
+
+
 def _valid_ip(ip: str) -> str:
     """Return the normalised address or raise ValueError. Guards the nft CLI."""
     return str(ipaddress.ip_address(ip))
@@ -101,11 +109,19 @@ class Enforcer:
             self.backend._run("add", "element", *TABLE.split(), SET_ISOLATED,
                               "{", ip, "}")
 
-    def release(self, ip: str) -> None:
+    def release(self, ip: str) -> bool:
+        """Take ip out of the isolated set. Idempotent: False (no error) if it was not
+        in it, e.g. after a reboot emptied the set or for a second Release press."""
         ip = _valid_ip(ip)
         with self._lock:
-            self.backend._run("delete", "element", *TABLE.split(), SET_ISOLATED,
-                              "{", ip, "}")
+            try:
+                self.backend._run("delete", "element", *TABLE.split(), SET_ISOLATED,
+                                  "{", ip, "}")
+            except Exception as exc:  # noqa: BLE001
+                if _not_there(exc):
+                    return False
+                raise
+            return True
 
     # -- destination blackhole -------------------------------------------
     def block_ip(self, ip: str, timeout: str | None = "24h") -> None:

@@ -253,23 +253,34 @@ class ControlHandler(BaseHTTPRequestHandler):
         d = self._require_device(body)
         self._require_enforcement()
         ip = self._current_ip(d)   # where it is now: its old address may be another device's
+        if not _ipv4(ip) and _ipv4(d.ip):
+            ip = d.ip              # it queried over IPv6; the isolated_dev set holds IPv4 only
         self.state["enforcer"].isolate(ip)
-        self.state["gstate"].isolate(d.name)
+        self.state["gstate"].isolate(d.name, ip)
         return 200, {"ok": True, "name": d.name, "ip": ip, "isolated": True}
 
     def _release(self, body):
         # Allowed without enforcement too, so state left by an older version can be cleared.
+        # Idempotent: an address that is not in the set any more (a second press, a reboot
+        # emptied it) counts as released. Every address it may have been isolated at is
+        # tried: the ones recorded when it was isolated, where it is now, devices.json.
         d = self._require_device(body)
-        ips = [self._current_ip(d)] + ([d.ip] if d.ip != self._current_ip(d) else [])
-        released = False
-        for ip in ips:   # wherever it was isolated: now, or at its address in devices.json
+        g = self.state["gstate"]
+        ips = []
+        for ip in g.isolated_addresses(d.name) + [self._current_ip(d), d.ip]:
+            if ip and ip not in ips and _ipv4(ip):
+                ips.append(ip)
+        failed = None
+        for ip in ips:
             try:
                 self.state["enforcer"].release(ip)
-                released = True
-            except Exception:  # noqa: BLE001 (that address was not in the set)
-                if ip == ips[-1] and not released:
-                    raise
-        self.state["gstate"].release(d.name)
+            except Exception as exc:  # noqa: BLE001 (nft missing, no permission...)
+                failed = failed or exc
+        if failed is not None:
+            # Still in the set somewhere: saying "released" would be a lie. State stays
+            # isolated, so the dashboard keeps offering Release.
+            raise _ApiError(500, f"could not release {d.name}: {failed}")
+        g.release(d.name)
         return 200, {"ok": True, "name": d.name, "isolated": False}
 
     def _allow(self, body):
@@ -340,6 +351,13 @@ class ControlHandler(BaseHTTPRequestHandler):
         if d is None:
             raise _ApiError(404, "unknown device")
         return d
+
+
+def _ipv4(ip) -> bool:
+    try:
+        return ipaddress.ip_address(str(ip)).version == 4
+    except ValueError:
+        return False
 
 
 class _ApiError(Exception):

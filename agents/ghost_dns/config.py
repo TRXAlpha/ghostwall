@@ -103,23 +103,27 @@ DEFAULTS = {
     "auto_promote_after": 3,   # confirmations before a recommend becomes a block
 
     # --- auto-isolate (opt-in; docs/OPERATIONS.md) ---
-    # "off", "dry-run" (events say "would_isolate", nothing changes) or "on". Needs gateway
-    # mode ("enforce": "nft"); with the null backend "on" behaves as dry-run. While
-    # `learning` is on it also behaves as dry-run: learning means "alerts only".
+    # "off", "dry-run" (events say "would_isolate", nothing changes) or "on". "on" needs
+    # gateway mode ("enforce": "nft") and pi_ip; without them it behaves as dry-run, and
+    # so it does while `learning` is on (learning means "alerts only") and in shadow mode.
     "auto_isolate": "off",
     # Only rules whose false positives are rare AND whose finding is about the device itself:
-    #   threat_feed  exact matches only (a parent-domain match never isolates): the device
-    #                asked for a host a malware/phishing list names. One unclear case in
-    #                19.5 days of field data (docs/FIELD_RESULTS.md).
+    #   threat_feed  exact matches only: never a parent-domain match, a name under a popular
+    #                site (Tranco top N: a shared platform or CDN), a service malware abuses
+    #                (abused_service) or a name only phishing lists carry (a phishing page
+    #                is a person clicking a link, not an infected device). One unclear case
+    #                in 19.5 days of field data, a CDN host (docs/FIELD_RESULTS.md).
     #   dns_tunnel   dozens of distinct random subdomains of one apex; the one field false
     #                positive (a game launcher) is fixed and tested.
     # Left out on purpose: nx_burst (no field false positive, but link checkers and mail
     # filters fail lookups legitimately; add it once nx_burst_ignore_devices fits your
-    # network), raw_ip/beacon/doh_ip (ghost-flow cannot reach the isolate path yet, and there
-    # is no IoT marker in devices.json to limit raw_ip to), and every score-only rule (dga_*),
-    # doh_bypass, abused_service and dns_beacon, which fire on normal software.
+    # network) and every score-only rule (dga_*), blocklist, doh_bypass, abused_service and
+    # dns_beacon, which fire on normal software. raw_ip, beacon and doh_ip are ghost-flow's
+    # and cannot be listed: ghost-flow does not isolate.
     "auto_isolate_rules": ["threat_feed", "dns_tunnel"],
-    "auto_isolate_exempt": [],       # device names never isolated: your own computers
+    # Device names (or addresses) never isolated: your own computers, the router. The Pi
+    # (pi_ip), loopback, unnamed clients and anything not an IPv4 LAN address never are.
+    "auto_isolate_exempt": [],
     "auto_isolate_max_per_hour": 2,  # past this it only alerts and says why (0 = never isolate)
 
     # --- paths ---
@@ -145,6 +149,31 @@ DEFAULTS = {
 
 
 AUTO_ISOLATE_MODES = ("off", "dry-run", "on")
+# The rules ghost-dns raises (and so can act on). ghost-flow's are named apart: listing one
+# would silently do nothing.
+DNS_RULES = ("threat_feed", "dns_tunnel", "nx_burst", "dga_burst", "dga_high", "dga_suspect",
+             "dga_corroborated", "blocklist", "doh_bypass", "abused_service", "dns_beacon")
+FLOW_RULES = ("raw_ip", "beacon", "doh_ip")
+
+
+def _check_auto_isolate(cfg: dict) -> None:
+    if cfg.get("auto_isolate") not in AUTO_ISOLATE_MODES:
+        raise ValueError(f'auto_isolate must be "off", "dry-run" or "on", not {cfg.get("auto_isolate")!r}')
+    rules = cfg.get("auto_isolate_rules")
+    if not isinstance(rules, list) or not all(isinstance(r, str) for r in rules):
+        raise ValueError('auto_isolate_rules must be a list of rule names, e.g. ["threat_feed", "dns_tunnel"]')
+    for r in rules:
+        if r in FLOW_RULES:
+            raise ValueError(f"auto_isolate_rules: {r} is a ghost-flow rule, and ghost-flow does not "
+                             "isolate; remove it")
+        if r not in DNS_RULES:
+            raise ValueError(f"auto_isolate_rules: unknown rule {r!r} (one of: {', '.join(DNS_RULES)})")
+    exempt = cfg.get("auto_isolate_exempt")
+    if not isinstance(exempt, list) or not all(isinstance(x, str) for x in exempt):
+        raise ValueError('auto_isolate_exempt must be a list of device names, e.g. ["workpc"]')
+    cap = cfg.get("auto_isolate_max_per_hour")
+    if isinstance(cap, bool) or not isinstance(cap, int) or cap < 0:
+        raise ValueError(f"auto_isolate_max_per_hour must be a whole number, 0 or more, not {cap!r}")
 
 V3_PUBLIC = {
     "onnx_model": None,
@@ -181,6 +210,5 @@ def load_config(path: str | None = None, overrides: dict | None = None) -> dict:
                 cfg[k] = float(v)
     elif cfg.get("models") not in (None, "default"):
         raise ValueError(f'models must be "default" or "v3-public", not {cfg.get("models")!r}')
-    if cfg.get("auto_isolate") not in AUTO_ISOLATE_MODES:
-        raise ValueError(f'auto_isolate must be "off", "dry-run" or "on", not {cfg.get("auto_isolate")!r}')
+    _check_auto_isolate(cfg)
     return cfg
