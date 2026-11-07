@@ -251,8 +251,6 @@ class EnforcingControlApiTests(ControlApiTests):
         self.assertFalse(self.state.lockdown)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class ControlAuthTests(unittest.TestCase):
@@ -362,3 +360,26 @@ class TrustListTests(ControlAuthTests):
         self.assertEqual(self._post("/untrust", {"domain": "mine.example"}, tok), 200)
         self.assertFalse(g.is_allowed("mine.example"))
         self.assertEqual(self._post("/untrust", {"domain": "mine.example"}, tok), 404)
+
+
+class ClientHangsUp(unittest.TestCase):
+    """A client that gives up before the answer (a status poll with a short timeout)
+    used to print a BrokenPipeError traceback into ghost-dns's journal."""
+
+    def test_send_to_a_closed_client_is_quiet(self):
+        import io
+        from control_api import ControlHandler
+
+        class Gone(io.RawIOBase):
+            def write(self, b):
+                raise BrokenPipeError(32, "Broken pipe")
+
+        h = ControlHandler.__new__(ControlHandler)
+        h.wfile, h.request_version, h.requestline, h.command = Gone(), "HTTP/1.1", "GET /status HTTP/1.1", "GET"
+        h.close_connection = False
+        h._send(200, {"ok": True})            # must not raise
+        self.assertTrue(h.close_connection)
+
+
+if __name__ == "__main__":
+    unittest.main()

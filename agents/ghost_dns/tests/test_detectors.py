@@ -154,6 +154,32 @@ class TunnelTests(unittest.TestCase):
     def test_apex_itself_ignored(self):
         self.assertIsNone(D.TunnelDetector().observe("d", "example.com", 0))
 
+    # A big site's own service names: long, distinct, made of words (a game launcher's
+    # presence/friends/catalog services). On a home network one launcher start gave
+    # 30 of them in 10 minutes.
+    SERVICES = [f"{a}-{b}-service-{c}.ol.example.com" for a in ("presence", "friends", "catalog", "links", "followers")
+                for b in ("public", "social") for c in ("prod", "live", "stage")]
+
+    def test_popular_apex_service_names_not_flagged(self):
+        t = D.TunnelDetector(min_distinct=30)
+        for i, host in enumerate(self.SERVICES):
+            self.assertIsNone(t.observe("dell", host, i, popular=True), host)
+
+    def test_same_names_on_an_unknown_apex_still_flagged(self):
+        t = D.TunnelDetector(min_distinct=30)
+        hits = [t.observe("dell", host, i) for i, host in enumerate(self.SERVICES)]
+        self.assertEqual(sum(1 for h in hits if h), 1)
+
+    def test_popular_apex_with_random_payload_still_flagged(self):
+        """A tunnel can't run under a site it doesn't control, but if the list is wrong
+        (or a platform hands out subzones) the long random labels still count."""
+        t = D.TunnelDetector(min_long=12)
+        hit = None
+        for i in range(14):
+            hit = t.observe("dell", f"{rand_label(i)}.exfil.example.com", i, popular=True) or hit
+        self.assertIsNotNone(hit)
+        self.assertIn("very long high-entropy", hit.reasons[0])
+
 
 class BeaconTests(unittest.TestCase):
     def test_regular_interval_flagged(self):

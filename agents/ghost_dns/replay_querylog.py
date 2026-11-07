@@ -15,6 +15,7 @@ import gzip
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import time
@@ -24,6 +25,7 @@ from datetime import datetime, timezone
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import config as config_mod
+import events as events_mod
 from devices import DeviceMap
 from enforce import Enforcer, NullBackend
 from events import EventLog
@@ -76,29 +78,88 @@ def first_existing(*paths: str) -> str | None:
     return next((p for p in paths if os.path.exists(p)), None)
 
 
-def main() -> int:
+INSTALLED_CONFIG = "/etc/ghostwall/ghost_dns.json"
+INSTALLED_FEED = "/var/lib/ghostwall/threat_feed.txt"
+
+
+def parse_set(items: list[str]) -> dict:
+    """--set KEY=VALUE, VALUE as JSON when it parses (8, 0.9, true, ["a"]), else a string."""
+    out = {}
+    for item in items:
+        key, sep, val = item.partition("=")
+        if not sep or not key:
+            raise SystemExit(f"--set wants KEY=VALUE, not {item!r}")
+        try:
+            out[key] = json.loads(val)
+        except ValueError:
+            out[key] = val
+    return out
+
+
+def replay_config(config_path: str | None, feed: str, popular: str, sets: dict, wd: str) -> dict:
+    """Your ghost-dns settings (thresholds, ignored devices...) with throw-away state.
+
+    The feed is --feed, else the one your config names, else the installed one (older
+    installs left a stale copy next to the code; it is only a last resort). The popular
+    list is --popular, else your config's popular_path, else popular_domains.txt next to
+    the feed, as ghost-dns finds it."""
+    user = {}
+    if config_path and os.path.exists(config_path):
+        with open(config_path, encoding="utf-8") as f:
+            user = json.load(f)
+    feed = feed or user.get("threat_feed_path") or first_existing(
+        INSTALLED_FEED, os.path.join(HERE, "threat_feed.txt")) or ""
+    over = {"threat_feed_path": feed if feed and os.path.exists(feed) else None,
+            "popular_path": popular or user.get("popular_path")}
+    over.update(sets)
+    # never the live files, whatever the config or --set say
+    over.update({"state_path": os.path.join(wd, "s.json"), "events_path": os.path.join(wd, "e.jsonl"),
+                 "query_log": None, "resolved_ips_path": None, "shadow": True,
+                 "capture_enabled": False})
+    return config_mod.load_config(config_path if user else None, over)
+
+
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--querylog", required=True, help="AdGuard querylog.json or Pi-hole pihole.log[.N.gz]")
     ap.add_argument("--format", choices=["auto", "adguard", "pihole"], default="auto")
+    ap.add_argument("--config", default=first_existing(INSTALLED_CONFIG),
+                    help="ghost-dns settings to replay with (default: /etc/ghostwall/ghost_dns.json "
+                         "if present, so your thresholds apply); its state and events files are never used")
+    ap.add_argument("--no-config", action="store_true", help="the built-in defaults instead")
+    ap.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                    help="override one setting for this replay, e.g. --set nx_burst_min_distinct=15 "
+                         "(repeatable; VALUE is JSON when it parses)")
     ap.add_argument("--devices", default=first_existing("/etc/ghostwall/devices.json"),
                     help="device names (default: /etc/ghostwall/devices.json if present)")
     ap.add_argument("--max-lines", type=int, default=0, help="0 = all")
     ap.add_argument("--allowlist", default=os.path.join(HERE, "allowlist.txt"))
     ap.add_argument("--no-allowlist", action="store_true")
-    ap.add_argument("--feed", default=first_existing(os.path.join(HERE, "threat_feed.txt"),
-                                                     "/var/lib/ghostwall/threat_feed.txt") or "",
-                    help="threat feed (default: the installed one in /var/lib/ghostwall)")
+    ap.add_argument("--feed", default="",
+                    help="threat feed (default: the one ghost_dns.json names, else the installed "
+                         "/var/lib/ghostwall/threat_feed.txt)")
     ap.add_argument("--popular", default="",
                     help="popular-domain list for the DGA guard (default: popular_domains.txt "
                          "next to the feed, as update_feed.py writes it)")
-    a = ap.parse_args()
+    ap.add_argument("--events-out", default="", metavar="FILE",
+                    help="also write every alert the replay raised to FILE (JSON lines)")
+    a = ap.parse_args(argv)
 
     wd = tempfile.mkdtemp(prefix="ghostwall-replay-")
-    cfg = config_mod.load_config(None, {
-        "state_path": os.path.join(wd, "s.json"), "events_path": os.path.join(wd, "e.jsonl"),
-        "query_log": None, "resolved_ips_path": None, "shadow": True,
-        "threat_feed_path": a.feed if os.path.exists(a.feed) else None,
-        "popular_path": a.popular or None})
+    real_now = events_mod.now_iso
+    try:
+        return run_replay(a, wd)
+    finally:
+        events_mod.now_iso = real_now
+        shutil.rmtree(wd, ignore_errors=True)
+
+
+def run_replay(a, wd: str) -> int:
+    cfg = replay_config(None if a.no_config else a.config, a.feed, a.popular, parse_set(a.set), wd)
+    if not a.no_config and a.config and os.path.exists(a.config):
+        print(f"settings: {a.config}" + (f" with {', '.join(a.set)}" if a.set else ""))
+    elif a.set:
+        print(f"settings: defaults with {', '.join(a.set)}")
     state = GhostState(cfg["state_path"], learning_default=True)
     if not a.no_allowlist:
         state.load_allowlist_file(a.allowlist)
@@ -109,6 +170,8 @@ def main() -> int:
     r.clock = lambda: clock["t"]
     # novelty, device baselines and alert de-duplication follow the log's time too
     state.clock = lambda: datetime.fromtimestamp(clock["t"], timezone.utc)
+    # and so does each alert's "time": the query's, not the moment of the replay
+    events_mod.now_iso = lambda: datetime.fromtimestamp(clock["t"], timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     fmt = detect_format(a.querylog) if a.format == "auto" else a.format
     opener = gzip.open if a.querylog.endswith(".gz") else open
@@ -170,8 +233,12 @@ def main() -> int:
         run(q)
 
     evs = []
-    with open(cfg["events_path"], encoding="utf-8") as f:
-        evs = [json.loads(l) for l in f if l.strip()]
+    if os.path.exists(cfg["events_path"]):
+        with open(cfg["events_path"], encoding="utf-8") as f:
+            evs = [json.loads(l) for l in f if l.strip()]
+    if a.events_out:
+        with open(a.events_out, "w", encoding="utf-8") as f:
+            f.writelines(json.dumps(e) + "\n" for e in evs)
     span = (last - first) / 3600 if first and last else 0
     print(f"replayed {n} queries over {span:.1f} h  ({bad} unreadable lines)")
     print(f"feed: {len(r.det.threat_feed)} domains | popular: {len(r.det.popular)} | "
@@ -185,6 +252,7 @@ def main() -> int:
             print(f"      {e['device']:18s} {e['domain'][:60]:60s} {', '.join(e.get('reasons', []))[:70]}")
     per_dev = Counter(e["device"] for e in evs)
     print("\nalerts per device:", dict(per_dev))
+    print("alerts per day:", dict(sorted(Counter(e["time"][:10] for e in evs).items())))
     return 0
 
 

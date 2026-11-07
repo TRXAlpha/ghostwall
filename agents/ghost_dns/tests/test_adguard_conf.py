@@ -126,6 +126,16 @@ class CheckTests(unittest.TestCase):
         with open(p) as f:
             self.assertIn("  enabled: false", f.read())
 
+    def test_check_prints_nothing_for_a_clean_config(self):
+        p = os.path.join(tempfile.mkdtemp(), "AdGuardHome.yaml")
+        with open(p, "w") as f:
+            f.write(YAML)
+        self.assertEqual(adguard_conf.problems(YAML), [])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(adguard_conf.main([p, "--check"]), 0)
+        self.assertEqual(out.getvalue(), "")
+
 
 if __name__ == "__main__":
     unittest.main()

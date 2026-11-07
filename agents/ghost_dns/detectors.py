@@ -427,7 +427,11 @@ class TunnelDetector:
         self._seen: dict[tuple, deque] = defaultdict(deque)   # (dev, apex) -> (t, host, labellen, entropy)
         self._flagged: dict[tuple, float] = {}
 
-    def observe(self, device: str, host: str, now: float) -> Hit | None:
+    def observe(self, device: str, host: str, now: float, popular: bool = False) -> Hit | None:
+        """popular: the apex is on the popular-domain list. A tunnel needs a zone its
+        operator runs, and a big site's own many service names (a game launcher's
+        followers-service-prod..., presence-public-service-prod...) are long and
+        distinct too, so there only the long random labels of real payload count."""
         apex = registrable_part(host)
         if host == apex:
             return None
@@ -447,7 +451,7 @@ class TunnelDetector:
         n = len(distinct)
         avg = sum(l for _, _, l, _ in q) / len(q)
         long_hi = len({h for _, h, l, e in q if l >= self.long_label and e >= 3.2})   # DISTINCT long random hosts
-        many = n >= self.min_distinct and avg >= self.min_avg_label
+        many = n >= self.min_distinct and avg >= self.min_avg_label and not popular
         exfil = long_hi >= self.min_long
         if not (many or exfil):
             return None

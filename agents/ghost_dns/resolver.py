@@ -168,7 +168,8 @@ class Resolver:
         # also odd: it scores as random-looking, or sits on a rarely-legitimate TLD.
         behaviour = None
         with self.det.lock:
-            tun = self.det.tunnel.observe(dev.name, domain, now)
+            tun = self.det.tunnel.observe(dev.name, domain, now,
+                                          popular=self.det.popular.match(domain, now))
             bea = self.det.beacon.observe(dev.name, domain, now)
         if bea and not (dga >= float(self.cfg.get("beacon_min_dga", 0.5)) or tld_of(domain) in RARE_TLDS):
             bea = None

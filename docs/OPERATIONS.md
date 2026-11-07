@@ -74,11 +74,15 @@ To update later: `git pull && sudo ./install.sh`.
 
   ```bash
   sudo /opt/ghostwall/.venv/bin/python /opt/ghostwall/agents/ghost_dns/replay_querylog.py \
-      --querylog /opt/AdGuardHome/data/querylog.json
+      --querylog /opt/AdGuardHome/data/querylog.json --set recommend_threshold=0.98
   ```
 
   The replay uses a throw-away state and events file; it changes and sends nothing. It
-  picks up the installed threat list and `/etc/ghostwall/devices.json` by itself.
+  uses your settings in `/etc/ghostwall/ghost_dns.json`, the installed threat list and
+  popular list and `/etc/ghostwall/devices.json`; each `--set KEY=VALUE` tries one other
+  value (run it once without to compare). Up to 0.3.0b2 the replay ignored
+  `ghost_dns.json`, and on installs upgraded from before 0.2.0b2 it replayed with an old
+  copy of the feed and without the popular-domain guard.
 
 ## Telegram
 
