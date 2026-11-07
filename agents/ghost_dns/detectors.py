@@ -17,16 +17,21 @@ time, and bounds its memory. Stdlib only.
 """
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 import re
 import statistics
 import threading
 import time
+from array import array
+from bisect import bisect_left
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
+from itertools import islice
 
 from tokenizer import PUBLIC_SUFFIXES, registrable_part
+from update_feed import parse_tranco
 
 # DNS-over-HTTPS/TLS resolver hostnames. A LAN client resolving one of these is
 # trying to skip the local resolver. "use-application-dns.net" is Firefox's
@@ -178,6 +183,69 @@ class ThreatFeed:
         doms, labels = self._feed
         mask = doms.get(listed, 0)
         return [lab for i, lab in enumerate(labels) if mask >> i & 1]
+
+
+# --------------------------------------------------------------------------
+def _hash64(name: str) -> int:
+    return int.from_bytes(hashlib.blake2b(name.encode("utf-8"), digest_size=8).digest(), "big")
+
+
+class PopularDomains:
+    """Registrable domains of the most popular sites: the Tranco top list that
+    update_feed.py downloads for its own guard and caches as popular_domains.txt next
+    to the threat feed. Their labels are brands and abbreviations, not algorithm
+    output, so a random-looking score alone is no reason to alert on them.
+
+    Kept as sorted 64-bit hashes of registrable_part(entry): about 8 bytes a domain,
+    a tenth of a set of strings (agents/dga_eval/results_fp_independent.md). Reloads
+    when the file changes. No file or an unreadable one means no guard."""
+
+    def __init__(self, path: str | None, recheck_seconds: float = 300.0):
+        self.path = path
+        self.recheck = recheck_seconds
+        self._hashes = array("Q")
+        self._mtime = 0.0
+        self._checked = -1e18
+        self._lock = threading.Lock()
+
+    def __len__(self) -> int:
+        self._maybe_reload(time.monotonic())
+        return len(self._hashes)
+
+    def info(self) -> tuple[int, float]:
+        """(number of domains, file mtime or 0) for the status page."""
+        n = len(self)
+        return n, self._mtime
+
+    def _maybe_reload(self, now: float) -> None:
+        if not self.path or now - self._checked < self.recheck:
+            return
+        with self._lock:
+            self._checked = now
+            try:
+                m = os.path.getmtime(self.path)
+                if m == self._mtime:
+                    return
+                hashes: set[int] = set()
+                with open(self.path, encoding="utf-8", errors="replace") as f:
+                    # the updater's own reader, 10k lines at a time: never all names at once
+                    for chunk in iter(lambda: "".join(islice(f, 10000)), ""):
+                        # IP addresses and single labels are never scored as domains
+                        hashes.update(_hash64(registrable_part(n)) for n in parse_tranco(chunk, 10 ** 7)
+                                      if "." in n and not n.rsplit(".", 1)[1].isdigit())
+            except OSError:
+                return   # keep what was loaded; a missing file at start means no guard
+            self._hashes = array("Q", sorted(hashes))
+            self._mtime = m
+
+    def match(self, host: str, now: float = 0.0) -> bool:
+        """True if host's registrable domain (the part that is scored) is popular."""
+        self._maybe_reload(now)
+        if not self._hashes:
+            return False
+        h = _hash64(registrable_part(host))
+        i = bisect_left(self._hashes, h)
+        return i < len(self._hashes) and self._hashes[i] == h
 
 
 # --------------------------------------------------------------------------
@@ -441,6 +509,7 @@ class Detectors:
 
     def __init__(self, cfg: dict):
         self.threat_feed = ThreatFeed(cfg.get("threat_feed_path"))
+        self.popular = PopularDomains(cfg.get("popular_path"))
         self.doh = DohDetector(cfg.get("doh_ignore_clients",
                                        [ip for ip in ("127.0.0.1", "::1", cfg.get("pi_ip")) if ip]))
         self.tunnel = TunnelDetector(min_distinct=int(cfg.get("tunnel_min_distinct", 30)),

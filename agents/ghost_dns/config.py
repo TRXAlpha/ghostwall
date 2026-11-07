@@ -85,6 +85,12 @@ DEFAULTS = {
     "beacon_min_dga": 0.5,            # ...and only if the name itself looks odd (apps poll on timers)
     "tunnel_min_long": 12,            # distinct 40+ char random subdomains of one apex per 10 min
     "threat_feed_path": os.path.join(HERE, "threat_feed.txt"),  # built by update_feed.py
+    # Popular-domain guard: a name whose registrable domain is on this list never raises
+    # dga_high/dga_suspect/dga_corroborated on its score alone. It is the Tranco top
+    # list update_feed.py caches for its own guard (its size: --popular-top or
+    # GHOSTWALL_FEED_POPULAR_TOP, 100k). None = popular_domains.txt next to
+    # threat_feed_path; "" or no file = no guard. agents/dga_eval/fp_independent.py.
+    "popular_path": None,
 
     # --- safety / policy ---
     "learning": True,          # True => score-blocks are recommendations only
@@ -134,6 +140,8 @@ def load_config(path: str | None = None, overrides: dict | None = None) -> dict:
         given = {k: v for k, v in overrides.items() if v is not None}
         cfg.update(given)
         mine |= set(given)
+    if cfg.get("popular_path") is None and cfg.get("threat_feed_path"):
+        cfg["popular_path"] = os.path.join(os.path.dirname(cfg["threat_feed_path"]), "popular_domains.txt")
     if cfg.get("models") == "v3-public":
         for k, v in V3_PUBLIC.items():
             if k not in mine:

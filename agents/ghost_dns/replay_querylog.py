@@ -88,13 +88,17 @@ def main() -> int:
     ap.add_argument("--feed", default=first_existing(os.path.join(HERE, "threat_feed.txt"),
                                                      "/var/lib/ghostwall/threat_feed.txt") or "",
                     help="threat feed (default: the installed one in /var/lib/ghostwall)")
+    ap.add_argument("--popular", default="",
+                    help="popular-domain list for the DGA guard (default: popular_domains.txt "
+                         "next to the feed, as update_feed.py writes it)")
     a = ap.parse_args()
 
     wd = tempfile.mkdtemp(prefix="ghostwall-replay-")
     cfg = config_mod.load_config(None, {
         "state_path": os.path.join(wd, "s.json"), "events_path": os.path.join(wd, "e.jsonl"),
         "query_log": None, "resolved_ips_path": None, "shadow": True,
-        "threat_feed_path": a.feed if os.path.exists(a.feed) else None})
+        "threat_feed_path": a.feed if os.path.exists(a.feed) else None,
+        "popular_path": a.popular or None})
     state = GhostState(cfg["state_path"], learning_default=True)
     if not a.no_allowlist:
         state.load_allowlist_file(a.allowlist)
@@ -164,8 +168,10 @@ def main() -> int:
         evs = [json.loads(l) for l in f if l.strip()]
     span = (last - first) / 3600 if first and last else 0
     print(f"replayed {n} queries over {span:.1f} h  ({bad} unreadable lines)")
-    print(f"feed: {len(r.det.threat_feed)} domains | allowlist entries: {len(state.allowlist)}")
-    print(f"alerts: {len(evs)}  (suppressed repeats: {r.stats['suppressed']})\n")
+    print(f"feed: {len(r.det.threat_feed)} domains | popular: {len(r.det.popular)} | "
+          f"allowlist entries: {len(state.allowlist)}")
+    print(f"alerts: {len(evs)}  (suppressed repeats: {r.stats['suppressed']}, "
+          f"popular-domain guard: {r.stats['popular']})\n")
     by_rule = Counter(e["rule"] for e in evs)
     for rule, c in by_rule.most_common():
         print(f"  {rule:18s} {c}")

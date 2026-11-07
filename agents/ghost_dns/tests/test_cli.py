@@ -32,7 +32,8 @@ class Fake(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/status":
             st = {"ok": True, "shadow": True, "models": "trm+lr", "stats": {"queries": 1234},
-                  "feed": {"domains": 150000, "updated": None}, "named_devices": 1, "unnamed_clients": 0}
+                  "feed": {"domains": 150000, "updated": None}, "popular": {"domains": 99000, "updated": None},
+                  "named_devices": 1, "unnamed_clients": 0}
             if self.headers.get("Authorization") == "Bearer tok-example":
                 st["devices"] = [{"name": "laptop", "ip": "192.168.1.10", "last_seen": None}]
             else:   # as ghost-dns answers without the token
@@ -100,6 +101,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("1,234 queries", out)
         self.assertIn("laptop", out)
+        self.assertIn("99,000 top sites never alert on their score alone", out)
 
     def test_allow_sends_token_and_validates(self):
         code, out, _ = self.run_cli("allow", "Example.COM.")

@@ -14,6 +14,8 @@ docs/ARCHITECTURE.md):
         AND learning mode is off   -> BLOCK, promote to blocklist, event action=block
      (otherwise the same score      -> RECOMMEND: forwarded, event action=recommend)
   * dga >= recommend_threshold     -> RECOMMEND (forwarded), event action=recommend
+  (a name whose registrable domain is on the popular list, Tranco top N, gets neither:
+   its score alone raises nothing; feed, tunnel, beacon and burst rules still apply)
   * everything else                -> ALLOW, no event
 """
 from __future__ import annotations
@@ -85,7 +87,7 @@ class Resolver:
         self.current_ip: dict[str, str] = {} # named device -> the address it last queried from
         self.stats = {"queries": 0, "blocked": 0, "recommended": 0, "suppressed": 0,
                       "forwarded": 0, "errors": 0, "fallbacks": 0, "failopen": 0,
-                      "rate_limited": 0, "blocked_upstream": 0}
+                      "rate_limited": 0, "blocked_upstream": 0, "popular": 0}
 
     # -- policy (pure, no I/O except event log + state + enforcer) --------
     def decide(self, client_ip: str, domain: str, qtype: str, upstream_blocked: bool = False,
@@ -185,9 +187,18 @@ class Resolver:
 
         block_thr = float(self.cfg["block_threshold"])
         rec_thr = float(self.cfg["recommend_threshold"])
-        if upstream_blocked and dga >= min(rec_thr, float(self.cfg.get("corroborated_threshold", 0.80))):
+        corr_thr = float(self.cfg.get("corroborated_threshold", 0.80))
+        if upstream_blocked and dga >= min(rec_thr, corr_thr):
             self.stats["blocked_upstream"] += 1
             return behaviour or Decision("allow", "blocked_upstream")
+
+        # A name of one of the most popular sites (Tranco top N) looks random because it
+        # is a brand or an abbreviation (qq.com, 1e100.net): its score alone raises
+        # nothing. It already counted above for the feed, tunnel, beacon, dga_burst and
+        # nx_burst rules.
+        if dga >= min(rec_thr, corr_thr) and self.det.popular.match(domain, now):
+            self.stats["popular"] += 1
+            return behaviour or Decision("allow", "popular")
 
         if dga >= block_thr:
             can_block = (not self.state.learning) and is_new and not self.shadow
@@ -216,7 +227,6 @@ class Resolver:
 
         # A middling score is not enough alone (it is where the noise lives), but it
         # is worth an alert when something else about the name is also off.
-        corr_thr = float(self.cfg.get("corroborated_threshold", 0.80))
         if dga >= corr_thr and tld_of(domain) in RARE_TLDS:
             evt = self._event(dev, domain, rule="dga_corroborated", action="recommend",
                               severity="warn", scores=sc,
