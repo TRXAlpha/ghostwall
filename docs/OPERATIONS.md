@@ -18,7 +18,8 @@ All paths assume the installer's layout (`/opt/ghostwall`).
 | `/var/lib/ghostwall/state.json` | allowlist, blocklist, novelty, learning and lockdown |
 | `/var/lib/ghostwall/control_token` | the control API token (created by ghost-dns; the dashboard and bot read it) |
 | `/var/lib/ghostwall/novelty_key` | the key that turns "first seen" domains into hashes, so `state.json` holds no list of the sites your household visits |
-| `/var/lib/ghostwall/threat_feed.txt` | phishing list, refreshed daily |
+| `/var/lib/ghostwall/threat_feed.txt` | malware and phishing lists, refreshed daily |
+| `/var/lib/ghostwall/popular_domains.txt` | Tranco top 100k, cached for the feed's popularity guard |
 | `/opt/ghostwall` | the code and its Python venv; nothing you need to keep |
 
 Versions before 0.2.0b2 kept config and data in `/opt/ghostwall/agents/`; the installer
@@ -77,7 +78,7 @@ To update later: `git pull && sudo ./install.sh`.
   ```
 
   The replay uses a throw-away state and events file; it changes and sends nothing. It
-  picks up the installed phishing list and `/etc/ghostwall/devices.json` by itself.
+  picks up the installed threat list and `/etc/ghostwall/devices.json` by itself.
 
 ## Telegram
 
@@ -270,7 +271,7 @@ whole network; read it fully first, and keep the router's admin page open.
   `sudo systemctl disable --now dnsmasq` and re-enable DHCP and IPv6 RA on the router.
 - **Uninstall:** `sudo /opt/ghostwall/uninstall.sh` (keeps `/etc/ghostwall` and
   `/var/lib/ghostwall`, so a reinstall carries on), or add `--purge` to remove settings,
-  alerts, state, the phishing list and the `ghostwall` user too. If inline
+  alerts, state, the threat lists and the `ghostwall` user too. If inline
   mode was on, it hands port 53 back to AdGuard first. The only change to your DNS
   server is AdGuard's smaller query-log buffer, which is harmless to keep; the original
   `AdGuardHome.yaml` is saved next to it as `AdGuardHome.yaml.bak-ghostwall-*`.

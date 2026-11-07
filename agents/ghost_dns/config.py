@@ -73,12 +73,24 @@ DEFAULTS = {
     "suspect_only_new": True,         # plain suspect alerts only for names new to this network
     "burst_min_score": 0.80,          # DGA burst: score a domain must reach to count...
     "burst_min_distinct": 5,          # ...and how many different ones from one device
+    # nx_burst: one device failing to resolve (NXDOMAIN) this many different unregistered
+    # domains within nx_burst_window seconds. Catches DGAs by their failed lookups, also the
+    # dictionary-word ones the models miss; agents/dga_eval/nx_sim.py measures it.
+    "nx_burst_enabled": True,
+    "nx_burst_min_distinct": 10,
+    "nx_burst_window": 600,
     "tunnel_min_distinct": 30,        # distinct subdomains of one apex per 10 min
     "beacon_min_samples": 8,          # regular repeats of one name before alerting
     "service_baseline_days": 3,       # abused_service: learn each device's normal services this long
     "beacon_min_dga": 0.5,            # ...and only if the name itself looks odd (apps poll on timers)
     "tunnel_min_long": 12,            # distinct 40+ char random subdomains of one apex per 10 min
     "threat_feed_path": os.path.join(HERE, "threat_feed.txt"),  # built by update_feed.py
+    # Popular-domain guard: a name whose registrable domain is on this list never raises
+    # dga_high/dga_suspect/dga_corroborated on its score alone. It is the Tranco top
+    # list update_feed.py caches for its own guard (its size: --popular-top or
+    # GHOSTWALL_FEED_POPULAR_TOP, 100k). None = popular_domains.txt next to
+    # threat_feed_path; "" or no file = no guard. agents/dga_eval/fp_independent.py.
+    "popular_path": None,
 
     # --- safety / policy ---
     "learning": True,          # True => score-blocks are recommendations only
@@ -128,6 +140,8 @@ def load_config(path: str | None = None, overrides: dict | None = None) -> dict:
         given = {k: v for k, v in overrides.items() if v is not None}
         cfg.update(given)
         mine |= set(given)
+    if cfg.get("popular_path") is None and cfg.get("threat_feed_path"):
+        cfg["popular_path"] = os.path.join(os.path.dirname(cfg["threat_feed_path"]), "popular_domains.txt")
     if cfg.get("models") == "v3-public":
         for k, v in V3_PUBLIC.items():
             if k not in mine:

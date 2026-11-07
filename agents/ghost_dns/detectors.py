@@ -5,27 +5,33 @@ The DGA model alone tops out at roughly 60% detection for 1% false positives
 only one. These detectors add signals that do not depend on a label "looking
 random":
 
-  threat_feed  known-bad domains (phishing / malware feeds)
+  threat_feed  known-bad domains (malware, C2 and phishing feeds)
   doh_bypass   a device resolving a DNS-over-HTTPS provider (dodging your filter)
   dns_tunnel   many distinct, long, high-entropy subdomains under one apex
   dns_beacon   the same name queried at a near-constant interval (C2 call-home)
   dga_burst    one device hitting many *different* random-looking domains fast
+  nx_burst     one device failing to resolve many *different* unregistered domains
 
 Every stateful detector takes `now` as an argument (seconds) so tests can drive
 time, and bounds its memory. Stdlib only.
 """
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 import re
 import statistics
 import threading
 import time
+from array import array
+from bisect import bisect_left
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
+from itertools import islice
 
 from tokenizer import PUBLIC_SUFFIXES, registrable_part
+from update_feed import parse_tranco
 
 # DNS-over-HTTPS/TLS resolver hostnames. A LAN client resolving one of these is
 # trying to skip the local resolver. "use-application-dns.net" is Firefox's
@@ -100,19 +106,24 @@ def parents(host: str):
 # --------------------------------------------------------------------------
 class ThreatFeed:
     """Known-bad domains loaded from a text file (one per line). Reloads when
-    the file changes, so a daily updater needs no restart."""
+    the file changes, so a daily updater needs no restart.
+
+    update_feed.py writes each source under a '#@source' line. The names are kept in a
+    dict whose value is a bitmask of the sources that list them: the same memory as a
+    frozenset (measured in agents/dga_eval/results_feeds.md), and the alert can say
+    "on URLhaus (malware)" instead of just "on the threat feed"."""
 
     def __init__(self, path: str | None, recheck_seconds: float = 300.0):
         self.path = path
         self.recheck = recheck_seconds
-        self._domains: frozenset[str] = frozenset()
+        self._feed: tuple[dict[str, int], tuple[str, ...]] = ({}, ())   # swapped as one
         self._mtime = 0.0
         self._checked = -1e18
         self._lock = threading.Lock()
 
     def __len__(self) -> int:
         self._maybe_reload(time.monotonic())   # report the real size, not a not-yet-loaded 0
-        return len(self._domains)
+        return len(self._feed[0])
 
     def info(self) -> tuple[int, float]:
         """(number of domains, file mtime or 0) for the status page."""
@@ -130,26 +141,111 @@ class ThreatFeed:
                 return
             if m == self._mtime:
                 return
-            doms = set()
+            doms: dict[str, int] = {}
+            labels: list[str] = []
+            bit = 0                      # names before any '#@source' line: no source
+            masks: dict[int, int] = {}   # one int object per distinct mask, not per name
             with open(self.path, encoding="utf-8", errors="replace") as f:
                 for line in f:
+                    if line.startswith("#@source\t"):
+                        parts = line.rstrip("\n").split("\t")
+                        name, kind = (parts + ["", "", "", ""])[3:5]
+                        label = f"{name} ({kind})" if name and kind else (name or "the threat feed")
+                        if label not in labels:
+                            labels.append(label)
+                        bit = 1 << labels.index(label)
+                        continue
                     line = line.strip().lower()
                     if line and not line.startswith(("#", "!")) and _DOMAIN_LINE.match(line) and "." in line:
-                        doms.add(line)
-            self._domains = frozenset(doms)
+                        v = doms.get(line, 0) | bit
+                        doms[line] = masks.setdefault(v, v)
+            self._feed = (doms, tuple(labels))
             self._mtime = m
 
     def match(self, host: str, now: float = 0.0) -> tuple[str, bool] | None:
-        """(listed_domain, exact) if host or a parent is listed, else None."""
+        """(listed_domain, exact) if host or a parent is listed, else None. Only
+        parents: a listed evil.github.io never makes github.io itself a hit."""
         self._maybe_reload(now)
-        if not self._domains:
+        doms = self._feed[0]
+        if not doms:
             return None
-        if host in self._domains:
+        if host in doms:
             return host, True
         for cand in parents(host):
-            if cand in self._domains:
+            if cand in doms:
                 return cand, False
         return None
+
+    def sources(self, listed: str) -> list[str]:
+        """Which lists name `listed`, e.g. ["URLhaus (malware)"]; [] if unknown."""
+        if not self._feed[0]:
+            self._maybe_reload(time.monotonic())
+        doms, labels = self._feed
+        mask = doms.get(listed, 0)
+        return [lab for i, lab in enumerate(labels) if mask >> i & 1]
+
+
+# --------------------------------------------------------------------------
+def _hash64(name: str) -> int:
+    return int.from_bytes(hashlib.blake2b(name.encode("utf-8"), digest_size=8).digest(), "big")
+
+
+class PopularDomains:
+    """Registrable domains of the most popular sites: the Tranco top list that
+    update_feed.py downloads for its own guard and caches as popular_domains.txt next
+    to the threat feed. Their labels are brands and abbreviations, not algorithm
+    output, so a random-looking score alone is no reason to alert on them.
+
+    Kept as sorted 64-bit hashes of registrable_part(entry): about 8 bytes a domain,
+    a tenth of a set of strings (agents/dga_eval/results_fp_independent.md). Reloads
+    when the file changes. No file or an unreadable one means no guard."""
+
+    def __init__(self, path: str | None, recheck_seconds: float = 300.0):
+        self.path = path
+        self.recheck = recheck_seconds
+        self._hashes = array("Q")
+        self._mtime = 0.0
+        self._checked = -1e18
+        self._lock = threading.Lock()
+
+    def __len__(self) -> int:
+        self._maybe_reload(time.monotonic())
+        return len(self._hashes)
+
+    def info(self) -> tuple[int, float]:
+        """(number of domains, file mtime or 0) for the status page."""
+        n = len(self)
+        return n, self._mtime
+
+    def _maybe_reload(self, now: float) -> None:
+        if not self.path or now - self._checked < self.recheck:
+            return
+        with self._lock:
+            self._checked = now
+            try:
+                m = os.path.getmtime(self.path)
+                if m == self._mtime:
+                    return
+                hashes: set[int] = set()
+                with open(self.path, encoding="utf-8", errors="replace") as f:
+                    # the updater's own reader, 10k lines at a time: never all names at once
+                    for chunk in iter(lambda: "".join(islice(f, 10000)), ""):
+                        # IP addresses and single labels are never scored as domains
+                        hashes.update(_hash64(registrable_part(n)) for n in parse_tranco(chunk, 10 ** 7)
+                                      if "." in n and not n.rsplit(".", 1)[1].isdigit())
+            except OSError:
+                return   # keep what was loaded; a missing file at start means no guard
+            self._hashes = array("Q", sorted(hashes))
+            self._mtime = m
+
+    def match(self, host: str, now: float = 0.0) -> bool:
+        """True if host's registrable domain (the part that is scored) is popular."""
+        self._maybe_reload(now)
+        if not self._hashes:
+            return False
+        h = _hash64(registrable_part(host))
+        i = bisect_left(self._hashes, h)
+        return i < len(self._hashes) and self._hashes[i] == h
 
 
 # --------------------------------------------------------------------------
@@ -318,11 +414,102 @@ class DgaBurst:
 
 
 # --------------------------------------------------------------------------
+# Suffixes that are never internet domains but that routers and OSes hand out as search
+# domains (x.home, x.corp, x.fritz.box, ...), plus the reserved test names. An NXDOMAIN
+# under one of these is a local name that didn't resolve, not an unregistered domain.
+PRIVATE_TLDS = frozenset("""
+home lan local localdomain internal intranet corp private priv router gateway box modem
+domain workgroup test example invalid localhost onion alt arpa ip station
+""".split())
+# Real top-level domains outside tokenizer.PUBLIC_SUFFIXES and RARE_TLDS that DGAs use.
+# Two-letter TLDs (country codes) are accepted as a whole.
+EXTRA_TLDS = frozenset("""
+website space wtf rent live life world today email cloud digital network systems services
+solutions company group news blog page fun host press center global
+""".split())
+
+
+def real_tld(tld: str) -> bool:
+    if tld in PRIVATE_TLDS:
+        return False
+    return (tld in PUBLIC_SUFFIXES or tld in RARE_TLDS or tld in EXTRA_TLDS or tld.startswith("xn--")
+            or (len(tld) == 2 and tld.isascii() and tld.isalpha()))
+
+
+def nx_countable(host: str) -> bool:
+    """Can an NXDOMAIN for `host` mean "this whole domain is not registered"? Only for
+    the registrable domain itself (or its www.): an NXDOMAIN for a deeper name is a typo,
+    a telemetry probe, a dead tracker host or a search domain appended to something, and
+    says nothing about its parent. Also not for local names, reverse lookups, service
+    records, WPAD, Chrome's random intranet probes (single labels, or a single label
+    plus the LAN's search suffix) or anything under a suffix that is not a real TLD."""
+    if is_internal(host):          # single labels, .lan/.local/.home.arpa, reverse, _svc._tcp
+        return False
+    labels = host.split(".")
+    if labels[0] in ("wpad", "isatap") or not real_tld(labels[-1]):
+        return False
+    reg = registrable_part(host)
+    return host == reg or host == "www." + reg
+
+
+class NxBurst:
+    """A DGA implant tries dozens of generated domains to find the one its operator
+    registered; almost all come back NXDOMAIN. Many *different* unregistered domains
+    failing from one device within minutes is that search, whatever the names look like
+    (dictionary DGAs such as suppobox or matsnu read like words and score low).
+
+    The caller only feeds names that passed nx_countable() and whose domain this network
+    has never resolved. A name is counted once per device: a device stuck on the same
+    few dead domains (an old IoT update server) alerts at most once, a DGA keeps making
+    new ones."""
+
+    def __init__(self, min_distinct=10, window=600.0, cooldown=1800.0, max_per_device=512):
+        self.min_distinct, self.window, self.cooldown = min_distinct, window, cooldown
+        self.max_per_device = max_per_device
+        self._q: dict[str, deque] = defaultdict(deque)        # device -> (t, registrable)
+        self._reported: dict[str, set] = defaultdict(set)     # device -> names already alerted on
+        self._flagged: dict[str, float] = {}
+
+    def observe(self, device: str, host: str, now: float) -> Hit | None:
+        reg = registrable_part(host)
+        if reg in self._reported.get(device, ()):
+            return None
+        q = self._q[device]
+        q.append((now, reg))
+        while q and (now - q[0][0] > self.window or len(q) > self.max_per_device):
+            q.popleft()
+        if len(self._q) > 5000:   # bound memory: a LAN has far fewer devices
+            for k in [k for k, v in self._q.items() if not v or now - v[-1][0] > self.window][:2500]:
+                self._q.pop(k, None)
+                self._reported.pop(k, None)
+        if now - self._flagged.get(device, -1e18) < self.cooldown:
+            return None
+        regs = list(dict.fromkeys(r for _, r in q))     # distinct, oldest first
+        if len(regs) < self.min_distinct:
+            return None
+        self._flagged[device] = now
+        span = now - q[0][0]
+        seen = self._reported[device]
+        if len(seen) > 4096:
+            seen.clear()
+        seen.update(regs)
+        q.clear()
+        return Hit("nx_burst", "high",
+                   [f"{len(regs)} different unregistered domains failed to resolve (NXDOMAIN) "
+                    f"within {max(1, math.ceil(span / 60))} min",
+                    "e.g. " + ", ".join(regs[-4:]),
+                    "malware that generates domain names (DGA) tries many until one answers",
+                    "check what runs on this device; isolate it if you can't explain this"],
+                   {"nx": min(1.0, len(regs) / (self.min_distinct * 2))})
+
+
+# --------------------------------------------------------------------------
 class Detectors:
     """Bundle configured from the resolver's cfg dict."""
 
     def __init__(self, cfg: dict):
         self.threat_feed = ThreatFeed(cfg.get("threat_feed_path"))
+        self.popular = PopularDomains(cfg.get("popular_path"))
         self.doh = DohDetector(cfg.get("doh_ignore_clients",
                                        [ip for ip in ("127.0.0.1", "::1", cfg.get("pi_ip")) if ip]))
         self.tunnel = TunnelDetector(min_distinct=int(cfg.get("tunnel_min_distinct", 30)),
@@ -330,4 +517,6 @@ class Detectors:
         self.beacon = BeaconDetector(min_samples=int(cfg.get("beacon_min_samples", 8)))
         self.burst = DgaBurst(min_score=float(cfg.get("burst_min_score", 0.8)),
                               min_distinct=int(cfg.get("burst_min_distinct", 5)))
+        self.nx = NxBurst(min_distinct=int(cfg.get("nx_burst_min_distinct", 10)),
+                          window=float(cfg.get("nx_burst_window", 600)))
         self.lock = threading.Lock()

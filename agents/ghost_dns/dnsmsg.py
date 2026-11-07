@@ -3,8 +3,8 @@
 Only what the resolver needs: parse the question (name + qtype) out of a UDP
 query, and build three kinds of reply from the original query bytes --
 NXDOMAIN, a sinkhole A/AAAA answer, and a verbatim pass-through of an upstream
-reply. We never parse answer sections ourselves; forwarding copies upstream's
-bytes unchanged.
+reply. Forwarding copies upstream's bytes unchanged; replies are only read
+(addresses, rcode, the SOA of a negative answer), never rewritten.
 """
 from __future__ import annotations
 
@@ -160,3 +160,46 @@ def extract_answer_ips(packet: bytes) -> list[str]:
     except Exception:  # noqa: BLE001 - parsing untrusted bytes, never crash
         return ips
     return ips
+
+
+RCODE_NAMES = {0: "NOERROR", 1: "FORMERR", 2: "SERVFAIL", 3: "NXDOMAIN", 4: "NOTIMP", 5: "REFUSED"}
+
+
+def reply_rcode(packet: bytes) -> str | None:
+    """The response code of a DNS reply ("NOERROR", "NXDOMAIN", ...), or None when the
+    bytes are not a reply. Never raises."""
+    if not isinstance(packet, (bytes, bytearray)) or len(packet) < 12:
+        return None
+    flags = struct.unpack(">H", packet[2:4])[0]
+    if not flags & 0x8000:   # QR bit clear: a query, not an answer
+        return None
+    rc = flags & 0x0F
+    return RCODE_NAMES.get(rc, str(rc))
+
+
+def negative_zone(packet: bytes) -> str | None:
+    """The owner of the SOA record in a negative reply's authority section: the closest
+    zone that does exist ("com" when the whole domain is unregistered, "example.com"
+    when only a name inside it is missing; "" is the root). None when there is no SOA.
+    Defensive like extract_answer_ips: never raises."""
+    try:
+        if len(packet) < 12:
+            return None
+        qd, an, ns = struct.unpack(">HHH", packet[4:10])
+        off = 12
+        for _ in range(qd):
+            _, off = _parse_name(packet, off)
+            off += 4
+        for _ in range(an + ns):
+            owner, off = _parse_name(packet, off)
+            if off + 10 > len(packet):
+                return None
+            rtype, _rclass, _ttl, rdlen = struct.unpack(">HHIH", packet[off: off + 10])
+            off += 10 + rdlen
+            if off > len(packet):   # cut short: don't trust any of it
+                return None
+            if rtype == 6:   # SOA
+                return owner
+    except Exception:  # noqa: BLE001 - parsing untrusted bytes, never crash
+        return None
+    return None

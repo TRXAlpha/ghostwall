@@ -29,7 +29,7 @@ from enforce import Enforcer, NullBackend
 from events import EventLog
 from resolver import Resolver
 from scoring import Scorer
-from shadow import detect_format, parse_adguard_entry, parse_pihole_line, pihole_blocked_host
+from shadow import detect_format, parse_adguard_entry, parse_pihole_line, pihole_blocked_host, pihole_reply
 from state import GhostState
 
 _FRAC = re.compile(r"(\.\d{6})\d+")
@@ -88,13 +88,17 @@ def main() -> int:
     ap.add_argument("--feed", default=first_existing(os.path.join(HERE, "threat_feed.txt"),
                                                      "/var/lib/ghostwall/threat_feed.txt") or "",
                     help="threat feed (default: the installed one in /var/lib/ghostwall)")
+    ap.add_argument("--popular", default="",
+                    help="popular-domain list for the DGA guard (default: popular_domains.txt "
+                         "next to the feed, as update_feed.py writes it)")
     a = ap.parse_args()
 
     wd = tempfile.mkdtemp(prefix="ghostwall-replay-")
     cfg = config_mod.load_config(None, {
         "state_path": os.path.join(wd, "s.json"), "events_path": os.path.join(wd, "e.jsonl"),
         "query_log": None, "resolved_ips_path": None, "shadow": True,
-        "threat_feed_path": a.feed if os.path.exists(a.feed) else None})
+        "threat_feed_path": a.feed if os.path.exists(a.feed) else None,
+        "popular_path": a.popular or None})
     state = GhostState(cfg["state_path"], learning_default=True)
     if not a.no_allowlist:
         state.load_allowlist_file(a.allowlist)
@@ -110,14 +114,15 @@ def main() -> int:
     opener = gzip.open if a.querylog.endswith(".gz") else open
     n = bad = 0
     first = last = None
-    held = None   # Pi-hole: the last query, until we know whether a "blocked" line follows
+    held = None   # Pi-hole: the last query, until we know whether a "blocked" or "reply" line follows
 
     def run(q):
         nonlocal n
-        ip, host, qtype, blocked, ts = q
+        ip, host, qtype, blocked, rcode, zone, ts = q
         clock["t"] = ts
         try:
-            r.decide(ip, host, qtype, upstream_blocked=blocked)
+            r.decide(ip, host, qtype, upstream_blocked=blocked,
+                     rcode=None if blocked else rcode, nx_zone=zone)
         except Exception as exc:  # noqa: BLE001
             print("decide failed:", host, repr(exc), file=sys.stderr)
         n += 1
@@ -132,13 +137,18 @@ def main() -> int:
                     if held and held[1] == bh:
                         held[3] = True
                     continue
+                rep = pihole_reply(line)
+                if rep:
+                    if held and held[1] == rep[0] and held[4] is None:
+                        held[4] = rep[1]
+                    continue
                 parsed = parse_pihole_line(line)
                 ts = parse_syslog_time(line) if parsed else None
                 if not parsed or ts is None:
                     continue
                 if held:
                     run(held)
-                held = list(parsed) + [False, ts]
+                held = list(parsed) + [False, None, None, ts]
             else:
                 parsed = parse_adguard_entry(line)
                 if not parsed:
@@ -158,8 +168,10 @@ def main() -> int:
         evs = [json.loads(l) for l in f if l.strip()]
     span = (last - first) / 3600 if first and last else 0
     print(f"replayed {n} queries over {span:.1f} h  ({bad} unreadable lines)")
-    print(f"feed: {len(r.det.threat_feed)} domains | allowlist entries: {len(state.allowlist)}")
-    print(f"alerts: {len(evs)}  (suppressed repeats: {r.stats['suppressed']})\n")
+    print(f"feed: {len(r.det.threat_feed)} domains | popular: {len(r.det.popular)} | "
+          f"allowlist entries: {len(state.allowlist)}")
+    print(f"alerts: {len(evs)}  (suppressed repeats: {r.stats['suppressed']}, "
+          f"popular-domain guard: {r.stats['popular']})\n")
     by_rule = Counter(e["rule"] for e in evs)
     for rule, c in by_rule.most_common():
         print(f"  {rule:18s} {c}")

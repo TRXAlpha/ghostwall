@@ -119,6 +119,11 @@ def cmd_status(_a) -> int:
           f"{stats.get('recommended', 0)} alerts, {stats.get('blocked', 0)} blocks")
     if feed:
         print(f"feed:     {feed.get('domains', 0):,} phishing domains, updated {_ago(feed.get('updated'))}")
+    popular = st.get("popular")
+    if popular is not None:
+        print(f"popular:  {popular.get('domains', 0):,} top sites never alert on their score alone, "
+              f"updated {_ago(popular.get('updated'))}" if popular.get("domains") else
+              "popular:  no list yet, so every name can alert on its score (the daily feed update fetches it)")
     devs = st.get("devices") or []
     named, unnamed = st.get("named_devices", len(devs)), st.get("unnamed_clients", len(st.get("clients") or []))
     print(f"devices:  {named} named" + (f", {unnamed} unnamed (sudo ghostwall devices)" if unnamed else "")
@@ -176,7 +181,7 @@ def _domain(d: str) -> str:
 def cmd_allow(a) -> int:
     r = control("/allow", {"domain": _domain(a.domain)})
     print(f"Trusted {r.get('domain')}: no more alerts for it or its subdomains (a subdomain that is "
-          "itself on the phishing list still alerts).")
+          "itself on the threat feed still alerts).")
     return 0
 
 

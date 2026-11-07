@@ -213,6 +213,11 @@ class ControlHandler(BaseHTTPRequestHandler):
             n, mtime = feed.info()
             out["feed"] = {"domains": n, "updated": datetime.fromtimestamp(mtime, timezone.utc)
                            .strftime("%Y-%m-%dT%H:%M:%SZ") if mtime else None}
+        popular = getattr(getattr(res, "det", None), "popular", None)
+        if popular is not None:
+            n, mtime = popular.info()
+            out["popular"] = {"domains": n, "updated": datetime.fromtimestamp(mtime, timezone.utc)
+                              .strftime("%Y-%m-%dT%H:%M:%SZ") if mtime else None}
         if full:
             out["devices"] = devices
             out["clients"] = [{"ip": ip, "last_seen": t} for t, ip in clients]

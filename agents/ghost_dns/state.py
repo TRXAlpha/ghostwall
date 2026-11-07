@@ -6,9 +6,9 @@ is visible to the resolver on the very next query. All mutating methods take an
 internal lock and persist atomically (temp file + os.replace).
 
 Persisted keys: allowlist, blocklist, isolated devices, lockdown, learning,
-per-domain first-seen (novelty), block confirmations (auto-promote), and a
-bounded map of recent events (so an alert's Unblock button can find its
-domain).
+per-domain first-seen (novelty), which domain families have resolved (nx_burst),
+block confirmations (auto-promote), and a bounded map of recent events (so an
+alert's Unblock button can find its domain).
 """
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ from tokenizer import registrable_part
 _MAX_EVENTS = 5000
 _MAX_FIRST_SEEN = 200000
 _MAX_RECENT_ALERTS = 20000
+_MAX_RESOLVED = 50000
 
 
 def _now() -> str:
@@ -56,6 +57,7 @@ class GhostState:
         self.device_since: dict[str, str] = {}          # device -> first query (ISO)
         self.device_services: dict[str, list] = {}      # device -> abused services it has used
         self.recent_alerts: dict[str, float] = {}       # "device|domain family|rule" -> epoch of last alert
+        self.resolved: dict[str, str] = {}              # domain family (hashed) -> last day it resolved
         # note_seen() fires on every brand-new domain; persisting each one would
         # be a disk write per query, so it is throttled: mark dirty, flush at
         # most every _flush_interval seconds (and on explicit flush()/shutdown).
@@ -142,6 +144,7 @@ class GhostState:
         self.device_since = dict(d.get("device_since", {}))
         self.device_services = {k: list(v) for k, v in dict(d.get("device_services", {})).items()}
         self.recent_alerts = {k: float(v) for k, v in dict(d.get("recent_alerts", {})).items()}
+        self.resolved = {str(k): str(v) for k, v in dict(d.get("resolved", {})).items()}
 
     def _save_locked(self) -> None:
         # Keep the persisted file bounded.
@@ -149,6 +152,9 @@ class GhostState:
             keep = sorted(self.events.items(),
                           key=lambda kv: kv[1].get("time", ""))[-_MAX_EVENTS:]
             self.events = dict(keep)
+        if len(self.resolved) > _MAX_RESOLVED:
+            keep = sorted(self.resolved.items(), key=lambda kv: kv[1])[-_MAX_RESOLVED:]
+            self.resolved = dict(keep)
         if len(self.first_seen) > _MAX_FIRST_SEEN:
             keep = sorted(self.first_seen.items(), key=lambda kv: kv[1])[-_MAX_FIRST_SEEN:]
             self.first_seen = dict(keep)
@@ -164,6 +170,7 @@ class GhostState:
             "device_since": self.device_since,
             "device_services": self.device_services,
             "recent_alerts": self.recent_alerts,
+            "resolved": self.resolved,
         }
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -245,6 +252,22 @@ class GhostState:
             self.first_seen[reg] = self._stamp()
             self._touch_locked()
             return True
+
+    def note_resolved(self, domain: str) -> None:
+        """A name under this domain family got a real answer (NOERROR): the domain is
+        registered, so an NXDOMAIN for a name in it later is a typo or a probe, not a
+        domain-generating implant (nx_burst). Hashed like first_seen; the date is
+        refreshed once a day so pruning drops the families not used for longest."""
+        key = self._nkey(registrable_part(domain))
+        day = self.clock().strftime("%Y-%m-%d")
+        with self._lock:
+            if self.resolved.get(key) != day:
+                self.resolved[key] = day
+                self._touch_locked()
+
+    def has_resolved(self, domain: str) -> bool:
+        with self._lock:
+            return self._nkey(registrable_part(domain)) in self.resolved
 
     def first_service_use(self, device: str, service: str, baseline_days: float) -> bool | None:
         """Record that `device` used `service`. True: first use after the device's
