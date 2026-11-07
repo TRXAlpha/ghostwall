@@ -100,7 +100,7 @@ jobs:
         if: matrix.server == 'adguard'
         run: |
           mkdir -p ag/work ag/conf
-          docker run -d --name dns --add-host host.docker.internal:host-gateway -p 127.0.0.1:5354:53/udp -p 127.0.0.1:3000:3000 \
+          docker run -d --name dns -p 127.0.0.1:5354:53/udp -p 127.0.0.1:3000:3000 \
             -v "$PWD/ag/work:/opt/adguardhome/work" -v "$PWD/ag/conf:/opt/adguardhome/conf" \
             "$(sed -n 's/^ *image: \(adguard\/adguardhome:.*\)$/\1/p' compose.yaml)"
           for i in $(seq 60); do curl -sf http://127.0.0.1:3000/control/install/get_addresses >/dev/null && break; sleep 1; done
@@ -115,7 +115,7 @@ jobs:
         if: matrix.server == 'pihole'
         run: |
           mkdir -p phlog
-          docker run -d --name dns --add-host host.docker.internal:host-gateway -p 127.0.0.1:5354:53/udp \
+          docker run -d --name dns -p 127.0.0.1:5354:53/udp \
             -p 127.0.0.1:8081:80/tcp -e TZ=UTC \
             -e FTLCONF_dns_upstreams='9.9.9.9;1.1.1.1' -e FTLCONF_dns_listeningMode=all \
             -e FTLCONF_dns_blocking_mode=NXDOMAIN -e FTLCONF_webserver_api_password=ci-password-0123 \
@@ -131,6 +131,7 @@ jobs:
             API=http://127.0.0.1:8081; USER=
             for i in $(seq 60); do curl -sf "$API/api/info/login" >/dev/null && break; sleep 1; done
           fi
+          export BLOCK_HOST="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}' dns)"   # AdGuard fetches the list by address
           python tests/realdns_e2e.py block --server ${{ matrix.server }} --port 5354 --api "$API" --user "$USER" --password ci-password-0123
       - run: python tests/realdns_e2e.py query --port 5354
       - name: check what Ghostwall reads from the real log

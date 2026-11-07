@@ -1,6 +1,7 @@
 [Unit]
 Description=Ghostwall DNS-server blocklists (AdGuard Home / Pi-hole), idle unless DNS_BLOCK_FEED or DNS_BLOCK_ADS is set
-After=network-online.target AdGuardHome.service ghostwall-dns.service
+# docker.service: with AdGuard / Pi-hole in Docker the list is served on the container's gateway address
+After=network-online.target AdGuardHome.service ghostwall-dns.service docker.service
 Wants=network-online.target
 
 [Service]

@@ -204,6 +204,12 @@ machines with about 2 GB of RAM or more, CERT Polska and OpenPhish (ThreatFox to
   previous one). Ghostwall reads its refusals as `upstream_block` (info) and doesn't count them
   for `nx_burst`. Trade-off: every uncached query goes to that provider. Quad9 is weaker on
   phishing; with Pi-hole prefer Cloudflare (Quad9's refusal can't be told apart there).
+- **AdGuard or Pi-hole in Docker:** the DNS server fetches the list over HTTP and resolves
+  the URL with its own DNS, so the URL must hold an address it can reach. `go_shadow.sh`
+  finds the container's gateway (often 172.17.0.1), serves the list there and registers
+  that URL; with host networking it stays on 127.0.0.1. The bundled `compose.yaml` gives
+  Ghostwall a fixed address (172.30.53.3) for the same reason. Your own setup: set
+  `DNS_BLOCK_BIND` and `DNS_BLOCK_URL` in ghostwall.env.
 - **Limits:** Pi-hole blocks exact names only (no subdomains). A failing DNS-server API never
   stops Ghostwall: it logs once, retries, and the lists already registered stay in force.
 

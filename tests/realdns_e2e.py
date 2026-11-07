@@ -54,7 +54,8 @@ def made_up(n: int) -> list[str]:
 
 
 def ask(name: str, qtype: int, port: int) -> str:
-    """Send one query to 127.0.0.1:port; what the reply says (dnsmsg.reply_status)."""
+    """Send one query to 127.0.0.1:port; what the reply says (dnsmsg.reply_status), or
+    "BLOCKED" for a null answer (0.0.0.0 / ::, Pi-hole's and AdGuard's default blocking)."""
     import dnsmsg
     q = struct.pack(">HHHHHH", 0x1234, 0x0100, 1, 0, 0, 0) + b"".join(
         bytes([len(p)]) + p.encode() for p in name.split(".")) + b"\x00" + struct.pack(">HH", qtype, 1)
@@ -64,7 +65,11 @@ def ask(name: str, qtype: int, port: int) -> str:
         for _ in range(3):
             s.sendto(q, ("127.0.0.1", port))
             try:
-                return dnsmsg.reply_status(s.recv(4096))
+                reply = s.recv(4096)
+                ips = dnsmsg.extract_answer_ips(reply)
+                if ips and all(ip in ("0.0.0.0", "::") for ip in ips):
+                    return "BLOCKED"
+                return dnsmsg.reply_status(reply)
             except socket.timeout:
                 continue
         raise SystemExit(f"no answer for {name} from 127.0.0.1:{port}")
@@ -94,11 +99,12 @@ def cmd_query(a) -> int:
 
 
 def wait_for(name: str, want: str, port: int, tries: int = 15) -> str:
-    """The server needs a moment to load a changed list: ask until the answer is `want`."""
+    """The server needs a moment to load a changed list: ask until the answer is `want`.
+    want="REFUSED" accepts either way a DNS server blocks: NXDOMAIN or a null answer."""
     got = ""
     for _ in range(tries):
         got = ask(name, 1, port)
-        if got == want:
+        if got == want or (want == "REFUSED" and got in ("NXDOMAIN", "BLOCKED")):
             break
         time.sleep(1)
     return got
@@ -120,7 +126,9 @@ def cmd_block(a) -> int:
     st.allow(FEED_TRUSTED)                         # `ghostwall allow example.net`
     env = dict(os.environ, DNS_SOURCE=a.server, DNS_BLOCK_FEED="on", DNS_BLOCK_ADS="off", DNS_BLOCK_BYPASS="off",
                DNS_BLOCK_BIND="0.0.0.0", DNS_BLOCK_PORT="5382",
-               DNS_BLOCK_URL="http://host.docker.internal:5382/ghostwall-blocklist.txt",
+               # AdGuard resolves a list's URL with its own DNS (not the container's hosts
+               # file), so the URL holds an address: the DNS container's gateway (CI sets it).
+               DNS_BLOCK_URL=f"http://{os.environ.get('BLOCK_HOST', '127.0.0.1')}:5382/ghostwall-blocklist.txt",
                ADGUARD_URL=a.api, ADGUARD_USER=a.user, ADGUARD_PASSWORD=a.password,
                PIHOLE_URL=a.api, PIHOLE_PASSWORD=a.password,
                DNS_BLOCK_CANARIES="on" if a.server == "adguard" else "off")
@@ -149,7 +157,7 @@ def cmd_block(a) -> int:
 
     bad = []
     once("register")
-    if wait_for(FEED_BAD, "NXDOMAIN", a.port) != "NXDOMAIN":
+    if wait_for(FEED_BAD, "REFUSED", a.port) not in ("NXDOMAIN", "BLOCKED"):
         bad.append(f"{FEED_BAD} is in the registered feed but was not refused")
     for name in (FEED_TRUSTED, REAL):
         if wait_for(name, "NOERROR", a.port, tries=3) != "NOERROR":
@@ -171,7 +179,7 @@ def cmd_block(a) -> int:
         bad.append(f"{FEED_BAD} should resolve after `ghostwall unblock` but is still refused")
     st.set_dns_exception(FEED_BAD, False)          # `ghostwall unblock --undo`
     once("undo")
-    if wait_for(FEED_BAD, "NXDOMAIN", a.port) != "NXDOMAIN":
+    if wait_for(FEED_BAD, "REFUSED", a.port) not in ("NXDOMAIN", "BLOCKED"):
         bad.append(f"{FEED_BAD} should be refused again after `unblock --undo`")
     if bad:
         print("FAIL:\n  " + "\n  ".join(bad))

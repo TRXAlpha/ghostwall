@@ -121,6 +121,18 @@ if [ ! -f /etc/ghostwall/devices.json ] && [ -f /opt/ghostwall/agents/netconf/de
   cp /opt/ghostwall/agents/netconf/devices.json /etc/ghostwall/devices.json && echo "   copied devices.json to /etc/ghostwall"
 fi
 [ -f "$CFG" ] || cp "$OLD/ghost_dns.example.json" "$CFG"
+# A DNS server in a Docker container can't fetch http://127.0.0.1:5382 (that is its own
+# loopback), and it resolves a list's URL with its own DNS, not Docker's: serve the list on
+# that container's gateway address and hand it that address. Host networking: no gateway,
+# and 127.0.0.1 works as it is.
+GW_DNS_BLOCK_HOST=""
+if [ -z "${DNS_BLOCK_URL:-}" ] && command -v docker >/dev/null 2>&1; then
+  for c in $(docker ps --format '{{.Names}} {{.Image}}' 2>/dev/null | awk '/adguard\/adguardhome|pihole\/pihole/ {print $1}'); do
+    gw=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.Gateway}} {{end}}' "$c" 2>/dev/null | awk '{print $1}')
+    if [ -n "$gw" ]; then GW_DNS_BLOCK_HOST=$gw; echo "   $c runs in Docker: it will fetch Ghostwall's blocklist from $gw"; break; fi
+  done
+fi
+export GW_DNS_BLOCK_HOST
 "$PY" - "$CFG" "$QUERYLOG" "$SOURCE" "$FEED" "$DATA" <<'PYEOF'
 import json, sys
 p, querylog, fmt, feed, data = sys.argv[1:6]
@@ -151,6 +163,11 @@ for key, env in (("dns_block_feed", "DNS_BLOCK_FEED"), ("dns_block_ads", "DNS_BL
                  ("dns_block_bypass", "DNS_BLOCK_BYPASS"), ("dns_block_canaries", "DNS_BLOCK_CANARIES")):
     if os.environ.get(env):
         c[key] = os.environ[env].strip().lower()
+gw = os.environ.get("GW_DNS_BLOCK_HOST", "").strip()
+if gw and not os.environ.get("DNS_BLOCK_URL"):
+    port = int(os.environ.get("DNS_BLOCK_PORT") or c.get("dns_block_port") or 5382)
+    c["dns_block_bind"] = gw
+    c["dns_block_url"] = f"http://{gw}:{port}/ghostwall-blocklist.txt"
 up = os.environ.get("DNS_PROTECTIVE_UPSTREAM", "").strip().lower()
 if up in ("quad9", "cloudflare"):
     c["protective_upstream"] = up
