@@ -339,6 +339,14 @@ whole network; read it fully first, and keep the router's admin page open.
    still reach each other. Running a mail server at home? Set `"egress_block_tcp"` in
    `agents/netconf/config.json` to the list you want (or `"egress_block": false`).
 
+   **IP reputation:** LAN devices can't reach networks on Spamhaus DROP / DROPv6 (run by
+   criminals, hijacked, or leased to botnet operators) or abuse.ch's botnet C2 lists (SSLBL,
+   Feodo Tracker). `update_ipfeed.py` refreshes `/var/lib/ghostwall/ip_blocklist.txt` with
+   the daily feed update (1,858 networks on 2026-11-07), and ghost-dns loads it into the
+   firewall's `drop_net4` / `drop_net6` sets within a minute, in one transaction. Nothing
+   private and nothing wider than a /8 (IPv6: /19) is ever loaded. Check with
+   `sudo nft list set inet ghostwall drop_net4 | head`.
+
    **IoT egress lock (opt-in):** with `"iot_egress_lock": "log"` in `config.json`, devices
    marked `"profile": "iot"` in devices.json are logged (`journalctl -k | grep iot-egress`)
    whenever they reach the internet on anything but web (80, 443), MQTT over TLS (8883) and

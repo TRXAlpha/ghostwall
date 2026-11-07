@@ -99,6 +99,9 @@ DEFAULTS = {
     # threat_feed_path; "" or no file = no guard. On public lists the top 1M cut DGA
     # false positives the most and hid no DGA name: agents/dga_eval/fp_independent.py.
     "popular_path": None,
+    # Gateway mode: IP reputation networks (update_ipfeed.py: Spamhaus DROP, abuse.ch C2)
+    # that LAN devices may not reach. None = ip_blocklist.txt next to threat_feed_path.
+    "ip_blocklist_path": None,
     "popular_top_n": 1000000,
 
     # --- DNS-server blocking (dns_block.py; docs/OPERATIONS.md "Block with your DNS server") ---
@@ -225,6 +228,8 @@ def load_config(path: str | None = None, overrides: dict | None = None) -> dict:
         given = {k: v for k, v in overrides.items() if v is not None}
         cfg.update(given)
         mine |= set(given)
+    if cfg.get("ip_blocklist_path") is None and cfg.get("threat_feed_path"):
+        cfg["ip_blocklist_path"] = os.path.join(os.path.dirname(cfg["threat_feed_path"]), "ip_blocklist.txt")
     if cfg.get("popular_path") is None and cfg.get("threat_feed_path"):
         cfg["popular_path"] = os.path.join(os.path.dirname(cfg["threat_feed_path"]), "popular_domains.txt")
     if cfg.get("models") == "v3-public":

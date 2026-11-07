@@ -50,6 +50,20 @@ table inet ghostwall {
         }
     }
 
+    # IP reputation (Spamhaus DROP, abuse.ch botnet C2): filled at runtime by ghost-dns from
+    # /var/lib/ghostwall/ip_blocklist.txt (update_ipfeed.py, daily). Empty until then.
+    set drop_net4 {
+        type ipv4_addr
+        flags interval
+        auto-merge
+    }
+
+    set drop_net6 {
+        type ipv6_addr
+        flags interval
+        auto-merge
+    }
+
     # Devices marked "profile": "iot" in devices.json (the egress lock, when on, applies to them).
     set iot_dev {
         type ipv4_addr
@@ -123,6 +137,10 @@ table inet ghostwall {
         # --- block DoT (DNS over TLS) on all forwarded traffic ---
         tcp dport 853 drop
         udp dport 853 drop
+
+        # --- IP reputation: no LAN device talks to criminal networks or botnet C2 ---
+        iifname "{{ lan_iface }}" ip daddr @drop_net4 counter drop
+        iifname "{{ lan_iface }}" ip6 daddr @drop_net6 counter drop
 
         # --- egress policy: ports no home device needs toward the internet, and (opt-in)
         # IoT devices limited to web / MQTT-TLS / time. From config.json via gen.py.

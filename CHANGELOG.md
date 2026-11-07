@@ -84,6 +84,10 @@ in Docker, shadow mode) on 2026-11-07: [docs/FIELD_RESULTS.md](docs/FIELD_RESULT
 
 ### Changed
 
+- **Gateway mode blocks criminal networks and botnet C2 addresses:** Spamhaus DROP /
+  DROPv6 and abuse.ch SSLBL / Feodo Tracker, refreshed daily by the new `update_ipfeed.py`
+  (1,858 networks on 2026-11-07) and loaded by ghost-dns into the firewall's `drop_net4` /
+  `drop_net6` sets in one transaction. Private or over-wide networks are never loaded.
 - **Gateway mode drops ports no home device needs toward the internet:** Telnet (23,
   2323), SMTP (25), Windows RPC / NetBIOS / SMB (135, 137-139, 445) and UPnP (1900). The
   ports botnets spread on, spam bots send on, and worms and ransomware use. Configurable in
