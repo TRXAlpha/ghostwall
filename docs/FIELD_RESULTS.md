@@ -88,7 +88,18 @@ the next 10 queries.
 | popular guard: 20 random-looking names from the top 20k | no DGA alert | pass (guard counter +19) | |
 | `doh_bypass`: two DoH providers | one alert each, or monthly dedupe | pass: 1 new, 1 deduped (seen the day before) | 2.0 s |
 | `dns_tunnel`: 35 random 45-character labels under one made-up domain | one alert | pass, at the 12th label | 0.6 s |
+| trust: `ghostwall allow` one new random name, then look up it and a control | alert for the control only | pass | 12 s |
 | `dns_beacon`: one made-up name every 31 s, 9 times | one alert | none seen within 4 min of the last lookup: inconclusive (31 s is at the detector's 30 s minimum, and the log buffer may not have flushed) | |
+
+## Resilience
+
+- Restart of ghost-dns: active at once, control API answering after about 6 s, scoring
+  again after about 7 s; no old alert repeated.
+- ghost-dns stopped for 30 s: DNS answered 30 of 30 lookups (shadow mode never carries it).
+- Feed update: exit 0, 267,630 names from 3 sources, 179 popular names dropped, 11 s.
+- Disk: 21 MB in `/var/lib/ghostwall`; the alert log far below its 32 MiB rotation size.
+- DNS answer times before and after the tests were the same (median 0 ms cached, 15 ms
+  uncached, on the box).
 
 ## Bugs this found
 
@@ -99,4 +110,5 @@ All fixed in the same change ([CHANGELOG](../CHANGELOG.md), "Unreleased"):
 - the replay ignored `ghost_dns.json`, and on upgraded installs replayed with a stale feed
   and without the popular-domain guard; its alerts carried the replay's time;
 - `dns_tunnel` flagged a game launcher's service names;
+- `ghostwall status` timed out after the daily feed update (the request reloaded the lists);
 - `ghostwall version` named the wrong release; a harmless traceback in the journal.
