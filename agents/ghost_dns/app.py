@@ -50,6 +50,30 @@ def build(cfg: dict):
     return devices, gstate, scorer, enforcer, event_log, capture, resolver
 
 
+def restore_isolations(gstate, enforcer, devices, log=print) -> int:
+    """Put every device state.json says is isolated back into the nft set. A reboot (or a
+    reload of ghostwall.nft) empties the set while state.json keeps the names, so without
+    this the dashboard would say "isolated" about a device that is online again, and
+    auto_isolate would skip it as already isolated. Only with the nft backend. A failure is
+    logged and skipped, never fatal: `ghostwall release NAME` clears a stale entry.
+    Returns how many addresses went back in."""
+    if enforcer.backend.name != "nft":
+        return 0
+    n = 0
+    for name in sorted(gstate.isolated):
+        d = devices.device_for_name(name)
+        ips = gstate.isolated_addresses(name) or ([d.ip] if d is not None else [])
+        for ip in ips:
+            try:
+                enforcer.isolate(ip)
+                n += 1
+                log(f"[ghost-dns] {name} is isolated (state.json): {ip} back in the isolated set; "
+                    f"undo: sudo ghostwall release {name}", flush=True)
+            except Exception as exc:  # noqa: BLE001
+                log(f"[ghost-dns] WARNING could not re-isolate {name} at {ip}: {exc}", flush=True)
+    return n
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="ghost-dns resolver + control API")
     ap.add_argument("--config")
@@ -94,6 +118,7 @@ def main(argv=None):
     if args.once:
         print("[ghost-dns] --once: built OK, exiting", flush=True)
         return 0
+    restore_isolations(gstate, enforcer, devices)
 
     # Shadow mode: pin the follower's starting point (the log's current end) before the
     # control API answers, so every query written after /status responds gets scored.

@@ -11,7 +11,7 @@ SECRET = b"s3cret"
 
 class SigningTests(unittest.TestCase):
     def test_roundtrip_all_actions(self):
-        for action in ("unblock", "keep", "isolate", "details"):
+        for action in ("unblock", "keep", "isolate", "release", "details"):
             data = make_callback(action, "evt_01abc", SECRET)
             self.assertLessEqual(len(data), 64)
             self.assertEqual(parse_callback(data, SECRET), (action, "evt_01abc"))

@@ -6,7 +6,7 @@ import hmac
 import hashlib
 
 # actions are single letters to keep callback data under Telegram's 64-byte limit
-ACTIONS = {"u": "unblock", "k": "keep", "i": "isolate", "d": "details", "t": "trust"}
+ACTIONS = {"u": "unblock", "k": "keep", "i": "isolate", "d": "details", "t": "trust", "r": "release"}
 ACTION_CODES = {v: k for k, v in ACTIONS.items()}
 
 MAX_LEN = 64

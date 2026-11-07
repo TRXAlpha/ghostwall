@@ -34,6 +34,11 @@ def is_block(event: dict) -> bool:
     return event.get("action") == "block"
 
 
+def head(event: dict) -> str:
+    """ISOLATED when auto-isolate cut the device off, else BLOCKED or ALERT."""
+    return "ISOLATED" if event.get("auto_isolated") else "BLOCKED" if is_block(event) else "ALERT"
+
+
 LATE_AFTER = 300   # seconds: an alert sent later than this says when it happened
 
 
@@ -64,15 +69,18 @@ def format_alert(event: dict, count: int = 1, now: float | None = None) -> str:
     if minimal():
         what = RULE_WORDS.get(event.get("rule"), "alert")
         return "\n".join([
-            f"{'BLOCKED' if is_block(event) else 'ALERT'} · {device}" + (f" (x{count})" if count > 1 else ""),
+            f"{head(event)} · {device}" + (f" (x{count})" if count > 1 else ""),
             f"{what} ({event.get('severity', 'warn')})",
+            *([f"Isolated automatically. Undo: Release device below, or sudo ghostwall release {device}"]
+              if event.get("auto_isolated") else []),
+            *(["Automatic isolation failed: see the dashboard."] if event.get("auto_isolate_failed") else []),
             *([late] if late else []),
             "Details on the dashboard (privacy mode: no domains are sent to Telegram).",
         ])
     domain = event.get("domain", "?")
     reasons = event.get("reasons") or [event.get("rule", "rule fired")]
     lines = [
-        f"{'BLOCKED' if is_block(event) else 'ALERT'} · {device}" + (f" (x{count})" if count > 1 else ""),
+        f"{head(event)} · {device}" + (f" (x{count})" if count > 1 else ""),
         domain + (f" → {event['dst_ip']}" if event.get("dst_ip") else ""),
         "Why: " + "; ".join(str(r) for r in reasons),
     ]
@@ -92,6 +100,8 @@ def inline_keyboard(event: dict, secret: bytes) -> list[list[dict]]:
             "callback_data": make_callback(action, event["event_id"], secret),
         }
 
+    if event.get("auto_isolated"):
+        return [[btn("Release device", "release"), btn("Details", "details")]]
     if event.get("rule") == "iot_new_domain":   # refused or not, the way out is allowing it for the device
         return [[btn("Allow for this device", "trust"), btn("Isolate device", "isolate"), btn("Details", "details")]]
     if not is_block(event):

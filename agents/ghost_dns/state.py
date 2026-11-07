@@ -5,7 +5,8 @@ resolver thread and the control-API thread, so a `/allow` from the Telegram bot
 is visible to the resolver on the very next query. All mutating methods take an
 internal lock and persist atomically (temp file + os.replace).
 
-Persisted keys: allowlist, blocklist, isolated devices, lockdown, learning,
+Persisted keys: allowlist, blocklist, isolated devices (and the addresses isolated),
+automatic isolation times (auto_isolate's hourly cap), lockdown, learning,
 per-domain first-seen (novelty), which domain families have resolved (nx_burst),
 each IoT device's learned domain families (hashed, iot_new_domain),
 block confirmations (auto-promote), and a bounded map of recent events (so an
@@ -53,6 +54,8 @@ class GhostState:
         self.static_allow: set[str] = set()   # from allowlist.txt: reloaded at start, not "yours"
         self.blocklist: set[str] = set()
         self.isolated: set[str] = set()
+        self.isolated_ips: dict[str, list[str]] = {}    # device -> the addresses put in the nft set
+        self.auto_isolations: list[float] = []          # epoch of each automatic isolation (the cap)
         self.lockdown: bool = False
         self.learning: bool = learning_default
         self.first_seen: dict[str, str] = {}
@@ -136,6 +139,10 @@ class GhostState:
         self.allowlist = set(d.get("allowlist", []))
         self.blocklist = set(d.get("blocklist", []))
         self.isolated = set(d.get("isolated", []))
+        self.isolated_ips = {str(k): [str(i) for i in v] for k, v in dict(d.get("isolated_ips", {})).items()
+                             if k in self.isolated and isinstance(v, list)}
+        self.auto_isolations = [float(t) for t in d.get("auto_isolations", [])
+                                if isinstance(t, (int, float))][-100:]
         self.lockdown = bool(d.get("lockdown", False))
         self.learning = bool(d.get("learning", self.learning))
         self.first_seen = {}
@@ -170,6 +177,8 @@ class GhostState:
             "allowlist": sorted(self.allowlist),
             "blocklist": sorted(self.blocklist),
             "isolated": sorted(self.isolated),
+            "isolated_ips": self.isolated_ips,
+            "auto_isolations": self.auto_isolations[-100:],
             "lockdown": self.lockdown,
             "learning": self.learning,
             "first_seen": self.first_seen,
@@ -445,15 +454,50 @@ class GhostState:
             self.lockdown = bool(on)
             self._save_locked()
 
-    def isolate(self, name: str) -> None:
+    def isolate(self, name: str, ip: str | None = None) -> None:
+        """ip: the address that went into the nft set, so release and a restart know it
+        even after the device's address changed."""
         with self._lock:
             self.isolated.add(name)
+            if ip:
+                ips = self.isolated_ips.setdefault(name, [])
+                if ip not in ips:
+                    ips.append(ip)
             self._save_locked()
 
-    def release(self, name: str) -> None:
+    def release(self, name: str) -> list[str]:
+        """Returns the addresses recorded for it (to take out of the nft set)."""
         with self._lock:
             self.isolated.discard(name)
+            ips = self.isolated_ips.pop(name, [])
             self._save_locked()
+            return ips
+
+    def isolated_addresses(self, name: str) -> list[str]:
+        with self._lock:
+            return list(self.isolated_ips.get(name, []))
+
+    def auto_isolations_within(self, seconds: float) -> int:
+        """How many automatic isolations happened in the last `seconds` (wall clock, kept
+        in state.json: a restart, or a crash loop, does not reset auto_isolate_max_per_hour).
+        A time in the future counts too (a Pi has no clock battery and can boot with an old
+        time): the cap errs towards isolating less. More than a day ahead is ignored."""
+        now = self.clock().timestamp()
+        with self._lock:
+            return sum(1 for t in self.auto_isolations if -86400 < now - t < seconds)
+
+    def note_auto_isolation(self) -> None:
+        now = self.clock().timestamp()
+        with self._lock:
+            self.auto_isolations = [t for t in self.auto_isolations if -86400 < now - t < 86400][-99:] + [now]
+            self._save_locked()
+
+    def recently(self, key: str, window: float) -> bool:
+        """Like seen_alert(), but only looks: records nothing."""
+        now = self.clock().timestamp()
+        with self._lock:
+            last = self.recent_alerts.get(key)
+            return last is not None and now - last < window
 
     def is_isolated(self, name: str) -> bool:
         with self._lock:

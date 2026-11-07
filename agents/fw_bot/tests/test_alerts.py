@@ -2,6 +2,7 @@
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from alerts import format_alert, group_text, inline_keyboard
@@ -51,6 +52,34 @@ class FormatTests(unittest.TestCase):
             self.assertEqual(eid, "evt_01abc")
         actions = [parse_callback(b["callback_data"], SECRET)[0] for b in row]
         self.assertEqual(actions, ["unblock", "keep", "isolate", "details"])
+
+    def test_auto_isolated_alert_offers_release(self):
+        evt = dict(EVENT, rule="threat_feed", action="block", auto_isolated=True,
+                   reasons=["evil.example is on URLhaus (malware)",
+                            "isolated automatically: threat_feed; undo: Telegram Release button or "
+                            "sudo ghostwall release tv-box"])
+        text = format_alert(evt)
+        self.assertEqual(text.split("\n")[0], "ISOLATED · laptop")
+        self.assertIn("sudo ghostwall release tv-box", text)
+        kb = inline_keyboard(evt, SECRET)[0]
+        self.assertEqual([b["text"] for b in kb], ["Release device", "Details"])
+        self.assertEqual([parse_callback(b["callback_data"], SECRET)[0] for b in kb], ["release", "details"])
+
+    def test_privacy_mode_still_says_isolated_and_how_to_undo(self):
+        evt = dict(EVENT, device="tv-box", rule="threat_feed", action="block", auto_isolated=True)
+        with mock.patch.dict(os.environ, {"FW_BOT_PRIVACY": "minimal"}):
+            text = format_alert(evt)
+            failed = format_alert(dict(EVENT, would_isolate=True, auto_isolate_failed=True))
+        self.assertTrue(text.startswith("ISOLATED · tv-box"))
+        self.assertIn("sudo ghostwall release tv-box", text)
+        self.assertNotIn(EVENT["domain"], text)
+        self.assertIn("Automatic isolation failed", failed)
+        self.assertTrue(failed.startswith("BLOCKED"))
+
+    def test_would_isolate_alert_is_still_an_alert(self):
+        evt = dict(EVENT, action="recommend", would_isolate=True)
+        self.assertEqual(format_alert(evt).split("\n")[0], "ALERT · laptop")
+        self.assertNotIn("Release device", [b["text"] for b in inline_keyboard(evt, SECRET)[0]])
 
     def test_keyboard_forgery_rejected(self):
         kb = inline_keyboard(EVENT, SECRET)

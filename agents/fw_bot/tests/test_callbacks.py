@@ -42,6 +42,10 @@ class StubClient(ControlClient):
         self.calls.append(("isolate", name))
         return {"ok": True, "name": name, "isolated": True}
 
+    def release(self, name):
+        self.calls.append(("release", name))
+        return {"ok": True, "name": name, "isolated": False}
+
     def allow(self, domain, device=None):
         self.calls.append(("allow", domain) if device is None else ("allow", domain, device))
         return {"ok": True, "domain": domain, "allowed": True}
@@ -111,6 +115,19 @@ class CallbackTests(unittest.TestCase):
             recs = [json.loads(l) for l in f if l.strip()]
         self.assertEqual([r["action"] for r in recs],
                          ["isolate", "keep", "details"])
+
+    def test_release_button_unisolates_and_is_labelled(self):
+        self.h.events = {"evt_01abc": dict(EVENT, device="tv-box", auto_isolated=True)}
+        out = self.h.handle(self._q("release"))
+        self.assertEqual(out, "tv-box released.")
+        self.assertEqual(self.client.calls, [("release", "tv-box")])
+        self.assertIn("tv-box released.", [e[2] for e in self.api.edits])
+        with open(self.cfg.labels_path, encoding="utf-8") as f:
+            self.assertEqual(json.loads(f.readline())["action"], "release")
+
+    def test_forged_release_is_ignored(self):
+        self.assertIn("ignored", self.h.handle(self._q("release", tamper=True)))
+        self.assertEqual(self.client.calls, [])
 
     def test_trust_allowlists_the_domain(self):
         out = self.h.handle(self._q("trust"))
