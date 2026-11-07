@@ -59,7 +59,7 @@ against this schema (exit 1 on any invalid line).
 | `time` | yes | ISO 8601 UTC, e.g. `2026-10-20T21:04:05Z` |
 | `device` | yes | device name from `devices.json`, or the client IP |
 | `domain` | yes | lowercase, no trailing dot |
-| `rule` | yes | `threat_feed`, `dga_burst`, `nx_burst`, `dga_high`, `dga_suspect`, `dga_corroborated`, `doh_bypass`, `abused_service`, `dns_tunnel`, `dns_beacon`, `iot_new_domain`, `blocklist`, `raw_ip`, `doh_ip`, `beacon` |
+| `rule` | yes | `threat_feed`, `dga_burst`, `nx_burst`, `dga_high`, `dga_suspect`, `dga_corroborated`, `doh_bypass`, `abused_service`, `dns_tunnel`, `dns_beacon`, `iot_new_domain`, `upstream_block` (info, action allow: the upstream resolver refused it), `blocklist`, `raw_ip`, `doh_ip`, `beacon` |
 | `action` | yes | `block`, `recommend` or `allow` |
 | `event_id` | yes | `^[A-Za-z0-9_-]{1,64}$` |
 | `severity` | no | `info`, `warn` (default), `high`, `critical` |
@@ -106,6 +106,12 @@ overrides any of them. The most useful keys:
 | `novelty_days` | `7` | how long a name counts as new |
 | `burst_min_score`, `burst_min_distinct` | `0.80`, `5` | DGA burst: score and count per device in 10 min |
 | `nx_burst_enabled` | `true` | `nx_burst`: alert when one device fails to resolve (NXDOMAIN) many different unregistered domains, the way a DGA implant searches for its server. Needs the answer's response code: AdGuard's query log (`Answer`), Pi-hole's log (`reply ... is NXDOMAIN` lines) or inline mode |
+| `dns_block_feed` | `"off"` | `"off"`, `"dry-run"` or `"on"`: hand the threat feed to AdGuard Home / Pi-hole as a blocklist (dns_block.py). Env `DNS_BLOCK_FEED` wins |
+| `dns_block_ads` | `"off"` | `"off"`, `"pro"` or `"ultimate"` (HaGeZi Multi). Env `DNS_BLOCK_ADS` |
+| `dns_block_bypass` | `"off"` | `"on"` adds HaGeZi's DoH/VPN/Tor/Proxy bypass list (breaks VPN apps on purpose). Env `DNS_BLOCK_BYPASS` |
+| `dns_block_canaries` | `"on"` | with the feed on: `"on"`, `"no-relay"` (keep iCloud Private Relay) or `"off"`. Env `DNS_BLOCK_CANARIES` |
+| `dns_block_bind`, `dns_block_port`, `dns_block_url` | `127.0.0.1`, `5382`, `http://127.0.0.1:5382/ghostwall-blocklist.txt` | where the list is served and the URL the DNS server fetches. Env `DNS_BLOCK_BIND`, `DNS_BLOCK_PORT`, `DNS_BLOCK_URL` |
+| `protective_upstream` | `"off"` | `"off"`, `"quad9"` or `"cloudflare"` (set by go_shadow.sh from `DNS_PROTECTIVE_UPSTREAM`). `quad9` also reads an NXDOMAIN without SOA as the upstream's block |
 | `auto_isolate` | `"off"` | `"dry-run"`: alerts say `would_isolate`, nothing changes. `"on"`: cut off the device behind a high-confidence finding, like `/isolate`. Behaves as dry-run in learning or shadow mode, without `"enforce": "nft"` (gateway mode) or without `pi_ip` |
 | `auto_isolate_rules` | `["threat_feed", "dns_tunnel"]` | rules that may isolate. `threat_feed` only on an exact match that is not under a popular site, not on an abused shared service and not on phishing lists only (a click on a link doesn't make a device infected). ghost-flow rules (`raw_ip`, `beacon`, `doh_ip`) are refused |
 | `auto_isolate_exempt` | `[]` | device names or addresses never isolated. The Pi, loopback, unnamed clients and non-IPv4 addresses never are |
@@ -148,6 +154,9 @@ overrides any of them. The most useful keys:
 | `ghost_dns/eval_detection.py` | before/after simulation on labelled data |
 | `ghost_dns/bench_latency.py [-n 200]` | inline-mode answer time for never-seen names, scoring before vs after the answer |
 | `dga_eval/fp_independent.py --data DIR [--download] [--jobs N]` | DGA false positives on Cisco Umbrella and Majestic (lists the thresholds were not set on), scored as the resolver does, with and without the popular-domain guard → `results_fp_independent.md` |
+| `ghost_dns/dns_block.py run\|once\|unregister\|upstream [--config F]` | the DNS-server blocking service: builds and serves the list, registers it with AdGuard (`/control/filtering`) or Pi-hole v6 (`/api/lists`), exceptions from Trust and `ghostwall unblock`. Logins from `ADGUARD_URL` / `ADGUARD_USER` / `ADGUARD_PASSWORD` or `PIHOLE_URL` / `PIHOLE_PASSWORD` in ghostwall.env, never logged |
+| `ghost_dns/measure_blocklists.py --querylog FILE [--feed F] [--tranco F] [--download DIR]` | how many names and queries of your log each list would block, and each list's Tranco top 10k / 100k overlap |
+| `ghostwall unblock DOMAIN [--undo]`, `ghostwall blocking` | an exception in the DNS server's blocklists (and off Ghostwall's own blocklist); what the blocklists hold and whether they are registered |
 | `netconf/gen.py [--devices FILE] [--config FILE]` | renders the gateway configs into `agents/netconf/out/`. `config.json` keys besides the network ones: `egress_block` (default true), `egress_block_tcp` (`[23, 25, 135, 139, 445, 2323]`), `egress_block_udp` (`[137, 138, 1900]`), `iot_egress_lock` (`"off"` / `"log"` / `"on"`, for devices with `"profile": "iot"`), `iot_allowed_tcp` (`[80, 443, 8883]`), `iot_allowed_udp` (`[123, 443]`); a bad value stops it; the `doh_ip4` / `doh_ip6` sets come from `agents/netconf/doh_ips.txt` (also ghost-flow's `doh_ip` list; public addresses only, anything else stops it) |
 | `ghost_dns/bench_lists.py [--dir /var/lib/ghostwall] [--top N]` | memory, load time and lookup time of the threat feed and the popular-domain list as ghost-dns holds them |
 | `dga_eval/feed_overlap.py [--tranco FILE] [--date D]` | each threat feed's overlap with the Tranco top 1k/10k/100k/1M and what the guard drops → `results_feeds.md` |

@@ -161,6 +161,52 @@ a generated password (`GHOSTWALL_WEB_PASSWORD`, user `ghostwall`); both are in
 - Fine on a home LAN or tailnet; never expose it to the internet. Actions are accepted
   only as JSON from the dashboard's own origin.
 
+## Block with your DNS server (opt-in)
+
+Ghostwall can hand its threat feed to AdGuard Home or Pi-hole as a blocklist, so known
+malware and phishing domains are refused for every device. Ghostwall still never sits in
+the DNS path: it builds the list, serves it on 127.0.0.1:5382, and registers it through the
+DNS server's own API (a small separate service, `ghostwall-dnsblock`, holds the login).
+
+1. In `/etc/ghostwall/ghostwall.env` set the DNS server's login: `ADGUARD_URL`,
+   `ADGUARD_USER`, `ADGUARD_PASSWORD`, or `PIHOLE_URL` and `PIHOLE_PASSWORD` (an app
+   password if two-factor login is on). They are used for the API only and never logged.
+2. Dry-run first: `DNS_BLOCK_FEED=dry-run`, then `sudo bash /opt/ghostwall/agents/ghost_dns/go_shadow.sh`.
+   Nothing is registered. `sudo ghostwall blocking` shows the list, its sources, and how
+   many names your devices asked for in the last 7 days are on it.
+3. Measure what each list would block on your own network:
+   `sudo -u ghostwall /opt/ghostwall/.venv/bin/python /opt/ghostwall/agents/ghost_dns/measure_blocklists.py --querylog <your query log> --feed /var/lib/ghostwall/threat_feed.txt --tranco /var/lib/ghostwall/popular_domains.txt --download /tmp/lists`.
+4. On: `DNS_BLOCK_FEED=on`, re-run `go_shadow.sh`, check `sudo ghostwall blocking`. Docker: set
+   `DNS_BLOCK_FEED` and the AdGuard login in `compose.yaml` and recreate the container.
+5. Something broke? `sudo ghostwall allow example.com` (trust it) or
+   `sudo ghostwall unblock example.com`: both become an exception in the DNS server within a
+   minute or two. `sudo ghostwall unblock --undo example.com` blocks it again.
+6. Undo everything: `DNS_BLOCK_FEED=off`, `DNS_BLOCK_ADS=off`, `DNS_BLOCK_BYPASS=off`, re-run
+   `go_shadow.sh`. Ghostwall removes only its own lists and exception block; `uninstall.sh`
+   does the same.
+
+With blocking on or in dry-run the feed also grows: HaGeZi TIF medium instead of mini on
+machines with about 2 GB of RAM or more, CERT Polska and OpenPhish (ThreatFox too if you set
+`THREATFOX_URL`, which needs an abuse.ch key), all behind the popular-site guard. On
+2026-11-07 that was 443,645 names, 0 of them in the Tranco top 100k.
+
+- **Ads:** `DNS_BLOCK_ADS=pro` (HaGeZi Multi Pro) is the low-breakage choice; `ultimate`
+  blocks more and breaks more (Meta and Microsoft features: it hit 593 of the Tranco top 10k
+  on 2026-11-07, Pro 362). No DNS blocker can stop ads served from the same domain as the
+  content (YouTube, Twitch, most in-app ads): use uBlock Origin in the browser for those.
+- **Bypass and canaries:** with the feed on, `use-application-dns.net` (Firefox then turns its
+  own DoH off) and iCloud Private Relay's names answer NXDOMAIN, so those devices use your
+  DNS server; Private Relay stops working on this network, which is the point
+  (`DNS_BLOCK_CANARIES=no-relay` keeps it). `DNS_BLOCK_BYPASS=on` adds HaGeZi's
+  DoH/VPN/Tor/Proxy bypass list: it breaks VPN apps on purpose.
+- **Protective upstream:** `DNS_PROTECTIVE_UPSTREAM=quad9` or `cloudflare` sets the DNS server's
+  upstream to a resolver that blocks malware itself (once, reversible: `off` restores the
+  previous one). Ghostwall reads its refusals as `upstream_block` (info) and doesn't count them
+  for `nx_burst`. Trade-off: every uncached query goes to that provider. Quad9 is weaker on
+  phishing; with Pi-hole prefer Cloudflare (Quad9's refusal can't be told apart there).
+- **Limits:** Pi-hole blocks exact names only (no subdomains). A failing DNS-server API never
+  stops Ghostwall: it logs once, retries, and the lists already registered stay in force.
+
 ## Automatic isolation (opt-in)
 
 Cuts a device off the moment it does something only infected devices do: an exact hit on a
