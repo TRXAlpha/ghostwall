@@ -37,29 +37,16 @@ table inet ghostwall {
         type ipv4_addr
     }
 
-    # Public DoH (DNS-over-HTTPS) resolver endpoints. STARTER LIST —
-    # INCOMPLETE by design. Well-known providers below; full coverage needs
-    # the NFQUEUE inspector and/or periodic feed updates.
-    # IPv4 and IPv6 are separate sets (an ipv4_addr set cannot hold IPv6
-    # addresses — that was the `nft -c` type error on the Pi).
+    # Public DNS resolvers' own addresses (DoH on 443, DoT/DoQ on 853): rendered from
+    # agents/netconf/doh_ips.txt, the list ghost-flow's doh_ip alert uses too. Only addresses
+    # dedicated to DNS (a shared CDN address would break websites). A device that has DoH by
+    # NAME is stopped at DNS instead (the bypass list in AdGuard / Pi-hole).
+    # IPv4 and IPv6 are separate sets (an ipv4_addr set cannot hold IPv6 addresses).
     set doh_ip4 {
         type ipv4_addr
         flags interval
         elements = {
-            8.8.8.8,        # Google DNS (also used for DoH: dns.google)
-            8.8.4.4,        # Google DNS
-            1.1.1.1,        # Cloudflare
-            1.0.0.1,        # Cloudflare
-            9.9.9.9,        # Quad9
-            149.112.112.112,
-            208.67.222.222, # OpenDNS
-            208.67.220.220,
-            185.228.168.9,  # CleanBrowsing
-            185.228.168.10,
-            94.140.14.14,   # AdGuard DNS (public)
-            94.140.15.15,
-            76.76.2.0/24    # Control D (partial)
-            # TODO: NextDNS anycast (dynamic), Mullvad DoH, Quad9 secure variant, etc.
+{{ doh_ip4_elements }}
         }
     }
 
@@ -67,12 +54,7 @@ table inet ghostwall {
         type ipv6_addr
         flags interval
         elements = {
-            2001:4860:4860::8888,  # Google DNS
-            2001:4860:4860::8844,  # Google DNS
-            2606:4700:4700::1111,  # Cloudflare
-            2606:4700:4700::1001,  # Cloudflare
-            2620:fe::fe,           # Quad9
-            2620:fe::9             # Quad9
+{{ doh_ip6_elements }}
         }
     }
 

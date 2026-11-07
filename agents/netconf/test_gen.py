@@ -107,6 +107,27 @@ class TestNftSetTypes(unittest.TestCase):
         for tok in re.findall(r"[A-Za-z0-9:.]+(?:/\d+)?", elems):
             ipaddress.IPv6Network(tok, strict=False)  # raises on IPv4/garbage
 
+    def test_doh_sets_come_from_the_shared_list(self):
+        import gen
+        v4, v6 = gen.doh_ips()
+        _, e4 = self._elements("doh_ip4")
+        _, e6 = self._elements("doh_ip6")
+        for ip in ("1.1.1.2", "45.90.28.0", "194.242.2.2"):     # security, NextDNS, Mullvad
+            self.assertIn(ip, v4)
+            self.assertIn(ip, e4)
+        self.assertIn("2a07:a8c0::", e6)
+        self.assertEqual(len(v4), len(set(v4)))
+
+    def test_doh_list_refuses_private_or_garbage(self):
+        import tempfile
+        import gen
+        d = Path(tempfile.mkdtemp())
+        for bad in ("192.168.1.1\n2606:4700:4700::1111\n", "1.1.1.1; drop\n2606:4700:4700::1111\n",
+                    "1.1.1.1\n"):
+            (d / "l.txt").write_text(bad)
+            with self.assertRaises(gen.GenError):
+                gen.doh_ips(d / "l.txt")
+
     def test_matching_rules_cover_both_families(self):
         t = (OUT / "ghostwall.nft").read_text()
         for line in [
