@@ -42,8 +42,12 @@ class StubClient(ControlClient):
         self.calls.append(("isolate", name))
         return {"ok": True, "name": name, "isolated": True}
 
-    def allow(self, domain):
-        self.calls.append(("allow", domain))
+    def release(self, name):
+        self.calls.append(("release", name))
+        return {"ok": True, "name": name, "isolated": False}
+
+    def allow(self, domain, device=None):
+        self.calls.append(("allow", domain) if device is None else ("allow", domain, device))
         return {"ok": True, "domain": domain, "allowed": True}
 
 
@@ -112,6 +116,19 @@ class CallbackTests(unittest.TestCase):
         self.assertEqual([r["action"] for r in recs],
                          ["isolate", "keep", "details"])
 
+    def test_release_button_unisolates_and_is_labelled(self):
+        self.h.events = {"evt_01abc": dict(EVENT, device="tv-box", auto_isolated=True)}
+        out = self.h.handle(self._q("release"))
+        self.assertEqual(out, "tv-box released.")
+        self.assertEqual(self.client.calls, [("release", "tv-box")])
+        self.assertIn("tv-box released.", [e[2] for e in self.api.edits])
+        with open(self.cfg.labels_path, encoding="utf-8") as f:
+            self.assertEqual(json.loads(f.readline())["action"], "release")
+
+    def test_forged_release_is_ignored(self):
+        self.assertIn("ignored", self.h.handle(self._q("release", tamper=True)))
+        self.assertEqual(self.client.calls, [])
+
     def test_trust_allowlists_the_domain(self):
         out = self.h.handle(self._q("trust"))
         self.assertIn("Trusted xkjqwehz.biz", out)
@@ -122,6 +139,24 @@ class CallbackTests(unittest.TestCase):
                                            domain="q8f3k2m9x7v1z4p6.exfil.example")}
         self.h.handle(self._q("trust"))
         self.assertEqual(self.client.calls, [("allow", "exfil.example")])
+
+    def test_trust_on_an_iot_alert_allows_it_for_that_device_only(self):
+        self.h.events = {"evt_01abc": dict(EVENT, rule="iot_new_domain", action="block", device="cam-1",
+                                           trust="partner.example", domain="api.partner.example")}
+        out = self.h.handle(self._q("trust"))
+        self.assertIn("for cam-1 only", out)
+        self.assertEqual(self.client.calls, [("allow", "partner.example", "cam-1")])
+
+    def test_iot_trust_names_no_domain_in_privacy_mode(self):
+        self.h.events = {"evt_01abc": dict(EVENT, rule="iot_new_domain", device="cam-1",
+                                           trust="partner.example", domain="api.partner.example")}
+        os.environ["FW_BOT_PRIVACY"] = "minimal"
+        try:
+            out = self.h.handle(self._q("trust"))
+        finally:
+            os.environ.pop("FW_BOT_PRIVACY", None)
+        self.assertNotIn("partner", out)
+        self.assertIn("cam-1", out)
 
     def test_control_error_shows_failure(self):
         self.client.fail = True

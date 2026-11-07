@@ -61,13 +61,20 @@ class CallbackHandler:
                 self.client.unblock(event_id, domain)
                 text = f"Unblocked {domain} (event {event_id})."
             elif action == "trust":
-                r = self.client.allow(str(event.get("trust") or domain))   # a tunnel: its zone
-                text = f"Trusted {r.get('domain', domain)}: no more alerts for it."
+                if event.get("rule") == "iot_new_domain":   # that device's own set, not the allowlist
+                    r = self.client.allow(str(event.get("trust") or domain), device=device)
+                    text = f"Allowed {r.get('domain', domain)} for {device} only: no more alerts for it from {device}."
+                else:
+                    r = self.client.allow(str(event.get("trust") or domain))   # a tunnel: its zone
+                    text = f"Trusted {r.get('domain', domain)}: no more alerts for it."
             elif action == "keep":
                 text = f"Kept blocked: {domain}."
             elif action == "isolate":
                 self.client.isolate(device)
                 text = f"{device} isolated."
+            elif action == "release":
+                self.client.release(device)
+                text = f"{device} released."
             elif action == "details":
                 text = self._details(event_id, event)
             else:
@@ -76,6 +83,8 @@ class CallbackHandler:
             text = self._err_text(action, exc)
         if minimal() and domain != "?":
             text = text.replace(domain, "the domain")
+            if event.get("trust"):   # what Trust allowed: the zone, a parent of the name
+                text = text.replace(str(event["trust"]), "the domain")
         if isinstance(chat_id, int) and isinstance(message_id, int):
             self.api.edit_alert(chat_id, message_id, text)
         append_label(

@@ -157,6 +157,50 @@ class ControlApiTests(unittest.TestCase):
         self.assertTrue(r["allowed"])
         self.assertTrue(self.state.is_allowed("example.com"))
 
+    def _with_iot_device(self):
+        self.server.httpd.RequestHandlerClass.state["devices"] = DeviceMap.from_json(
+            [{"name": "workpc", "ip": "192.168.1.30", "mac": "aa:bb:cc:dd:ee:01"},
+             {"name": "cam-1", "ip": "192.168.1.40", "mac": "aa:bb:cc:dd:ee:40", "profile": "iot"}])
+
+    def test_allow_for_one_iot_device(self):
+        self._with_iot_device()
+        r = self.client._call("/allow", {"domain": "api.partner.example", "device": "cam-1"})
+        self.assertEqual((r["domain"], r["device"]), ("partner.example", "cam-1"))   # the family
+        self.assertEqual(self.state.iot_count("cam-1"), 1)
+        self.assertFalse(self.state.is_allowed("partner.example"))     # not the network-wide list
+        for dev, code in (("workpc", 409), ("nobody", 404)):
+            with self.assertRaises(ControlError) as cm:
+                self.client._call("/allow", {"domain": "partner.example", "device": dev})
+            self.assertEqual(cm.exception.status, code)
+
+    def test_untrust_and_relearn_an_iot_device(self):
+        self._with_iot_device()
+        self.client._call("/allow", {"domain": "partner.example", "device": "cam-1"})
+        r = self.client._call("/untrust", {"domain": "x.partner.example", "device": "cam-1"})
+        self.assertEqual((r["domain"], r["device"], r["allowed"]), ("partner.example", "cam-1", False))
+        with self.assertRaises(ControlError) as cm:
+            self.client._call("/untrust", {"domain": "partner.example", "device": "cam-1"})
+        self.assertEqual(cm.exception.status, 404)
+        self.client._call("/allow", {"domain": "partner.example", "device": "cam-1"})
+        self.assertTrue(self.client._call("/relearn", {"name": "cam-1"})["relearning"])
+        self.assertEqual(self.state.iot_count("cam-1"), 0)
+        with self.assertRaises(ControlError) as cm:
+            self.client._call("/relearn", {"name": "workpc"})
+        self.assertEqual(cm.exception.status, 409)
+
+    def test_status_shows_iot_devices(self):
+        self._with_iot_device()
+        st = self.client.status()
+        self.assertEqual(st["iot_enforce"], "off")
+        by = {d["name"]: d for d in st["devices"]}
+        self.assertNotIn("profile", by["workpc"])
+        self.assertEqual((by["cam-1"]["profile"], by["cam-1"]["iot_domains"], by["cam-1"]["iot_learning_until"]),
+                         ("iot", 0, None))
+        self.state.iot_observe("cam-1", "api.cam-cloud.example", 7)
+        self.state.iot["cam-1"]["since"] = "2026-11-01T10:00:00Z"
+        cam = {d["name"]: d for d in self.client.status()["devices"]}["cam-1"]
+        self.assertEqual((cam["iot_domains"], cam["iot_learning_until"]), (1, "2026-11-08T10:00:00Z"))
+
     def test_learning(self):
         self.assertFalse(self.client.learning(False)["learning"])
         self.assertFalse(self.state.learning)

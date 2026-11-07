@@ -98,6 +98,20 @@ class ValidateTests(unittest.TestCase):
         _, body = app.validate_action({"action": "learning", "params": {"enabled": True, "evil": "x"}})
         self.assertEqual(body, {"enabled": True})
 
+    def test_allow_for_one_iot_device(self):
+        path, body = app.validate_action({"action": "allow", "params": {"domain": "partner.example",
+                                                                        "device": "cam-1"}})
+        self.assertEqual((path, body), ("/allow", {"domain": "partner.example", "device": "cam-1"}))
+        with self.assertRaises(ValueError):
+            app.validate_action({"action": "allow", "params": {"domain": "partner.example", "device": "x; drop"}})
+
+    def test_page_knows_the_iot_rule(self):
+        with open(app.PAGE, encoding="utf-8") as f:
+            page = f.read()
+        self.assertIn("iot_new_domain:", page)          # a label, not the bare rule name
+        self.assertIn("would block", page)              # iot_enforce dry-run events
+        self.assertIn("data-device=", page)             # Trust there allows it for that device only
+
     def test_learning_needs_a_boolean(self):
         for params in ({}, {"enabled": 1}, {"enabled": "off"}):
             with self.assertRaises(ValueError):

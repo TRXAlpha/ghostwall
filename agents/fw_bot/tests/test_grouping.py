@@ -22,8 +22,19 @@ class GroupingTests(unittest.TestCase):
         self.assertEqual(severity_of({"severity": "bogus"}), "warn")
 
     def test_group_key(self):
-        self.assertEqual(group_key(evt()), ("laptop", "dga_high", "high"))
+        self.assertEqual(group_key(evt()), ("laptop", "dga_high", "high", False))
         self.assertNotEqual(group_key(evt()), group_key(evt(device="phone")))
+
+    def test_auto_isolation_is_never_folded(self):
+        # Folded into an earlier alert it would only edit that message (no notification);
+        # a later plain alert folded into it would replace its Release button.
+        g = AlertGrouper(window_minutes=10, clock=lambda: 0)
+        k1, _ = g.feed(evt(device="tv-box", rule="threat_feed"))
+        k2, iso = g.feed(evt(device="tv-box", rule="threat_feed", domain="y.biz", auto_isolated=True))
+        k3, _ = g.feed(evt(device="tv-box", rule="threat_feed", domain="z.biz"))
+        self.assertEqual((k1, k2, k3), ("new", "new", "update"))
+        self.assertTrue(iso.event["auto_isolated"])
+        self.assertEqual(iso.count, 1)
 
     def test_grouping_within_window(self):
         g = AlertGrouper(window_minutes=10, clock=lambda: 1000.0)

@@ -161,6 +161,48 @@ a generated password (`GHOSTWALL_WEB_PASSWORD`, user `ghostwall`); both are in
 - Fine on a home LAN or tailnet; never expose it to the internet. Actions are accepted
   only as JSON from the dashboard's own origin.
 
+## Automatic isolation (opt-in)
+
+Cuts a device off the moment it does something only infected devices do: an exact hit on a
+malware list, or a DNS tunnel. Needs gateway mode (`"enforce": "nft"`) and `pi_ip` in
+`/etc/ghostwall/ghost_dns.json`.
+
+1. Start with `"auto_isolate": "dry-run"` for at least a week. Alerts that would have isolated
+   are tagged "would isolate" on the dashboard.
+2. Add your own computers and the router to `"auto_isolate_exempt"`.
+3. Set `"auto_isolate": "on"` and turn learning off (`sudo ghostwall learning off`).
+
+An isolated device can still reach the Pi's DNS and the tailnet, nothing else. Undo with the
+Release device button in Telegram, the dashboard, or `sudo ghostwall release NAME`. The same
+finding doesn't isolate it again for a day; a new one does. At most
+`auto_isolate_max_per_hour` (2) isolations an hour, so a bad list can't take the house offline.
+Isolations survive a reboot: release a device rather than flushing the nft set.
+
+## Default-deny for IoT devices
+
+Cameras, TVs and plugs talk to a small, stable set of services, and they can't run antivirus.
+After a learning week, anything new is worth a look, and it can be refused.
+
+1. Name the device and mark it: `sudo ghostwall name 192.168.1.40 cam-1`, then
+   `sudo ghostwall profile cam-1 iot` (this restarts ghost-dns). Mark devices while you believe
+   they are clean: what they do during the learning week becomes normal.
+2. Let it learn for a week (`iot_learn_days`, default 7). `sudo ghostwall status` shows
+   `IoT: learning until ...`, then `IoT: N domains`. Nothing alerts while it learns.
+3. Afterwards each new domain family raises one `iot_new_domain` alert. If you know why (a
+   firmware update, a new feature), tap Allow for this device, or run
+   `sudo ghostwall allow api.vendor.example --device cam-1`: that allows it for cam-1 only.
+   `sudo ghostwall untrust vendor.example --device cam-1` undoes it, `sudo ghostwall relearn cam-1`
+   starts learning again.
+4. Dry-run: set `"iot_enforce": "dry-run"` in `/etc/ghostwall/ghost_dns.json` and restart.
+   Alerts say "would block". Watch a few days and allow what is legitimate.
+5. On: `"iot_enforce": "on"`. In inline mode with learning off (`sudo ghostwall learning off`)
+   names outside the set are refused like any block. Shadow mode can only alert. This is
+   DNS-level only: a device that connects to a hard-coded IP or uses its own DoH is not refused
+   (gateway mode alerts on those as `raw_ip` / `doh_ip`).
+
+The network-wide allowlist does not exempt IoT devices (it trusts whole clouds, which would
+make default-deny meaningless). The threat feed still wins over a learned name.
+
 ## Going inline (Ghostwall answers DNS)
 
 Only after a week or more of clean shadow results. Inline mode lets Ghostwall block, and

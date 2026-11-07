@@ -44,6 +44,7 @@ def make_event(
     event_id: str | None = None,
     time: str | None = None,
     trust: str | None = None,
+    would_block: bool = False,
 ) -> dict:
     if action not in VALID_ACTIONS:
         raise ValueError(f"invalid action {action!r}")
@@ -76,6 +77,8 @@ def make_event(
     if trust and trust.rstrip(".").lower() != evt["domain"]:
         # what the Trust button should allowlist when it isn't the name itself
         evt["trust"] = trust.rstrip(".").lower()
+    if would_block:
+        evt["would_block"] = True   # iot_enforce is not "on" (or cannot block here): it would be refused
     if not EVENT_ID_RE.match(evt["event_id"]):
         raise ValueError(f"event_id does not match schema: {evt['event_id']!r}")
     return evt
