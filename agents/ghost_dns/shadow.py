@@ -17,6 +17,8 @@ models and the allowlist before ever going inline.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import os
 import re
@@ -24,10 +26,41 @@ import sys
 import threading
 import time
 
+import dnsmsg
+
+# AdGuard's Result.Reason values that mean the answer came from the upstream server:
+# 0 not filtered, 1 allowed by a rule, 2 filtering error. Every other reason is
+# AdGuard's own answer (3-8 blocked, 9-11 rewritten: a `$dnsrewrite=NXDOMAIN` rule or
+# a hosts entry), whose rcode says nothing about whether a domain is registered.
+_ADGUARD_UPSTREAM_REASONS = (None, 0, 1, 2)
+
+
+def adguard_rcode(j: dict, host: str, blocked: bool) -> tuple[str | None, str | None]:
+    """(rcode, SOA zone of a negative answer) from an AdGuard entry's `Answer` (base64 of
+    the reply message). (None, None) when unknown: no Answer, garbled, a reply to some
+    other name, or an answer AdGuard made itself (a block in "NXDOMAIN" blocking mode
+    must never count as an unregistered domain)."""
+    res = j.get("Result")
+    if blocked or (isinstance(res, dict) and res.get("Reason") not in _ADGUARD_UPSTREAM_REASONS):
+        return None, None
+    ans = j.get("Answer")
+    if not isinstance(ans, str) or not ans:
+        return None, None
+    try:
+        msg = base64.b64decode(ans, validate=True)
+    except (ValueError, binascii.Error):
+        return None, None
+    q = dnsmsg.parse_question(msg)
+    rcode = dnsmsg.reply_rcode(msg)
+    if q is None or rcode is None or q.name != host:
+        return None, None
+    return rcode, (dnsmsg.negative_zone(msg) if rcode == "NXDOMAIN" else None)
+
 
 def parse_adguard_entry(line: str):
-    """AdGuard querylog line -> (client_ip, host, qtype, blocked_by_adguard) or None.
-    AdGuard marks what it blocked with Result.IsFiltered (rewrites don't set it)."""
+    """AdGuard querylog line -> (client_ip, host, qtype, blocked_by_adguard, rcode, nx_zone)
+    or None. AdGuard marks what it blocked with Result.IsFiltered (rewrites don't set it);
+    rcode and nx_zone are None when unknown (see adguard_rcode)."""
     try:
         j = json.loads(line)
     except ValueError:
@@ -40,7 +73,8 @@ def parse_adguard_entry(line: str):
         return None
     res = j.get("Result")
     blocked = isinstance(res, dict) and res.get("IsFiltered") is True
-    return str(ip), str(host).rstrip(".").lower(), str(j.get("QT") or "A"), blocked
+    host = str(host).rstrip(".").lower()
+    return (str(ip), host, str(j.get("QT") or "A"), blocked) + adguard_rcode(j, host, blocked)
 
 
 def parse_adguard_line(line: str):
@@ -78,10 +112,38 @@ def pihole_blocked_host(line: str) -> str | None:
     return m["host"].rstrip(".").lower() if m else None
 
 
+# The upstream's answer, also on a later line: `reply some.name is NXDOMAIN`, or `cached`
+# when dnsmasq answers from an earlier upstream reply. `config` (local=/lan/ and other
+# local rules), `/etc/hosts`, `special domain` and the blocked forms above are the DNS
+# server's own answers, and are not matched.
+_PIHOLE_REPLY = re.compile(r"\]:\s+(?:\d+\s+\S+\s+)?(?:reply|cached|cached-stale)\s+(?P<host>\S+)\s+is\s+"
+                           r"(?P<what>\S+)\s*$")
+_ADDRESS = re.compile(r"^(?:[0-9.]+|[0-9A-Fa-f:]*:[0-9A-Fa-f:.]*)$")
+
+
+def pihole_reply(line: str) -> tuple[str, str] | None:
+    """Pi-hole reply line -> (host, rcode) or None. An address, `<CNAME>` and the like,
+    or NODATA are all NOERROR: the name exists."""
+    m = _PIHOLE_REPLY.search(line)
+    if not m:
+        return None
+    what = m["what"]
+    if what == "NXDOMAIN":
+        rcode = "NXDOMAIN"
+    elif what in ("SERVFAIL", "REFUSED"):
+        rcode = what
+    elif what.startswith(("NODATA", "<")) or _ADDRESS.match(what):
+        rcode = "NOERROR"
+    else:
+        return None
+    return m["host"].rstrip(".").lower(), rcode
+
+
 PARSERS = {"adguard": parse_adguard_line, "pihole": parse_pihole_line}
-# with "was it already blocked by the DNS server" (Pi-hole logs that on a later line: False)
+# with "was it already blocked by the DNS server", rcode and nx_zone (Pi-hole logs the
+# first two on later lines; it never logs the SOA)
 ENTRY_PARSERS = {"adguard": parse_adguard_entry,
-                 "pihole": lambda line: (lambda p: p + (False,) if p else None)(parse_pihole_line(line))}
+                 "pihole": lambda line: (lambda p: p + (False, None, None) if p else None)(parse_pihole_line(line))}
 
 
 def detect_format(path: str) -> str:
@@ -175,7 +237,7 @@ class QueryLogFollower:
     def _read_from(self, path: str, main: bool = False) -> int:
         """Score the complete lines of `path` after self.offset (advancing it)."""
         done = 0
-        pending: list[list] = []   # Pi-hole: queries waiting to see whether a "blocked" line follows
+        pending: list[list] = []   # Pi-hole: queries waiting for their "blocked" or "reply" line
         try:
             f = open(path, "rb")
         except OSError as exc:
@@ -202,6 +264,13 @@ class QueryLogFollower:
                             if q[1] == host:
                                 q[3] = True
                         continue
+                    rep = pihole_reply(line)
+                    if rep:
+                        for q in pending:   # the oldest query of that name still waiting
+                            if q[1] == rep[0] and q[4] is None:
+                                q[4] = rep[1]
+                                break
+                        continue
                 parsed = self.parse(line)
                 if not parsed:
                     continue
@@ -213,7 +282,7 @@ class QueryLogFollower:
         return done
 
     def _decide(self, q) -> int:
-        ip, host, qtype, blocked = q
+        ip, host, qtype, blocked, rcode, zone = q
         if not self.said_anonymized and self.fmt == "adguard" and str(ip).endswith(".0") and str(ip).count(".") == 3:
             # AdGuard's "Anonymize client IP" zeroes the last part of every address:
             # each /24 of devices then looks like one device here.
@@ -222,7 +291,9 @@ class QueryLogFollower:
                   "Turn it off: Settings > General settings > Logs configuration", file=sys.stderr, flush=True)
             self.said_anonymized = True
         try:
-            self.resolver.decide(ip, host, qtype, upstream_blocked=blocked)
+            # the rcode only when there is a real upstream answer to report
+            extra = {"rcode": rcode, "nx_zone": zone} if rcode and not blocked else {}
+            self.resolver.decide(ip, host, qtype, upstream_blocked=blocked, **extra)
         except Exception as exc:  # noqa: BLE001 - never die on one bad line
             print(f"[ghost-dns:shadow] decide failed for {host}: {exc!r}", file=sys.stderr, flush=True)
         self.resolver.stats["queries"] += 1

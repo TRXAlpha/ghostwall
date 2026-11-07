@@ -10,6 +10,7 @@ random":
   dns_tunnel   many distinct, long, high-entropy subdomains under one apex
   dns_beacon   the same name queried at a near-constant interval (C2 call-home)
   dga_burst    one device hitting many *different* random-looking domains fast
+  nx_burst     one device failing to resolve many *different* unregistered domains
 
 Every stateful detector takes `now` as an argument (seconds) so tests can drive
 time, and bounds its memory. Stdlib only.
@@ -318,6 +319,96 @@ class DgaBurst:
 
 
 # --------------------------------------------------------------------------
+# Suffixes that are never internet domains but that routers and OSes hand out as search
+# domains (x.home, x.corp, x.fritz.box, ...), plus the reserved test names. An NXDOMAIN
+# under one of these is a local name that didn't resolve, not an unregistered domain.
+PRIVATE_TLDS = frozenset("""
+home lan local localdomain internal intranet corp private priv router gateway box modem
+domain workgroup test example invalid localhost onion alt arpa ip station
+""".split())
+# Real top-level domains outside tokenizer.PUBLIC_SUFFIXES and RARE_TLDS that DGAs use.
+# Two-letter TLDs (country codes) are accepted as a whole.
+EXTRA_TLDS = frozenset("""
+website space wtf rent live life world today email cloud digital network systems services
+solutions company group news blog page fun host press center global
+""".split())
+
+
+def real_tld(tld: str) -> bool:
+    if tld in PRIVATE_TLDS:
+        return False
+    return (tld in PUBLIC_SUFFIXES or tld in RARE_TLDS or tld in EXTRA_TLDS or tld.startswith("xn--")
+            or (len(tld) == 2 and tld.isascii() and tld.isalpha()))
+
+
+def nx_countable(host: str) -> bool:
+    """Can an NXDOMAIN for `host` mean "this whole domain is not registered"? Only for
+    the registrable domain itself (or its www.): an NXDOMAIN for a deeper name is a typo,
+    a telemetry probe, a dead tracker host or a search domain appended to something, and
+    says nothing about its parent. Also not for local names, reverse lookups, service
+    records, WPAD, Chrome's random intranet probes (single labels, or a single label
+    plus the LAN's search suffix) or anything under a suffix that is not a real TLD."""
+    if is_internal(host):          # single labels, .lan/.local/.home.arpa, reverse, _svc._tcp
+        return False
+    labels = host.split(".")
+    if labels[0] in ("wpad", "isatap") or not real_tld(labels[-1]):
+        return False
+    reg = registrable_part(host)
+    return host == reg or host == "www." + reg
+
+
+class NxBurst:
+    """A DGA implant tries dozens of generated domains to find the one its operator
+    registered; almost all come back NXDOMAIN. Many *different* unregistered domains
+    failing from one device within minutes is that search, whatever the names look like
+    (dictionary DGAs such as suppobox or matsnu read like words and score low).
+
+    The caller only feeds names that passed nx_countable() and whose domain this network
+    has never resolved. A name is counted once per device: a device stuck on the same
+    few dead domains (an old IoT update server) alerts at most once, a DGA keeps making
+    new ones."""
+
+    def __init__(self, min_distinct=10, window=600.0, cooldown=1800.0, max_per_device=512):
+        self.min_distinct, self.window, self.cooldown = min_distinct, window, cooldown
+        self.max_per_device = max_per_device
+        self._q: dict[str, deque] = defaultdict(deque)        # device -> (t, registrable)
+        self._reported: dict[str, set] = defaultdict(set)     # device -> names already alerted on
+        self._flagged: dict[str, float] = {}
+
+    def observe(self, device: str, host: str, now: float) -> Hit | None:
+        reg = registrable_part(host)
+        if reg in self._reported.get(device, ()):
+            return None
+        q = self._q[device]
+        q.append((now, reg))
+        while q and (now - q[0][0] > self.window or len(q) > self.max_per_device):
+            q.popleft()
+        if len(self._q) > 5000:   # bound memory: a LAN has far fewer devices
+            for k in [k for k, v in self._q.items() if not v or now - v[-1][0] > self.window][:2500]:
+                self._q.pop(k, None)
+                self._reported.pop(k, None)
+        if now - self._flagged.get(device, -1e18) < self.cooldown:
+            return None
+        regs = list(dict.fromkeys(r for _, r in q))     # distinct, oldest first
+        if len(regs) < self.min_distinct:
+            return None
+        self._flagged[device] = now
+        span = now - q[0][0]
+        seen = self._reported[device]
+        if len(seen) > 4096:
+            seen.clear()
+        seen.update(regs)
+        q.clear()
+        return Hit("nx_burst", "high",
+                   [f"{len(regs)} different unregistered domains failed to resolve (NXDOMAIN) "
+                    f"within {max(1, math.ceil(span / 60))} min",
+                    "e.g. " + ", ".join(regs[-4:]),
+                    "malware that generates domain names (DGA) tries many until one answers",
+                    "check what runs on this device; isolate it if you can't explain this"],
+                   {"nx": min(1.0, len(regs) / (self.min_distinct * 2))})
+
+
+# --------------------------------------------------------------------------
 class Detectors:
     """Bundle configured from the resolver's cfg dict."""
 
@@ -330,4 +421,6 @@ class Detectors:
         self.beacon = BeaconDetector(min_samples=int(cfg.get("beacon_min_samples", 8)))
         self.burst = DgaBurst(min_score=float(cfg.get("burst_min_score", 0.8)),
                               min_distinct=int(cfg.get("burst_min_distinct", 5)))
+        self.nx = NxBurst(min_distinct=int(cfg.get("nx_burst_min_distinct", 10)),
+                          window=float(cfg.get("nx_burst_window", 600)))
         self.lock = threading.Lock()

@@ -13,6 +13,7 @@ from signing import make_callback
 
 RULE_WORDS = {
     "threat_feed": "known phishing domain", "dga_burst": "burst of random-looking domains",
+    "nx_burst": "burst of lookups of unregistered domains",
     "dga_high": "very random-looking new domain", "dga_suspect": "random-looking new domain",
     "dga_corroborated": "random name on a risky TLD", "doh_bypass": "may be bypassing your DNS filter",
     "abused_service": "started using a service malware favours", "dns_tunnel": "possible data over DNS",
@@ -93,8 +94,8 @@ def inline_keyboard(event: dict, secret: bytes) -> list[list[dict]]:
     if not is_block(event):
         # On the phishing list: trusting one takes a typed `ghostwall allow` (the alert
         # says so), not one tap on a phone. A burst is many different
-        # random names: trusting the one in the alert would change nothing.
-        if event.get("rule") in ("threat_feed", "dga_burst"):
+        # names: trusting the one in the alert would change nothing.
+        if event.get("rule") in ("threat_feed", "dga_burst", "nx_burst"):
             return [[btn("Details", "details")]]
         return [[btn("Trust domain", "trust"), btn("Details", "details")]]
     return [[
