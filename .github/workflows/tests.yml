@@ -78,6 +78,63 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - run: tests/gateway_e2e.sh
 
+  realdns:
+    # The real servers, not test fixtures: each logs real answers from a real upstream, and
+    # Ghostwall must read their answer codes, ignore what the server blocked itself (here
+    # answered NXDOMAIN, the hard case), and raise exactly one nx_burst for a storm of
+    # made-up domains (tests/realdns_e2e.py).
+    name: real ${{ matrix.server }} logs (nx_burst end to end)
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        server: [adguard, pihole]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.13"
+      - run: pip install --require-hashes -r requirements.lock
+      - name: start AdGuard Home (setup and settings through its own API)
+        if: matrix.server == 'adguard'
+        run: |
+          mkdir -p ag/work ag/conf
+          docker run -d --name dns -p 127.0.0.1:5354:53/udp -p 127.0.0.1:3000:3000 \
+            -v "$PWD/ag/work:/opt/adguardhome/work" -v "$PWD/ag/conf:/opt/adguardhome/conf" \
+            "$(sed -n 's/^ *image: \(adguard\/adguardhome:.*\)$/\1/p' compose.yaml)"
+          for i in $(seq 60); do curl -sf http://127.0.0.1:3000/control/install/get_addresses >/dev/null && break; sleep 1; done
+          curl -sf -X POST http://127.0.0.1:3000/control/install/configure -H 'Content-Type: application/json' \
+            -d '{"web":{"ip":"0.0.0.0","port":3000},"dns":{"ip":"0.0.0.0","port":53},"username":"ci","password":"ci-password-0123"}'
+          A="-u ci:ci-password-0123 -H Content-Type:application/json"
+          for i in $(seq 60); do curl -sf $A http://127.0.0.1:3000/control/status >/dev/null && break; sleep 1; done
+          curl -sf $A -X POST http://127.0.0.1:3000/control/dns_config -d '{"upstream_dns":["9.9.9.9","1.1.1.1"],"blocking_mode":"nxdomain"}'
+          curl -sf $A -X POST http://127.0.0.1:3000/control/filtering/set_rules -d '{"rules":["||blockedtest-ghostwall.example^"]}'
+          curl -sf $A http://127.0.0.1:3000/control/dns_info
+      - name: start Pi-hole (blocking answered NXDOMAIN)
+        if: matrix.server == 'pihole'
+        run: |
+          mkdir -p phlog
+          docker run -d --name dns -p 127.0.0.1:5354:53/udp -e TZ=UTC \
+            -e FTLCONF_dns_upstreams='9.9.9.9;1.1.1.1' -e FTLCONF_dns_listeningMode=all \
+            -e FTLCONF_dns_blocking_mode=NXDOMAIN -e FTLCONF_webserver_api_password=ci-password-0123 \
+            -v "$PWD/phlog:/var/log/pihole" \
+            pihole/pihole:2026.10.0@sha256:d34134716fc32038b052a8674c7c6879e0ff21f0e6d8af345166fffa2c27c113
+          for i in $(seq 90); do docker exec dns pihole status 2>/dev/null | grep -qi "listening\|enabled" && break; sleep 1; done
+          docker exec dns pihole deny blockedtest-ghostwall.example
+      - run: python tests/realdns_e2e.py query --port 5354
+      - name: check what Ghostwall reads from the real log
+        run: |
+          if [ "${{ matrix.server }}" = adguard ]; then
+            docker stop dns              # AdGuard writes its buffered log on the way out
+            LOG=ag/work/data/querylog.json
+          else
+            sleep 3; LOG=phlog/pihole.log
+          fi
+          sudo chmod -R a+rX "$(dirname "$LOG")"
+          python tests/realdns_e2e.py check --format ${{ matrix.server }} --log "$LOG"
+      - if: failure()
+        run: docker logs dns 2>&1 | tail -80
+
   docker:
     name: docker image (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

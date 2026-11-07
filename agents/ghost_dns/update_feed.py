@@ -2,21 +2,25 @@
 """Download threat-intelligence domain lists into threat_feed.txt.
 
     python update_feed.py [--out threat_feed.txt] [--feed URL ...] [--min 1000]
-                          [--popular-top 100000] [--tranco-id ID]
+                          [--popular-top 100000] [--cache-top 1000000] [--tranco-id ID]
 
 Default sources: URLhaus (malware download hosts), Phishing Army (phishing) and
 HaGeZi's Threat Intelligence Feeds, mini version (malware, C2, phishing, scams). On
-2026-11-07 that was 272,674 domains, 23 MiB in the resolver and a 109 MiB peak in this
-short-lived process (64-bit, agents/dga_eval/results_feeds.md). Multi-million lists
+2026-11-07 that was 267,422 domains, 3.3 MiB in the resolver (sorted hashes) and a 150 MB
+peak in this short-lived process, which also streams the Tranco top 1M to disk (64-bit, agents/dga_eval/results_feeds.md). Multi-million lists
 are deliberately not the default: they would cost hundreds of MB on a Raspberry Pi.
 
 False-positive guard: a feed that lists github.com or drive.google.com because someone
 hosted malware there would break a household, so an entry is dropped when its exact
 name (or the name without "www.") is among the most popular registrable domains (the
-Tranco list, downloaded here and cached next to the feed) or is one of the shared
+Tranco list, downloaded here and cached next to the feed, in rank order) or is one of the shared
 platforms and service hosts in NEVER_LIST. Only the bare name is dropped:
 evil.github.io is evidence about one host and stays. The resolver matches a listed
-name and its subdomains, never its parents.
+name and its subdomains, never its parents. The cache holds more names than this
+guard uses (--cache-top, 1M by default): ghost-dns reads the whole of it for the DGA
+rules' popular-domain guard, where a bigger list costs no detections
+(agents/dga_eval/results_fp_independent.md), while the feed keeps its listed names
+below the top 100k.
 
 Each source is kept separately in the output file (a "#@source" line, then its
 domains), which lets the resolver say which list named a domain and lets one source
@@ -73,7 +77,8 @@ DEFAULT_FEEDS = [s.url for s in DEFAULT_SOURCES]
 
 TRANCO_ID_URL = "https://tranco-list.eu/top-1m-id"
 TRANCO_LIST_URL = "https://tranco-list.eu/download/{id}/{n}"
-DEFAULT_POPULAR_TOP = 100000
+DEFAULT_POPULAR_TOP = 100000     # feed entries this popular are dropped
+DEFAULT_CACHE_TOP = 1000000      # names cached for ghost-dns's DGA guard (popular_top_n)
 _TRANCO_ID = re.compile(r"^[A-Z0-9]{3,10}$")
 
 # Never listed as a bare name, whatever a feed says. Tranco ranks registrable domains,
@@ -139,45 +144,93 @@ def source_for(url: str) -> Source:
 def parse_tranco(text: str, top: int) -> set[str]:
     """'rank,domain' lines (Tranco CSV) or bare domains; the first `top` only."""
     out = set()
-    for line in text.splitlines():
+    for name in _tranco_names(io.StringIO(text)):
+        out.add(name)
+        if len(out) >= top:
+            break
+    return out
+
+
+def _env_int(name: str, default: int) -> int:
+    """An integer setting from ghostwall.env; a typo ("100k") warns and uses the default
+    instead of crashing every daily run."""
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return max(0, int(raw.replace("_", "")))
+    except ValueError:
+        print(f"[feed] {name}={raw!r} is not a number; using {default}", file=sys.stderr)
+        return default
+
+
+def _tranco_names(lines):
+    """Domains of a Tranco CSV or of the cache, in file (rank) order."""
+    for line in lines:
         line = line.strip().lower()
         if not line or line.startswith("#"):
             continue
         name = line.split(",", 1)[-1].strip().rstrip(".")
         if _HOST.match(name):
-            out.add(name)
-            if len(out) >= top:
-                break
-    return out
+            yield name
 
 
-def fetch_popular(top: int, list_id: str | None = None) -> tuple[set[str], str]:
-    """(top N Tranco domains, list id). Raises if the download looks wrong."""
+def fetch_popular(top: int, cache_top: int, cache: str, list_id: str | None = None) -> tuple[set[str], str]:
+    """(top N Tranco domains, list id), and the top max(N, cache_top) written to `cache`
+    in rank order, streamed: never a million names in memory at once. Raises if the
+    download looks wrong (the cache is then left as it was)."""
     list_id = (list_id or fetch(TRANCO_ID_URL, timeout=30).strip()).upper()
     if not _TRANCO_ID.match(list_id):
         raise ValueError(f"unexpected Tranco list id {list_id[:20]!r}")
-    names = parse_tranco(fetch(TRANCO_LIST_URL.format(id=list_id, n=top)), top)
-    if len(names) < top * 0.9:
-        raise ValueError(f"Tranco list {list_id}: only {len(names)} of {top} domains")
+    n = max(top, cache_top)
+    text = fetch(TRANCO_LIST_URL.format(id=list_id, n=n), timeout=180)
+    names: set[str] = set()
+    count = 0
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(cache)), prefix=".popular-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(f"# Tranco list {list_id}, top {n} in rank order, fetched {_today()}. "
+                    "Generated by update_feed.py.\n")
+            for name in _tranco_names(io.StringIO(text)):
+                if count >= n:
+                    break
+                f.write(name + "\n")
+                if count < top:
+                    names.add(name)
+                count += 1
+            f.flush()
+            os.fsync(f.fileno())
+        del text
+        if count < n * 0.9:
+            raise ValueError(f"Tranco list {list_id}: only {count} of {n} domains")
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, cache)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
     return names, list_id
 
 
-def load_popular(top: int, cache: str, list_id: str | None = None) -> set[str] | None:
+def load_popular(top: int, cache: str, list_id: str | None = None, cache_top: int = 0) -> set[str] | None:
     """Top N popular domains: downloaded (and cached), else the cached copy, else None."""
     try:
-        names, lid = fetch_popular(top, list_id)
+        names, lid = fetch_popular(top, cache_top, cache, list_id)
     except Exception as exc:  # noqa: BLE001
         print(f"[feed] popularity list download failed: {exc}", file=sys.stderr)
         try:
             with open(cache, encoding="utf-8") as f:
-                names = parse_tranco(f.read(), top)
+                names = set()
+                for name in _tranco_names(f):
+                    if len(names) >= top:
+                        break
+                    names.add(name)
         except OSError:
             return None
         print(f"[feed] using the cached popularity list {cache} ({len(names)} domains)", file=sys.stderr)
         return names or None
-    _write_atomic(cache, f"# Tranco list {lid}, top {top}, fetched {_today()}. Generated by update_feed.py.\n"
-                  + "\n".join(sorted(names)) + "\n")
-    print(f"[feed] popularity guard: Tranco list {lid}, top {len(names)}")
+    print(f"[feed] popularity guard: Tranco list {lid}, top {len(names)} "
+          f"(top {max(top, cache_top)} cached for the DGA rules)")
     return names
 
 
@@ -233,11 +286,21 @@ def _age_days(fetched: str) -> int:
 
 
 def _write_atomic(path: str, text: str) -> None:
+    """Write, flush to disk, then rename: a power cut on a Pi's SD card leaves the old
+    file or the new one, never half of one, and a failed write (disk full) leaves no
+    temporary file behind."""
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)), prefix=".feed-")
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(text)
-    os.chmod(tmp, 0o644)  # mkstemp creates 0600; the feed is public data
-    os.replace(tmp, path)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o644)  # mkstemp creates 0600; the feed is public data
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
 
 
 def render(sections: list[tuple[Source, str, set[str]]], total: int | None = None) -> str:
@@ -259,8 +322,11 @@ def main(argv=None) -> int:
     ap.add_argument("--feed", action="append", help="feed URL (repeatable)")
     ap.add_argument("--min", type=int, default=1000, help="refuse to write fewer domains than this")
     ap.add_argument("--popular-top", type=int,
-                    default=int(os.environ.get("GHOSTWALL_FEED_POPULAR_TOP") or DEFAULT_POPULAR_TOP),
+                    default=_env_int("GHOSTWALL_FEED_POPULAR_TOP", DEFAULT_POPULAR_TOP),
                     help="drop entries among the N most popular domains (Tranco); 0 = only NEVER_LIST")
+    ap.add_argument("--cache-top", type=int,
+                    default=_env_int("GHOSTWALL_POPULAR_TOP", DEFAULT_CACHE_TOP),
+                    help="how many popular domains to cache for ghost-dns's DGA guard (0 = only --popular-top)")
     ap.add_argument("--tranco-id", default=os.environ.get("GHOSTWALL_TRANCO_ID") or None,
                     help="pin a Tranco list id instead of the latest")
     args = ap.parse_args(argv)
@@ -273,14 +339,17 @@ def main(argv=None) -> int:
             return 1
 
     popular: set[str] = set()
-    if args.popular_top > 0:
-        cache = os.path.join(os.path.dirname(os.path.abspath(args.out)), "popular_domains.txt")
-        got = load_popular(args.popular_top, cache, args.tranco_id)
-        if got is None:
+    cache = os.path.join(os.path.dirname(os.path.abspath(args.out)), "popular_domains.txt")
+    if args.popular_top > 0 or args.cache_top > 0:
+        got = load_popular(args.popular_top, cache, args.tranco_id, args.cache_top)
+        if got is None and args.popular_top > 0:
             print("[feed] no popularity list (no download, no cache); keeping existing feed. "
                   "--popular-top 0 skips this guard", file=sys.stderr)
             return 1
-        popular = got
+        popular = got or set()
+    elif os.path.exists(cache):          # both off: don't leave an old list in use
+        os.remove(cache)
+        print(f"[feed] popularity lists turned off; removed {cache}")
 
     previous = read_sections(args.out)
     sections: list[tuple[Source, str, set[str]]] = []
@@ -293,7 +362,9 @@ def main(argv=None) -> int:
             got = parse_domains(fetch(url))
             if not got:
                 raise ValueError("no domains in it")
-            if prev and len(got) < SHRINK_RATIO * prev[1]:
+            # A sudden shrink looks like a broken download, but only while the old copy
+            # is still worth keeping: after MAX_CARRY_DAYS the smaller list is the list.
+            if prev and len(got) < SHRINK_RATIO * prev[1] and _age_days(prev[0]) <= MAX_CARRY_DAYS:
                 raise ValueError(f"only {len(got)} domains, {prev[1]} last time")
             fetched = _today()
             fresh += 1

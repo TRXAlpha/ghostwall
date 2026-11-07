@@ -197,6 +197,7 @@ class PiholeBlockedTests(unittest.TestCase):
         open(p, "w").close()
         rec = Rec()
         fo = QueryLogFollower(rec, p, fmt="pihole")
+        fo.hold = 0                 # don't wait for reply lines this test leaves out
         with open(p, "a") as f:
             f.write("Nov  2 10:00:00 dnsmasq[812]: query[A] ads7kq2zx.example from 192.168.1.10\n"
                     "Nov  2 10:00:00 dnsmasq[812]: gravity blocked ads7kq2zx.example is 0.0.0.0\n"

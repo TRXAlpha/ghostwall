@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## v0.3.0-beta.2 (2026-11-07)
+
+Update as usual: `git pull && sudo ./install.sh` (Docker: `git pull && docker compose up -d --build`).
+Your settings, alerts, allowlist and thresholds are kept. The daily feed update now also
+downloads the Tranco top 1M (about 20 MB, kept as `/var/lib/ghostwall/popular_domains.txt`).
 
 ### New detection
 
@@ -15,20 +19,22 @@
   public Netlab 360 DGA list it fired for all 25 families within 10 lookups
   ([results_nx_sim.md](agents/dga_eval/results_nx_sim.md)); a simulation, not a field result.
 - **Malware and C2 lists.** The threat feed adds URLhaus (malware) and HaGeZi TIF mini
-  (malware, C2, phishing) to Phishing Army: 272,674 domains on 2026-11-07, 23 MiB in memory.
+  (malware, C2, phishing) to Phishing Army: 267,422 domains on 2026-11-07. They are held as
+  sorted 64-bit hashes: 3.3 MiB in memory (23 MiB as strings), loaded beside the old list
+  in inline mode so no answer waits for a reload.
   Alerts name the list (`on URLhaus (malware)`).
 - **Popular sites are never flagged by the feed as a whole.** An entry that is a Tranco
   top-100k domain or a shared platform (`github.io`, `drive.google.com`) is dropped at
-  download time (104 that day); hosts under them (`evil.github.io`) stay
+  download time (179 that day); hosts under them (`evil.github.io`) stay
   ([results_feeds.md](agents/dga_eval/results_feeds.md)).
 - **Popular sites no longer raise DGA alerts on their score alone.** A name whose
-  registrable domain is on the cached Tranco top list (`popular_domains.txt`, top 100k)
-  skips `dga_high`, `dga_suspect` and `dga_corroborated`; the feed, tunnel, beacon,
+  registrable domain is on the cached Tranco top 1M (`popular_domains.txt`, kept in rank
+  order) skips `dga_high`, `dga_suspect` and `dga_corroborated`; the feed, tunnel, beacon,
   `dga_burst` and `nx_burst` rules still apply. On Cisco Umbrella's top 1M (not used to set
-  the thresholds) DGA alerts drop from 0.315% to 0.245% of names, with no DGA family's
-  names hidden; `GHOSTWALL_FEED_POPULAR_TOP=1000000` takes it to 0.098%
-  ([results_fp_independent.md](agents/dga_eval/results_fp_independent.md)). New key
-  `popular_path`; no list means the old behaviour. `ghostwall status` shows the list's size.
+  the thresholds) DGA alerts drop from 0.315% to 0.098% of names, with no DGA family's
+  names hidden ([results_fp_independent.md](agents/dga_eval/results_fp_independent.md)).
+  The guard holds 8 MiB. New keys `popular_path`, `popular_top_n`; no list means the old
+  behaviour. `ghostwall status` shows the list's size.
 
 ### Changed
 
@@ -39,6 +45,37 @@
   the old feed.
 - In learning mode, inline queries are scored once the answer is back, so the answer code
   reaches `nx_burst`; the answer itself is not delayed.
+- New setting `nx_burst_ignore_devices`: a box that fails lookups on purpose (a link
+  checker, a mail filter) can be left out of `nx_burst`.
+- Popular sites' names never count toward `dga_burst` (a portal loading several brand
+  domains that look random is not malware), and one lookup storm raises one alert:
+  `dga_burst` or `nx_burst`, not both.
+- The threat feed is held as sorted hashes: 3.3 MiB instead of 23 MiB. In inline mode
+  the feed and the popular list load in the background, so a daily reload never delays
+  an answer; a list that fails to load keeps the previous one.
+
+### Fixed
+
+- `nx_burst` could be blinded: AdGuard's own empty answer to an AAAA query (with IPv6
+  resolving off) marked the domain as registered. Empty answers (NODATA) now prove nothing.
+- `nx_burst` could be dodged by looking up one dead domain over and over (it pushed the
+  others out of the window); the window now keeps each name once.
+- `nx_burst` ignored DGAs on newer TLDs (.science, .bond, .party...): every TLD in the root
+  zone now counts (IANA's list, `agents/ghost_dns/tlds.txt`).
+- A CNAME to a name that no longer exists counted as an unregistered domain.
+- Pi-hole: a reply logged a moment after its query (in the next read) was lost; queries
+  now wait up to 3 s for it. `replay_querylog.py` pairs replies the same way.
+- Feed update: the file is flushed to disk before it replaces the old one (no half-written
+  feed after a power cut), no temporary files are left on a failed write, a typo in a
+  number setting warns instead of stopping every daily run, and a list that shrank stays
+  accepted once its 14-day carry-over has run out.
+
+### Tests
+
+- New CI job: real AdGuard Home and Pi-hole containers with a real upstream log a storm
+  of made-up domains, a normal lookup, a missing name under a real domain and a name the
+  server blocks itself (answered NXDOMAIN); Ghostwall must read every answer code right
+  and raise exactly one `nx_burst` (`tests/realdns_e2e.py`).
 
 ## v0.3.0-beta.1 (2026-11-03)
 

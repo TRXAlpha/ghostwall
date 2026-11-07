@@ -77,6 +77,60 @@ class PopularDomainsTests(unittest.TestCase):
         self.assertTrue(p.match("new.example", now=2))
         self.assertFalse(p.match("brand.example", now=3))
 
+    def test_top_n_takes_the_first_entries_in_rank_order(self):
+        write(self.path, "# Tranco list TEST1, top 4 in rank order\nfirst.example\nsecond.example\n"
+                         "third.example\nfourth.example\n")
+        p = D.PopularDomains(self.path, top=2)
+        self.assertTrue(p.match("first.example"))
+        self.assertTrue(p.match("cdn.second.example"))
+        self.assertFalse(p.match("third.example"))
+        self.assertEqual(len(p), 2)
+        self.assertFalse(D.PopularDomains(self.path, top=0).match("first.example"))
+
+    def test_config_sets_the_top_n(self):
+        cfg = config_mod.load_config(None, {"threat_feed_path": os.path.join(self.dir, "threat_feed.txt"),
+                                            "popular_top_n": 3})
+        self.assertEqual(D.Detectors(cfg).popular.top, 3)
+        self.assertEqual(config_mod.load_config(None, {})["popular_top_n"], 1000000)
+
+    def test_sorting_without_numpy_gives_the_same_index(self):
+        from array import array
+        hs, ms = array("Q", [5, 3, 5, 1]), array("I", [1, 2, 4, 8])
+        with_np = D._sorted_index(hs, ms)
+        with mock.patch.dict(sys.modules, {"numpy": None}):
+            without = D._sorted_index(hs, ms)
+            only = D._sorted_index(array("Q", [2, 2, 1]))
+        self.assertEqual(list(with_np[0]), [1, 3, 5])
+        self.assertEqual(list(with_np[1]), [8, 2, 5])
+        self.assertEqual((list(without[0]), list(without[1])), (list(with_np[0]), list(with_np[1])))
+        self.assertEqual(list(only[0]), [1, 2])
+
+    def test_background_load_never_blocks_a_lookup(self):
+        import threading
+        gate = threading.Event()
+        p = D.PopularDomains(self.path, background=True)
+        real = p._load
+
+        def slow():
+            gate.wait(10)
+            return real()
+        p._load = slow
+        self.assertFalse(p.match("brand.example", now=1))   # returns at once, list not in yet
+        self.assertFalse(p.wait_loaded(0.05))
+        gate.set()
+        self.assertTrue(p.wait_loaded(10))
+        self.assertTrue(p.match("brand.example", now=2))
+
+    def test_a_load_that_crashes_keeps_the_previous_list(self):
+        p = D.PopularDomains(self.path, recheck_seconds=0)
+        self.assertTrue(p.match("brand.example", now=1))
+        write(self.path, "new.example\n")
+        os.utime(self.path, (time.time() + 5, time.time() + 5))
+        with mock.patch.object(D, "_sorted_index", side_effect=MemoryError), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertTrue(p.match("brand.example", now=2))
+        self.assertIn("keeping the previous list", out.getvalue())
+
     def test_deleted_file_keeps_the_loaded_list(self):
         p = D.PopularDomains(self.path, recheck_seconds=0)
         self.assertTrue(p.match("brand.example", now=1))
@@ -137,6 +191,7 @@ class ResolverGuardTests(unittest.TestCase):
         self.now = 1000.0
         self.r = Resolver(cfg, self.state, FakeScorer(dga), Enforcer(NullBackend()), dm,
                           EventLog(cfg["events_path"]))
+        self.assertTrue(self.r.det.wait_loaded(10))   # inline mode loads lists in the background
         self.r.clock = lambda: self.now
         return self.r
 
@@ -170,15 +225,20 @@ class ResolverGuardTests(unittest.TestCase):
         self.assertEqual(r.decide(DEV, "bad.qq.test", "A").reason, "threat_feed")
         self.assertEqual(r.decide(DEV, "fine.qq.test", "A").reason, "popular")
 
-    def test_popular_names_still_count_for_a_burst(self):
+    def test_popular_names_never_feed_a_burst(self):
+        # A portal loading several popular random-looking brand domains is not a DGA.
         popular = "".join(f"qx{i}zk.test\n" for i in range(5))
         r = self.build(0.97, popular=popular)
         reasons = []
         for i in range(5):
             self.now += 5
             reasons.append(r.decide(DEV, f"qx{i}zk.test", "A").reason)
-        self.assertEqual(reasons, ["popular"] * 4 + ["dga_burst"])
-        self.assertEqual(self.rules(), ["dga_burst"])
+        self.assertEqual(reasons, ["popular"] * 5)
+        self.assertEqual(self.rules(), [])
+        for i in range(5):                              # unlisted names still make a burst
+            self.now += 5
+            r.decide(DEV, f"zq{i}kx.test", "A")
+        self.assertEqual(self.rules()[-1], "dga_burst")      # (after their own dga_suspect alerts)
 
     def test_no_list_is_todays_behaviour(self):
         r = self.build(0.97, popular_path=os.path.join(tempfile.mkdtemp(), "missing.txt"))

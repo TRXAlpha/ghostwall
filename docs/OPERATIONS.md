@@ -19,7 +19,7 @@ All paths assume the installer's layout (`/opt/ghostwall`).
 | `/var/lib/ghostwall/control_token` | the control API token (created by ghost-dns; the dashboard and bot read it) |
 | `/var/lib/ghostwall/novelty_key` | the key that turns "first seen" domains into hashes, so `state.json` holds no list of the sites your household visits |
 | `/var/lib/ghostwall/threat_feed.txt` | malware and phishing lists, refreshed daily |
-| `/var/lib/ghostwall/popular_domains.txt` | Tranco top 100k, cached for the feed's popularity guard |
+| `/var/lib/ghostwall/popular_domains.txt` | Tranco top 1M in rank order: the feed drops entries in its top 100k, the DGA rules skip names in all of it |
 | `/opt/ghostwall` | the code and its Python venv; nothing you need to keep |
 
 Versions before 0.2.0b2 kept config and data in `/opt/ghostwall/agents/`; the installer

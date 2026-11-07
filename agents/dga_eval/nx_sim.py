@@ -106,6 +106,10 @@ def run(scorer, names: list[str], gap: float, resolve_frac: float, seed: int) ->
         for e in log.events:
             rule = "single" if e["rule"] in SINGLE_RULES else e["rule"]
             first.setdefault(rule, (i, (clock["t"] - t0) / 60))
+        # One storm raises one alert: when dga_burst already alerted, nx_burst's own
+        # alert is skipped. Its detector still fires; that is what this measures.
+        if "nx_burst" not in first and DEVICE_IP in r.det.nx._flagged:
+            first["nx_burst"] = (i, (clock["t"] - t0) / 60)
         log.events.clear()
         if {"nx_burst", "dga_burst", "single"} <= first.keys():
             break
@@ -235,7 +239,8 @@ def main() -> int:
            f"\"model: single-name alert\" is the share of {MODEL_SAMPLE} sampled names scoring >= {rec} "
            f"(`dga_suspect`/`dga_high`); \"counts toward dga_burst\" is the share scoring >= {burst}. "
            f"Slower than one lookup per {cfg['nx_burst_window'] / (nmin - 1):.0f} s, {nmin} names never fit "
-           f"in one {cfg['nx_burst_window']} s window.", "",
+           f"in one {cfg['nx_burst_window']} s window. One storm raises one alert: where dga_burst "
+           "alerts first, nx_burst's detector still fires at the lookup shown but its alert is skipped.", "",
            "## 5% of names resolve (NOERROR), the implant keeps looking", "",
            f"Median lookups until nx_burst (minutes), and the range, over {RESOLVE_RUNS} runs with a "
            "different random 5% each.", "",

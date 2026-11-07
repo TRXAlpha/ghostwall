@@ -83,6 +83,8 @@ class Resolver:
         self.source = None                   # shadow: "adguard" or "pihole", set by app.py
         self.clock = time.monotonic          # overridable, so tests can drive time
         self.det = Detectors(cfg)            # threat feed, DoH, tunnel, beacon, DGA burst
+        # device names or IPs whose failed lookups never count for nx_burst
+        self._nx_ignored = frozenset(str(x) for x in (cfg.get("nx_burst_ignore_devices") or ()))
         self.last_seen: dict[str, str] = {}  # client ip -> ISO time of its latest query
         self.current_ip: dict[str, str] = {} # named device -> the address it last queried from
         self.stats = {"queries": 0, "blocked": 0, "recommended": 0, "suppressed": 0,
@@ -177,13 +179,19 @@ class Resolver:
         # Many DIFFERENT random-looking domains from one device is a far stronger
         # signal than any single score. Many different unregistered ones is too, even
         # when they read like words.
-        nx = None if upstream_blocked else self._nx_burst(dev, domain, rcode, nx_zone, now)
+        # One storm raises one alert: dga_burst wins when both fire. A popular site's
+        # name (Tranco top N) never feeds dga_burst: a portal loading qq.com, gtimg.cn and
+        # qpic.cn is not malware, and no public DGA name is on the list.
+        nx = None if upstream_blocked else self._nx_observe(dev, domain, rcode, nx_zone, now)
+        burst_score = dga
+        if dga >= self.det.burst.min_score and self.det.popular.match(domain, now):
+            burst_score = 0.0
         with self.det.lock:
-            burst = self.det.burst.observe(dev.name, domain, dga, now)
+            burst = self.det.burst.observe(dev.name, domain, burst_score, now)
         if burst:
             return Decision("recommend", burst.rule, self._emit_hit(dev, domain, burst))
-        if nx:
-            return nx
+        if nx and not self.det.burst.recently_flagged(dev.name, now):
+            return Decision("recommend", nx.rule, self._emit_hit(dev, domain, nx))
 
         block_thr = float(self.cfg["block_threshold"])
         rec_thr = float(self.cfg["recommend_threshold"])
@@ -240,12 +248,18 @@ class Resolver:
         return self.devices.device_for_ip(client_ip, mac)
 
     def _nx_burst(self, dev, domain: str, rcode: str | None, nx_zone: str | None, now: float):
+        hit = self._nx_observe(dev, domain, rcode, nx_zone, now)
+        return Decision("recommend", hit.rule, self._emit_hit(dev, domain, hit)) if hit else None
+
+    def _nx_observe(self, dev, domain: str, rcode: str | None, nx_zone: str | None, now: float):
         """Feed one upstream answer to nx_burst. Callers have already dropped allowlisted,
         internal and blocklisted names. A NOERROR anywhere in a domain family proves the
         domain is registered; so does an NXDOMAIN whose SOA names that domain (or a zone
         inside it): only the one name is missing. What is left counts if nx_countable()
         says the name is the registrable domain itself, on a real TLD."""
         if not rcode or not self.cfg.get("nx_burst_enabled", True):
+            return None
+        if dev.name in self._nx_ignored:      # a link checker, a mail filter: fails lookups on purpose
             return None
         if rcode == "NOERROR":
             self.state.note_resolved(domain)
@@ -259,10 +273,7 @@ class Resolver:
         if not nx_countable(domain) or self.state.has_resolved(domain):
             return None
         with self.det.lock:
-            hit = self.det.nx.observe(dev.name, domain, now)
-        if not hit:
-            return None
-        return Decision("recommend", hit.rule, self._emit_hit(dev, domain, hit))
+            return self.det.nx.observe(dev.name, domain, now)
 
     def note_answer(self, client_ip: str, domain: str, rcode: str | None, nx_zone: str | None = None):
         """Inline mode, when decide() ran before the answer existed (blocking on, or the
@@ -390,7 +401,7 @@ class Resolver:
             return dnsmsg.build_sinkhole(packet, q, self.cfg["sinkhole_ip4"],
                                          self.cfg.get("sinkhole_ip6"))
         up = self._forward(packet, tcp)
-        rcode = dnsmsg.reply_rcode(up) if up is not None else None
+        rcode = dnsmsg.reply_status(up) if up is not None else None
         zone = dnsmsg.negative_zone(up) if rcode == "NXDOMAIN" else None
         if later:
             self._queue_later(client_ip, q, rcode, zone)

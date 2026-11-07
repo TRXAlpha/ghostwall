@@ -177,6 +177,22 @@ def reply_rcode(packet: bytes) -> str | None:
     return RCODE_NAMES.get(rc, str(rc))
 
 
+def reply_status(packet: bytes) -> str | None:
+    """What a reply says about the name, for nx_burst: "NOERROR" when it has answer
+    records (the name exists), "NODATA" for NOERROR with none (it proves nothing:
+    AdGuard makes those up itself, e.g. AAAA with IPv6 resolving off), "NXDOMAIN" only
+    when there is no answer at all (an NXDOMAIN that carries a CNAME means the queried
+    name exists and points at one that doesn't: "NOERROR"), else the rcode name.
+    None when the bytes are not a reply. Never raises."""
+    rc = reply_rcode(packet)
+    if rc not in ("NOERROR", "NXDOMAIN"):
+        return rc
+    ancount = struct.unpack(">H", packet[6:8])[0]
+    if rc == "NOERROR":
+        return "NOERROR" if ancount else "NODATA"
+    return "NOERROR" if ancount else "NXDOMAIN"
+
+
 def negative_zone(packet: bytes) -> str | None:
     """The owner of the SOA record in a negative reply's authority section: the closest
     zone that does exist ("com" when the whole domain is unregistered, "example.com"

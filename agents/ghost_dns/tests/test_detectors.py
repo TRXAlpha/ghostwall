@@ -234,6 +234,7 @@ class ResolverWiringTests(unittest.TestCase):
         dm = DeviceMap.from_json([{"name": "dell", "ip": "192.168.1.30"}])
         self.now = 1000.0
         self.r = Resolver(cfg, self.state, FakeScorer(0.0), Enforcer(NullBackend()), dm, EventLog(cfg["events_path"]))
+        self.assertTrue(self.r.det.wait_loaded(10))   # inline mode loads lists in the background
         self.r.clock = lambda: self.now
         return self.r
 

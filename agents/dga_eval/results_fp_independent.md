@@ -6,8 +6,8 @@ Shipped models (mean of the TRM and the n-gram model), thresholds from `config.p
 ## Summary
 
 * On Cisco Umbrella's top 1M DNS names, 2,401 of 761,951 scored names (0.315%) would raise a DGA rule; Majestic: 0.300%; a Tranco sample: 0.503%. The lists the thresholds were not checked on are not worse, so the thresholds stay as shipped.
-* The guard as the box has it (update_feed.py's cached Tranco top 100,000) takes Umbrella to 1,863 (0.245%); alerting registrable domains 1,324 -> 1,182. It hides 0 of the 90,454 DGA names that alert (report half), 0 of the tuning half.
-* The tuning rule picks the top 1,000,000 (no DGA name hidden at any N tried): Umbrella would drop to 745 (0.098%). It is not the default: the guard reads the list update_feed.py caches for its own feed guard (no second download), where the top 1,000,000 would also drop 650 feed entries instead of 105; the guard would hold 7.6 MiB instead of 0.8 MiB (load peak 81 MiB). `GHOSTWALL_FEED_POPULAR_TOP=1000000` opts in.
+* The guard as the box has it (`popular_top_n`: the first 1,000,000 of the Tranco list update_feed.py caches) takes Umbrella to 745 (0.098%); alerting registrable domains 1,324 -> 488. It hides 0 of the 90,454 DGA names that alert (report half), 0 of the tuning half.
+* That is also what the tuning rule picks on Majestic (no DGA name hidden at any N tried). The feed's own guard reads only the first 100,000 of the same cache, so listed malware domains ranked lower stay listed (105 feed entries dropped, not 650). The guard holds 8.1 MiB (load peak 16 MiB).
 
 ## Data
 
@@ -67,10 +67,10 @@ Rule (`choose_n`): among the N that hide at most 0.1% of the tuning half's DGA a
 | 10,000 | 599 (100.000%) | 0 (0.000%) |
 | 20,000 | 598 (99.833%) | 0 (0.000%) |
 | 50,000 | 595 (99.332%) | 0 (0.000%) |
-| 100,000 (box default) | 592 (98.831%) | 0 (0.000%) |
+| 100,000 | 592 (98.831%) | 0 (0.000%) |
 | 200,000 | 577 (96.327%) | 0 (0.000%) |
 | 500,000 | 538 (89.816%) | 0 (0.000%) |
-| 1,000,000 **rule's choice** | 511 (85.309%) | 0 (0.000%) |
+| 1,000,000 **rule's choice, box default** | 511 (85.309%) | 0 (0.000%) |
 
 ## Umbrella (report list): what each N leaves, and what it hides
 
@@ -96,36 +96,36 @@ update_feed.py's own guard drops from the feed at the same N: those would raise 
 Share of the scored distinct names that would raise each rule. Majestic chose N; Tranco is
 the source of the guard, so its 'after' is near zero by construction.
 
-| list | scored | rule | before | after, top 100,000 | after, top 1,000,000 |
-|---|---|---|---|---|---|
-| umbrella | 761,951 | dga_high | 844 (0.111%) | 716 (0.094%) | 314 (0.041%) |
-| umbrella | 761,951 | dga_suspect | 1,385 (0.182%) | 1,035 (0.136%) | 400 (0.052%) |
-| umbrella | 761,951 | dga_corroborated | 172 (0.023%) | 112 (0.015%) | 31 (0.004%) |
-| umbrella | 761,951 | **any DGA rule** | 2,401 (0.315%) | 1,863 (0.245%) | 745 (0.098%) |
-| majestic | 199,986 | dga_high | 82 (0.041%) | 82 (0.041%) | 71 (0.036%) |
-| majestic | 199,986 | dga_suspect | 456 (0.228%) | 449 (0.225%) | 388 (0.194%) |
-| majestic | 199,986 | dga_corroborated | 61 (0.031%) | 61 (0.031%) | 52 (0.026%) |
-| majestic | 199,986 | **any DGA rule** | 599 (0.300%) | 592 (0.296%) | 511 (0.256%) |
-| tranco | 199,940 | dga_high | 233 (0.117%) | 221 (0.111%) | 0 (0.000%) |
-| tranco | 199,940 | dga_suspect | 705 (0.353%) | 656 (0.328%) | 0 (0.000%) |
-| tranco | 199,940 | dga_corroborated | 68 (0.034%) | 68 (0.034%) | 0 (0.000%) |
-| tranco | 199,940 | **any DGA rule** | 1,006 (0.503%) | 945 (0.473%) | 0 (0.000%) |
+| list | scored | rule | before | after, top 1,000,000 |
+|---|---|---|---|---|
+| umbrella | 761,951 | dga_high | 844 (0.111%) | 314 (0.041%) |
+| umbrella | 761,951 | dga_suspect | 1,385 (0.182%) | 400 (0.052%) |
+| umbrella | 761,951 | dga_corroborated | 172 (0.023%) | 31 (0.004%) |
+| umbrella | 761,951 | **any DGA rule** | 2,401 (0.315%) | 745 (0.098%) |
+| majestic | 199,986 | dga_high | 82 (0.041%) | 71 (0.036%) |
+| majestic | 199,986 | dga_suspect | 456 (0.228%) | 388 (0.194%) |
+| majestic | 199,986 | dga_corroborated | 61 (0.031%) | 52 (0.026%) |
+| majestic | 199,986 | **any DGA rule** | 599 (0.300%) | 511 (0.256%) |
+| tranco | 199,940 | dga_high | 233 (0.117%) | 0 (0.000%) |
+| tranco | 199,940 | dga_suspect | 705 (0.353%) | 0 (0.000%) |
+| tranco | 199,940 | dga_corroborated | 68 (0.034%) | 0 (0.000%) |
+| tranco | 199,940 | **any DGA rule** | 1,006 (0.503%) | 0 (0.000%) |
 
-Per registrable domain (alerts are deduplicated per device and registrable domain): of Umbrella's 216,335 scored registrable domains, 1,324 (0.612%) have a name that alerts before; after: top 100,000: 1,182 (0.546%), top 1,000,000: 488 (0.226%).
+Per registrable domain (alerts are deduplicated per device and registrable domain): of Umbrella's 216,335 scored registrable domains, 1,324 (0.612%) have a name that alerts before; after: top 1,000,000: 488 (0.226%).
 
-## What the Umbrella false positives are (before the guard; guard = top 100,000)
+## What the Umbrella false positives are (before the guard; guard = top 1,000,000)
 
 Simple heuristics on the scored label (first match wins).
 
 | kind | alerting names | on a threat feed | removed by the guard |
 |---|---|---|---|
-| pronounceable (other languages, compounds, brands) | 863 | 1 | 225 (26.072%) |
-| consonant cluster (abbreviation, acronym) | 830 | 0 | 205 (24.699%) |
-| letters and digits mixed | 511 | 0 | 79 (15.460%) |
-| hex/hash-like label | 147 | 0 | 19 (12.925%) |
-| short brand or abbreviation (<= 5 chars) | 50 | 0 | 10 (20.000%) |
+| pronounceable (other languages, compounds, brands) | 863 | 1 | 611 (70.800%) |
+| consonant cluster (abbreviation, acronym) | 830 | 0 | 556 (66.988%) |
+| letters and digits mixed | 511 | 0 | 417 (81.605%) |
+| hex/hash-like label | 147 | 0 | 28 (19.048%) |
+| short brand or abbreviation (<= 5 chars) | 50 | 0 | 44 (88.000%) |
 
-Of these, 153 are infrastructure hosts (a subdomain naming cdn/edge/api/static/ns...); the guard removes 48 (31.373%). The random-by-design part
+Of these, 153 are infrastructure hosts (a subdomain naming cdn/edge/api/static/ns...); the guard removes 114 (74.510%). The random-by-design part
 of a CDN name is a subdomain and is never scored (`registrable_part`); what alerts is a
 registrable label that is itself machine-made or an unusual brand, and the alerting registrable
 domains are spread thin (below), so a fixed CDN exception list was not added.
@@ -137,40 +137,40 @@ Alerting names per registrable domain: 1,324 domains; the 10 largest hold 236 na
 Any DGA rule, per family. 'hidden' are DGA names whose registrable domain is on the popular
 list; they would still count for dga_burst, nx_burst, the threat feed and the behaviour rules.
 
-| family | names | dga_high before | any rule before | any rule, top 100,000 | hidden | any rule, top 1,000,000 | hidden |
-|---|---|---|---|---|---|---|---|
-| conficker | 6,684 | 4.039% | 28.306% | 28.306% | 0 | 28.306% | 0 |
-| corebot | 6,768 | 74.956% | 91.933% | 91.933% | 0 | 91.933% | 0 |
-| cryptolocker | 6,771 | 64.053% | 85.792% | 85.792% | 0 | 85.792% | 0 |
-| dircrypt | 6,732 | 59.329% | 82.398% | 82.398% | 0 | 82.398% | 0 |
-| emotet | 6,757 | 79.962% | 92.319% | 92.319% | 0 | 92.319% | 0 |
-| fobber | 6,780 | 24.676% | 66.667% | 66.667% | 0 | 66.667% | 0 |
-| gozi | 6,746 | 0.000% | 0.030% | 0.030% | 0 | 0.030% | 0 |
-| kraken | 6,729 | 14.980% | 52.950% | 52.950% | 0 | 52.950% | 0 |
-| matsnu | 6,664 | 0.000% | 0.000% | 0.000% | 0 | 0.000% | 0 |
-| murofet | 6,732 | 93.108% | 97.400% | 97.400% | 0 | 97.400% | 0 |
-| necurs | 6,678 | 56.963% | 78.886% | 78.886% | 0 | 78.886% | 0 |
-| nymaim | 6,701 | 0.179% | 0.463% | 0.463% | 0 | 0.463% | 0 |
-| padcrypt | 6,821 | 46.240% | 75.869% | 75.869% | 0 | 75.869% | 0 |
-| pushdo | 6,721 | 0.253% | 5.490% | 5.490% | 0 | 5.490% | 0 |
-| pykspa | 6,761 | 18.917% | 47.301% | 47.301% | 0 | 47.301% | 0 |
-| qadars | 6,793 | 32.475% | 81.069% | 81.069% | 0 | 81.069% | 0 |
-| ramdo | 6,802 | 58.409% | 81.153% | 81.153% | 0 | 81.153% | 0 |
-| ramnit | 6,685 | 55.288% | 78.938% | 78.938% | 0 | 78.938% | 0 |
-| ranbyus | 6,686 | 80.691% | 92.522% | 92.522% | 0 | 92.522% | 0 |
-| rovnix | 6,757 | 81.885% | 95.309% | 95.309% | 0 | 95.309% | 0 |
-| simda | 6,768 | 0.355% | 5.718% | 5.718% | 0 | 5.718% | 0 |
-| suppobox | 6,751 | 0.000% | 0.000% | 0.000% | 0 | 0.000% | 0 |
-| symmi | 6,661 | 1.892% | 13.001% | 13.001% | 0 | 13.001% | 0 |
-| tinba | 6,829 | 56.494% | 85.283% | 85.283% | 0 | 85.283% | 0 |
-| vawtrak | 6,801 | 0.103% | 0.823% | 0.823% | 0 | 0.823% | 0 |
-| **all** | 168,578 | 36.250% | 53.657% | 53.657% | 0 | 53.657% | 0 |
+| family | names | dga_high before | any rule before | any rule, top 1,000,000 | hidden |
+|---|---|---|---|---|---|
+| conficker | 6,684 | 4.039% | 28.306% | 28.306% | 0 |
+| corebot | 6,768 | 74.956% | 91.933% | 91.933% | 0 |
+| cryptolocker | 6,771 | 64.053% | 85.792% | 85.792% | 0 |
+| dircrypt | 6,732 | 59.329% | 82.398% | 82.398% | 0 |
+| emotet | 6,757 | 79.962% | 92.319% | 92.319% | 0 |
+| fobber | 6,780 | 24.676% | 66.667% | 66.667% | 0 |
+| gozi | 6,746 | 0.000% | 0.030% | 0.030% | 0 |
+| kraken | 6,729 | 14.980% | 52.950% | 52.950% | 0 |
+| matsnu | 6,664 | 0.000% | 0.000% | 0.000% | 0 |
+| murofet | 6,732 | 93.108% | 97.400% | 97.400% | 0 |
+| necurs | 6,678 | 56.963% | 78.886% | 78.886% | 0 |
+| nymaim | 6,701 | 0.179% | 0.463% | 0.463% | 0 |
+| padcrypt | 6,821 | 46.240% | 75.869% | 75.869% | 0 |
+| pushdo | 6,721 | 0.253% | 5.490% | 5.490% | 0 |
+| pykspa | 6,761 | 18.917% | 47.301% | 47.301% | 0 |
+| qadars | 6,793 | 32.475% | 81.069% | 81.069% | 0 |
+| ramdo | 6,802 | 58.409% | 81.153% | 81.153% | 0 |
+| ramnit | 6,685 | 55.288% | 78.938% | 78.938% | 0 |
+| ranbyus | 6,686 | 80.691% | 92.522% | 92.522% | 0 |
+| rovnix | 6,757 | 81.885% | 95.309% | 95.309% | 0 |
+| simda | 6,768 | 0.355% | 5.718% | 5.718% | 0 |
+| suppobox | 6,751 | 0.000% | 0.000% | 0.000% | 0 |
+| symmi | 6,661 | 1.892% | 13.001% | 13.001% | 0 |
+| tinba | 6,829 | 56.494% | 85.283% | 85.283% | 0 |
+| vawtrak | 6,801 | 0.103% | 0.823% | 0.823% | 0 |
+| **all** | 168,578 | 36.250% | 53.657% | 53.657% | 0 |
 
 The Netlab families are from before 2020, so their names being absent from a 2026 top list says
 little about a DGA whose domains are popular today (a sinkholed C2 can rank); dga_burst and
 nx_burst still see such names.
 
-Tuning half, hidden: top 100,000: 0; top 1,000,000: 0.
+Tuning half, hidden: top 1,000,000: 0.
 
 ## Memory and speed of the guard
 
@@ -180,9 +180,9 @@ hashes; 'load peak' is while it reads the file with update_feed.parse_tranco (on
 
 | top N | distinct registrable | frozenset of strings | sorted 64-bit hashes (the guard) | load peak | lookup |
 |---|---|---|---|---|---|
-| 10,000 | 9,979 | 1.0 MiB | 0.08 MiB | 2.0 MiB | 1.6 us |
-| 100,000 | 99,556 | 9.1 MiB | 0.76 MiB | 9.9 MiB | 1.6 us |
-| 1,000,000 | 995,176 | 83.9 MiB | 7.59 MiB | 81.5 MiB | 2.1 us |
+| 10,000 | 9,979 | 1.0 MiB | 0.08 MiB | 0.2 MiB | 1.6 us |
+| 100,000 | 99,556 | 9.1 MiB | 0.81 MiB | 1.6 MiB | 2.0 us |
+| 1,000,000 | 995,176 | 83.9 MiB | 8.07 MiB | 16.4 MiB | 2.0 us |
 
 ## Reproduce
 
