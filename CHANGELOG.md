@@ -54,6 +54,13 @@ in Docker, shadow mode) on 2026-11-07: [docs/FIELD_RESULTS.md](docs/FIELD_RESULT
 
 ### New
 
+- **Automatic isolation (opt-in, gateway mode).** `auto_isolate` `"off"` / `"dry-run"` /
+  `"on"` cuts off a device behind an exact malware-list hit (not under a popular site, not on
+  phishing lists only) or a DNS tunnel. Exempt list, at most `auto_isolate_max_per_hour` (2)
+  an hour kept across restarts, and a Release device button in Telegram (also the dashboard
+  and `sudo ghostwall release NAME`). `/release` is idempotent and finds a device that moved;
+  isolations come back after a reboot. The dashboard tags alerts isolated / would isolate /
+  isolation failed.
 - **Default-deny for IoT devices (opt-in).** Mark a device `"profile": "iot"`
   (`sudo ghostwall profile NAME iot`): Ghostwall learns the domains it uses for
   `iot_learn_days` (7; hashed in `state.json`), then raises `iot_new_domain` for any other.

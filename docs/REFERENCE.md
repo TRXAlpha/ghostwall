@@ -35,7 +35,7 @@ with `{"ok": false, "error": "..."}`. All endpoints take POST with a JSON body;
 | `/status` | — | `devices` (name, ip, mac, isolated, last_seen, blocked_domains) and `clients` (unnamed addresses seen, newest first, up to 50): with the token only; `named_devices`, `unnamed_clients` (counts), `lockdown`, `learning`, `shadow`, `source` (`adguard` or `pihole` in shadow mode), `enforce` (`null` or `nft`), `models`, `feed` (`domains`, `updated`), `stats` (counters since start; `queries` rising means it is scoring; `suppressed` counts repeat alerts, `rate_limited` alerts dropped by `alert_rate_per_device`, `blocked_upstream` random-looking names AdGuard had already blocked) |
 | `/device` | `{"name": "laptop"}` | that device plus `last_seen` (its latest query since ghost-dns started, or null); 404 if unknown |
 | `/isolate` | `{"name": "laptop"}` | `{"name", "ip", "isolated": true}`: the device may only reach the Pi's DNS. `ip` is where it queried from last (its name follows its MAC), not necessarily the address in `devices.json`. 409 unless `enforce` is `nft` |
-| `/release` | `{"name": "laptop"}` | `{"name", "isolated": false}` |
+| `/release` | `{"name": "laptop"}` | `{"name", "isolated": false}`. Idempotent: tries the address recorded at isolation, the current one and the devices.json one. 500 if nft refuses (the device stays isolated). CLI: `sudo ghostwall release NAME` (alias `unisolate`); Telegram: the Release device button on an isolated alert |
 | `/allow` | `{"domain": "example.com"}` | `{"domain", "allowed": true}`: allowlisted network-wide. 400 unless it is a hostname. With `"device": "cam-1"`: adds the domain family to that IoT device's own set only (404 for an unknown device, 409 if it is not IoT) |
 | `/trusted` | `{}` | `{"domains": [...]}`: what was trusted with `/allow` (the starter `allowlist.txt` aside) |
 | `/relearn` | `{"name": "cam-1"}` | forgets an IoT device's learned set; learning starts again with its next lookup. 409 if it is not IoT |
@@ -68,6 +68,9 @@ against this schema (exit 1 on any invalid line).
 | `scores` | no | numbers in 0..1, e.g. `{"dga": 0.97}` |
 | `reasons` | no | short human strings |
 | `capture` | no | pcap note |
+| `auto_isolated` | no | `true`: the device was isolated; the last reason says how to undo it |
+| `would_isolate` | no | `true`: it would have been (dry-run, learning or shadow mode, the hourly cap, or a failure) |
+| `auto_isolate_failed` | no | `true`: nft or state.json refused; isolate by hand |
 | `would_block` | no | `true` on an `iot_new_domain` alert that `iot_enforce` would have refused but did not (dry-run, shadow mode or learning mode) |
 | `trust` | no | what Trust allowlists when it isn't `domain`: a `dns_tunnel` alert names one of many throw-away subdomains, so Trust takes the zone (`trust: "example.com"`). `threat_feed`, `dga_burst` and `nx_burst` alerts offer no Trust (the feed wins anyway; a burst is many different names). A `threat_feed` alert's first reason names the list: `evil.example is on URLhaus (malware)`, or for a parent match `x.evil.example is under evil.example, which is on Phishing Army (phishing)` |
 
@@ -103,6 +106,10 @@ overrides any of them. The most useful keys:
 | `novelty_days` | `7` | how long a name counts as new |
 | `burst_min_score`, `burst_min_distinct` | `0.80`, `5` | DGA burst: score and count per device in 10 min |
 | `nx_burst_enabled` | `true` | `nx_burst`: alert when one device fails to resolve (NXDOMAIN) many different unregistered domains, the way a DGA implant searches for its server. Needs the answer's response code: AdGuard's query log (`Answer`), Pi-hole's log (`reply ... is NXDOMAIN` lines) or inline mode |
+| `auto_isolate` | `"off"` | `"dry-run"`: alerts say `would_isolate`, nothing changes. `"on"`: cut off the device behind a high-confidence finding, like `/isolate`. Behaves as dry-run in learning or shadow mode, without `"enforce": "nft"` (gateway mode) or without `pi_ip` |
+| `auto_isolate_rules` | `["threat_feed", "dns_tunnel"]` | rules that may isolate. `threat_feed` only on an exact match that is not under a popular site, not on an abused shared service and not on phishing lists only (a click on a link doesn't make a device infected). ghost-flow rules (`raw_ip`, `beacon`, `doh_ip`) are refused |
+| `auto_isolate_exempt` | `[]` | device names or addresses never isolated. The Pi, loopback, unnamed clients and non-IPv4 addresses never are |
+| `auto_isolate_max_per_hour` | `2` | past this it only alerts and says why. Kept in state.json across restarts. `0` = never |
 | `iot_learn_days` | `7` | devices marked `"profile": "iot"` in devices.json: days, from the device's first lookup, during which the registrable domains it looks up are learned (hashed in state.json, at most 512 per device) |
 | `iot_enforce` | `"off"` | `"off"`: `iot_new_domain` only alerts. `"dry-run"`: alerts carry `"would_block": true`. `"on"`: inline mode with learning off refuses (as `block_response`) names outside the device's set; shadow and learning mode never refuse. Any other value stops ghost-dns at start. DNS level only: a hard-coded IP or the device's own DoH is not refused (gateway mode still alerts: `raw_ip`, `doh_ip`) |
 | `nx_burst_ignore_devices` | `[]` | device names (or IPs) whose failed lookups never count: a box that checks many domains on purpose (link checker, mail filter, dnstwist) |

@@ -161,6 +161,23 @@ a generated password (`GHOSTWALL_WEB_PASSWORD`, user `ghostwall`); both are in
 - Fine on a home LAN or tailnet; never expose it to the internet. Actions are accepted
   only as JSON from the dashboard's own origin.
 
+## Automatic isolation (opt-in)
+
+Cuts a device off the moment it does something only infected devices do: an exact hit on a
+malware list, or a DNS tunnel. Needs gateway mode (`"enforce": "nft"`) and `pi_ip` in
+`/etc/ghostwall/ghost_dns.json`.
+
+1. Start with `"auto_isolate": "dry-run"` for at least a week. Alerts that would have isolated
+   are tagged "would isolate" on the dashboard.
+2. Add your own computers and the router to `"auto_isolate_exempt"`.
+3. Set `"auto_isolate": "on"` and turn learning off (`sudo ghostwall learning off`).
+
+An isolated device can still reach the Pi's DNS and the tailnet, nothing else. Undo with the
+Release device button in Telegram, the dashboard, or `sudo ghostwall release NAME`. The same
+finding doesn't isolate it again for a day; a new one does. At most
+`auto_isolate_max_per_hour` (2) isolations an hour, so a bad list can't take the house offline.
+Isolations survive a reboot: release a device rather than flushing the nft set.
+
 ## Default-deny for IoT devices
 
 Cameras, TVs and plugs talk to a small, stable set of services, and they can't run antivirus.
