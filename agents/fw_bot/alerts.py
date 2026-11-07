@@ -18,6 +18,7 @@ RULE_WORDS = {
     "dga_corroborated": "random name on a risky TLD", "doh_bypass": "may be bypassing your DNS filter",
     "abused_service": "started using a service malware favours", "dns_tunnel": "possible data over DNS",
     "dns_beacon": "looked up on a fixed timer", "blocklist": "on your blocklist",
+    "upstream_block": "blocked by your upstream DNS filter",
     "raw_ip": "connected to a raw IP", "doh_ip": "uses its own DNS-over-HTTPS", "beacon": "connects on a fixed timer",
     "iot_new_domain": "IoT device looked up a domain it never used",
 }

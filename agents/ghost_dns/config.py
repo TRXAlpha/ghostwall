@@ -101,6 +101,29 @@ DEFAULTS = {
     "popular_path": None,
     "popular_top_n": 1000000,
 
+    # --- DNS-server blocking (dns_block.py; docs/OPERATIONS.md "Block with your DNS server") ---
+    # The feed becomes a blocklist inside AdGuard Home or Pi-hole, which then refuses the
+    # names for every device. Ghostwall stays out of the DNS path: it only generates the
+    # list, serves it on dns_block_bind:dns_block_port and tells the DNS server's API.
+    # "off" (default: an upgrade never starts blocking by itself), "dry-run" (builds the
+    # list and reports what it would block; registers nothing) or "on". Env: DNS_BLOCK_FEED.
+    "dns_block_feed": "off",
+    "dns_block_ads": "off",             # "off", "pro" or "ultimate": HaGeZi Multi lists. Env: DNS_BLOCK_ADS
+    # "on": HaGeZi's DoH/VPN/Tor/Proxy bypass list too (breaks VPN apps and encrypted-DNS apps on
+    # purpose). Env: DNS_BLOCK_BYPASS.
+    "dns_block_bypass": "off",
+    # With dns_block_feed "on": use-application-dns.net (Firefox then turns its own DoH off) and
+    # iCloud Private Relay's mask.icloud.com / mask-h2.icloud.com answer NXDOMAIN, so those devices
+    # use your DNS. "no-relay" keeps Private Relay working; "off" skips both. Env: DNS_BLOCK_CANARIES.
+    "dns_block_canaries": "on",
+    "dns_block_bind": "127.0.0.1",     # where the list is served (Docker: 0.0.0.0, reachable on the compose network only)
+    "dns_block_port": 5382,
+    "dns_block_url": None,              # the URL the DNS server fetches it from (default http://127.0.0.1:<port>/ghostwall-blocklist.txt)
+    # Protective upstream: "off", "quad9" or "cloudflare" (set by go_shadow.sh from
+    # DNS_PROTECTIVE_UPSTREAM). Names the upstream refuses are recorded as upstream_block
+    # and never count for nx_burst. "quad9" also reads an NXDOMAIN without SOA as its block.
+    "protective_upstream": "off",
+
     # --- safety / policy ---
     "learning": True,          # True => score-blocks are recommendations only
     "enforce": "null",         # "null" or "nft"

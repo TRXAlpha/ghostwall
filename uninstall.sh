@@ -24,7 +24,14 @@ else
 fi
 
 echo "2) stop and remove services"
-for s in ghostwall-fw-bot ghostwall-web ghostwall-dns ghostwall-flow ghostwall-feed.timer ghostwall-feed ghost-capture; do
+# Ghostwall's lists and exceptions in AdGuard / Pi-hole go too (best effort), so the DNS server
+# is not left fetching a list that is no longer served. Your own lists and rules are untouched.
+if [ -x /opt/ghostwall/.venv/bin/python ] && [ -f /opt/ghostwall/agents/ghost_dns/dns_block.py ]; then
+  set -a; [ -f /etc/ghostwall/ghostwall.env ] && . /etc/ghostwall/ghostwall.env; set +a
+  ( cd /opt/ghostwall/agents/ghost_dns && /opt/ghostwall/.venv/bin/python dns_block.py unregister --config /etc/ghostwall/ghost_dns.json ) \
+    || echo "   could not take Ghostwall's lists out of your DNS server; remove those named 'Ghostwall ...' there by hand"
+fi
+for s in ghostwall-fw-bot ghostwall-web ghostwall-dns ghostwall-flow ghostwall-dnsblock ghostwall-feed.timer ghostwall-feed ghost-capture; do
   systemctl disable --now "$s" >/dev/null 2>&1 || true
 done
 rm -f /etc/systemd/system/ghostwall-*.service /etc/systemd/system/ghostwall-*.timer \

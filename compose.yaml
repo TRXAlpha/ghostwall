@@ -35,6 +35,23 @@ services:
       - "8088:8088"
     environment:
       GHOSTWALL_QUERYLOG: /adguard/work/data/querylog.json
+      # Let AdGuard block with Ghostwall's threat feed (off by default; try dry-run first, then
+      # `docker compose exec ghostwall ghostwall blocking`). Needs AdGuard's admin login:
+      #   DNS_BLOCK_FEED: dry-run          # off | dry-run | on
+      #   DNS_BLOCK_ADS: pro               # off | pro | ultimate
+      #   ADGUARD_USER: admin              # the login you made in AdGuard's setup
+      #   ADGUARD_PASSWORD: choose-yours
+      DNS_BLOCK_FEED: ${DNS_BLOCK_FEED:-off}
+      DNS_BLOCK_ADS: ${DNS_BLOCK_ADS:-off}
+      DNS_BLOCK_BYPASS: ${DNS_BLOCK_BYPASS:-off}
+      DNS_BLOCK_CANARIES: ${DNS_BLOCK_CANARIES:-on}
+      DNS_PROTECTIVE_UPSTREAM: ${DNS_PROTECTIVE_UPSTREAM:-off}
+      ADGUARD_URL: ${ADGUARD_URL:-http://adguardhome:3000}   # port 80 if you chose that in the wizard
+      ADGUARD_USER: ${ADGUARD_USER:-}
+      ADGUARD_PASSWORD: ${ADGUARD_PASSWORD:-}
+      # AdGuard fetches the list from Ghostwall over the compose network (the port is not published).
+      DNS_BLOCK_BIND: 0.0.0.0
+      DNS_BLOCK_URL: http://ghostwall:5382/ghostwall-blocklist.txt
       # GHOSTWALL_WEB_PASSWORD: choose-one   # default: generated once into /data/web_password
     # Root inside the container (to read AdGuard's root-owned log) but with no capabilities,
     # a read-only filesystem and no way to gain privileges. It sees AdGuard's files
