@@ -24,8 +24,8 @@ in Docker, shadow mode) on 2026-11-07: [docs/FIELD_RESULTS.md](docs/FIELD_RESULT
 - Replayed alerts carry the time of the query that raised them, not the time of the
   replay, and the summary counts them per day.
 - **`dns_tunnel` flagged a game launcher.** Its "many distinct subdomains" test needs only
-  30 names averaging 14+ characters, and a big site's own service names
-  (`presence-public-service-prod...`, `followers-service-prod...`) pass it: 4 false
+  30 names averaging 14+ characters, and a big site's own word-based service names
+  pass it: 4 false
   alerts in 20 days on the field network, all one launcher. Under a domain on the
   popular list only the long random labels a tunnel's payload needs count now; any other
   domain is checked as before. On the field log: 27 alerts before, 23 after, the 4

@@ -163,11 +163,11 @@ class TunnelTests(unittest.TestCase):
     def test_popular_apex_service_names_not_flagged(self):
         t = D.TunnelDetector(min_distinct=30)
         for i, host in enumerate(self.SERVICES):
-            self.assertIsNone(t.observe("dell", host, i, popular=True), host)
+            self.assertIsNone(t.observe("laptop", host, i, popular=True), host)
 
     def test_same_names_on_an_unknown_apex_still_flagged(self):
         t = D.TunnelDetector(min_distinct=30)
-        hits = [t.observe("dell", host, i) for i, host in enumerate(self.SERVICES)]
+        hits = [t.observe("laptop", host, i) for i, host in enumerate(self.SERVICES)]
         self.assertEqual(sum(1 for h in hits if h), 1)
 
     def test_popular_apex_with_random_payload_still_flagged(self):
@@ -176,7 +176,7 @@ class TunnelTests(unittest.TestCase):
         t = D.TunnelDetector(min_long=12)
         hit = None
         for i in range(14):
-            hit = t.observe("dell", f"{rand_label(i)}.exfil.example.com", i, popular=True) or hit
+            hit = t.observe("laptop", f"{rand_label(i)}.exfil.example.com", i, popular=True) or hit
         self.assertIsNotNone(hit)
         self.assertIn("very long high-entropy", hit.reasons[0])
 

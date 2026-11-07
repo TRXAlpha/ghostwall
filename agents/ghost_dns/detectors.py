@@ -429,9 +429,9 @@ class TunnelDetector:
 
     def observe(self, device: str, host: str, now: float, popular: bool = False) -> Hit | None:
         """popular: the apex is on the popular-domain list. A tunnel needs a zone its
-        operator runs, and a big site's own many service names (a game launcher's
-        followers-service-prod..., presence-public-service-prod...) are long and
-        distinct too, so there only the long random labels of real payload count."""
+        operator runs, and a big site's own many word-based service names (one host
+        per microservice) are long and distinct too, so there only the long random
+        labels of real payload count."""
         apex = registrable_part(host)
         if host == apex:
             return None

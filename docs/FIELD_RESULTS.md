@@ -88,6 +88,7 @@ the next 10 queries.
 | popular guard: 20 random-looking names from the top 20k | no DGA alert | pass (guard counter +19) | |
 | `doh_bypass`: two DoH providers | one alert each, or monthly dedupe | pass: 1 new, 1 deduped (seen the day before) | 2.0 s |
 | `dns_tunnel`: 35 random 45-character labels under one made-up domain | one alert | pass, at the 12th label | 0.6 s |
+| `dns_beacon`: one made-up name every 31 s, 9 times | one alert | none seen within 4 min of the last lookup: inconclusive (31 s is at the detector's 30 s minimum, and the log buffer may not have flushed) | |
 
 ## Bugs this found
 
