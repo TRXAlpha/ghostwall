@@ -13,6 +13,7 @@
 **/resolved_ips.jsonl
 **/queries.log
 **/threat_feed.txt
+**/popular_domains.txt
 **/ghost_dns.json
 **/control_token
 **/novelty_key

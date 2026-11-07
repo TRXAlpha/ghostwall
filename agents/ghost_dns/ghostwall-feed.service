@@ -7,8 +7,9 @@ Wants=network-online.target
 Type=oneshot
 User=ghostwall
 WorkingDirectory=/opt/ghostwall/agents/ghost_dns
-# Keeps the old feed if the download fails or looks wrong (see update_feed.py).
-# GHOSTWALL_FEEDS in ghostwall.env (space-separated URLs) replaces the default list.
+# A source that fails or looks wrong keeps its previous contents (see update_feed.py).
+# GHOSTWALL_FEEDS in ghostwall.env (space-separated URLs) replaces the default lists;
+# GHOSTWALL_FEED_POPULAR_TOP sets the popularity guard (Tranco top N, cached here too).
 EnvironmentFile=-/etc/ghostwall/ghostwall.env
 ExecStart=/opt/ghostwall/.venv/bin/python update_feed.py --out /var/lib/ghostwall/threat_feed.txt
 StateDirectory=ghostwall

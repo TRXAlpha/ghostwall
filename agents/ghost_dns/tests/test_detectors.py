@@ -53,6 +53,27 @@ class ThreatFeedTests(unittest.TestCase):
     def test_missing_file_is_empty(self):
         self.assertIsNone(D.ThreatFeed(os.path.join(self.dir, "none.txt")).match("evil.example"))
 
+    def test_old_single_list_file_has_no_sources(self):
+        self.assertEqual(D.ThreatFeed(self.path).sources("evil.example"), [])
+
+    def test_sources_from_update_feed_sections(self):
+        with open(self.path, "w") as f:
+            f.write("# header\n"
+                    "#@source\thttps://a.example/x\t2026-11-07\tURLhaus\tmalware\n"
+                    "evil.example\nboth.example\nevil.github.io\n"
+                    "#@source\thttps://b.example/y\t2026-11-07\tPhishing Army\tphishing\n"
+                    "both.example\nphish.example\n"
+                    "#@source\thttps://c.example/z\t2026-11-07\tlists.example\t\n"
+                    "custom.example\n")
+        feed = D.ThreatFeed(self.path)
+        self.assertEqual(len(feed), 5)
+        self.assertEqual(feed.sources("evil.example"), ["URLhaus (malware)"])
+        self.assertEqual(feed.sources("both.example"), ["URLhaus (malware)", "Phishing Army (phishing)"])
+        self.assertEqual(feed.sources("custom.example"), ["lists.example"])
+        self.assertEqual(feed.match("a.evil.github.io"), ("evil.github.io", False))
+        self.assertIsNone(feed.match("github.io"))       # a listed child never flags its parent
+        self.assertIsNone(feed.match("other.github.io"))
+
 
 class InternalNameTests(unittest.TestCase):
     def test_internal_names(self):
@@ -233,6 +254,12 @@ class ResolverWiringTests(unittest.TestCase):
         d = r.decide("192.168.1.30", "evil.example", "A")
         self.assertEqual((d.action, d.reason), ("recommend", "threat_feed"))
         self.assertEqual(self.events()[0]["rule"], "threat_feed")
+
+    def test_feed_alert_names_the_source(self):
+        r = self.build(["#@source\thttps://a.example/x\t2026-11-07\tURLhaus\tmalware", "evil.example"])
+        r.decide("192.168.1.30", "x.evil.example", "A")
+        self.assertEqual(self.events()[0]["reasons"][0],
+                         "x.evil.example is under evil.example, which is on URLhaus (malware)")
 
     def test_feed_hit_blocks_when_enforcing(self):
         r = self.build(["evil.example"], learning=False)

@@ -5,7 +5,7 @@ The DGA model alone tops out at roughly 60% detection for 1% false positives
 only one. These detectors add signals that do not depend on a label "looking
 random":
 
-  threat_feed  known-bad domains (phishing / malware feeds)
+  threat_feed  known-bad domains (malware, C2 and phishing feeds)
   doh_bypass   a device resolving a DNS-over-HTTPS provider (dodging your filter)
   dns_tunnel   many distinct, long, high-entropy subdomains under one apex
   dns_beacon   the same name queried at a near-constant interval (C2 call-home)
@@ -100,19 +100,24 @@ def parents(host: str):
 # --------------------------------------------------------------------------
 class ThreatFeed:
     """Known-bad domains loaded from a text file (one per line). Reloads when
-    the file changes, so a daily updater needs no restart."""
+    the file changes, so a daily updater needs no restart.
+
+    update_feed.py writes each source under a '#@source' line. The names are kept in a
+    dict whose value is a bitmask of the sources that list them: the same memory as a
+    frozenset (measured in agents/dga_eval/results_feeds.md), and the alert can say
+    "on URLhaus (malware)" instead of just "on the threat feed"."""
 
     def __init__(self, path: str | None, recheck_seconds: float = 300.0):
         self.path = path
         self.recheck = recheck_seconds
-        self._domains: frozenset[str] = frozenset()
+        self._feed: tuple[dict[str, int], tuple[str, ...]] = ({}, ())   # swapped as one
         self._mtime = 0.0
         self._checked = -1e18
         self._lock = threading.Lock()
 
     def __len__(self) -> int:
         self._maybe_reload(time.monotonic())   # report the real size, not a not-yet-loaded 0
-        return len(self._domains)
+        return len(self._feed[0])
 
     def info(self) -> tuple[int, float]:
         """(number of domains, file mtime or 0) for the status page."""
@@ -130,26 +135,48 @@ class ThreatFeed:
                 return
             if m == self._mtime:
                 return
-            doms = set()
+            doms: dict[str, int] = {}
+            labels: list[str] = []
+            bit = 0                      # names before any '#@source' line: no source
+            masks: dict[int, int] = {}   # one int object per distinct mask, not per name
             with open(self.path, encoding="utf-8", errors="replace") as f:
                 for line in f:
+                    if line.startswith("#@source\t"):
+                        parts = line.rstrip("\n").split("\t")
+                        name, kind = (parts + ["", "", "", ""])[3:5]
+                        label = f"{name} ({kind})" if name and kind else (name or "the threat feed")
+                        if label not in labels:
+                            labels.append(label)
+                        bit = 1 << labels.index(label)
+                        continue
                     line = line.strip().lower()
                     if line and not line.startswith(("#", "!")) and _DOMAIN_LINE.match(line) and "." in line:
-                        doms.add(line)
-            self._domains = frozenset(doms)
+                        v = doms.get(line, 0) | bit
+                        doms[line] = masks.setdefault(v, v)
+            self._feed = (doms, tuple(labels))
             self._mtime = m
 
     def match(self, host: str, now: float = 0.0) -> tuple[str, bool] | None:
-        """(listed_domain, exact) if host or a parent is listed, else None."""
+        """(listed_domain, exact) if host or a parent is listed, else None. Only
+        parents: a listed evil.github.io never makes github.io itself a hit."""
         self._maybe_reload(now)
-        if not self._domains:
+        doms = self._feed[0]
+        if not doms:
             return None
-        if host in self._domains:
+        if host in doms:
             return host, True
         for cand in parents(host):
-            if cand in self._domains:
+            if cand in doms:
                 return cand, False
         return None
+
+    def sources(self, listed: str) -> list[str]:
+        """Which lists name `listed`, e.g. ["URLhaus (malware)"]; [] if unknown."""
+        if not self._feed[0]:
+            self._maybe_reload(time.monotonic())
+        doms, labels = self._feed
+        mask = doms.get(listed, 0)
+        return [lab for i, lab in enumerate(labels) if mask >> i & 1]
 
 
 # --------------------------------------------------------------------------
