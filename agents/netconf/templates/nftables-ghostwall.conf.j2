@@ -50,6 +50,12 @@ table inet ghostwall {
         }
     }
 
+    # Devices marked "profile": "iot" in devices.json (the egress lock, when on, applies to them).
+    set iot_dev {
+        type ipv4_addr
+{{ iot_dev_elements }}
+    }
+
     set doh_ip6 {
         type ipv6_addr
         flags interval
@@ -117,6 +123,10 @@ table inet ghostwall {
         # --- block DoT (DNS over TLS) on all forwarded traffic ---
         tcp dport 853 drop
         udp dport 853 drop
+
+        # --- egress policy: ports no home device needs toward the internet, and (opt-in)
+        # IoT devices limited to web / MQTT-TLS / time. From config.json via gen.py.
+{{ egress_rules }}
 
         # (LAN DNS is forced to the Pi in chain prerouting_nat below: a redirect is
         # only allowed in a nat chain, and in a filter chain it made the whole

@@ -286,6 +286,19 @@ whole network; read it fully first, and keep the router's admin page open.
    would break websites; DoH by name is stopped at DNS instead (the bypass list). The Pi
    doesn't forward IPv6, so IPv6 can't get around it while the router's advertisements are
    off. Re-run `gen.py` after updating the code to pick up a longer list.
+
+   It also drops ports no home device needs toward the internet: Telnet (23, 2323: how
+   Mirai-style botnets spread), SMTP (25: spam bots; mail apps use 587/465), Windows RPC,
+   NetBIOS and SMB (135, 137-139, 445), UPnP (1900). Only traffic leaving the LAN; devices
+   still reach each other. Running a mail server at home? Set `"egress_block_tcp"` in
+   `agents/netconf/config.json` to the list you want (or `"egress_block": false`).
+
+   **IoT egress lock (opt-in):** with `"iot_egress_lock": "log"` in `config.json`, devices
+   marked `"profile": "iot"` in devices.json are logged (`journalctl -k | grep iot-egress`)
+   whenever they reach the internet on anything but web (80, 443), MQTT over TLS (8883) and
+   time (123); `"on"` drops it. Run `"log"` for a week first: some cameras stream to their
+   cloud on other ports. `"iot_allowed_tcp"` / `"iot_allowed_udp"` widen it. Re-run `gen.py`
+   and reload the firewall after a change.
 5. **ghost-flow:** `sudo apt install libnetfilter-queue-dev build-essential python3-dev`,
    `sudo /opt/ghostwall/.venv/bin/pip install --require-hashes -r /opt/ghostwall/requirements-gateway.lock`,
    `sudo install -m 640 -g ghostwall /opt/ghostwall/agents/ghost_flow/ghost_flow.example.json /etc/ghostwall/ghost_flow.json`,
