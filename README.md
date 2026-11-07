@@ -9,14 +9,16 @@ next to [AdGuard Home](https://github.com/AdguardTeam/AdGuardHome) or
 [Pi-hole](https://pi-hole.net) on a Raspberry Pi, a VM or any small Linux box. It reads
 your DNS server's query log and flags a device that suddenly starts using a bot API, a
 paste site or a tunnel service, smuggles data through DNS, calls home on a timer, looks up
-known phishing domains, or bursts through random-looking names. It also tells you when a
+known malware or phishing domains, bursts through random-looking names, or fails to
+resolve one made-up domain after another (malware hunting for its server). It also tells you when a
 device skips your DNS filter (DNS-over-HTTPS): not a sign of infection by itself (phones
 and browsers do it when "Private DNS" or "secure DNS" is on), but your filter no longer
 sees that device. Two small on-device models score how random a name looks; the behaviour
 rules do most of the work. Alerts go to a dashboard or Telegram. Ghostwall never sends
 your DNS traffic anywhere (one exception: in inline mode, while your DNS server is down,
 it answers through a fallback resolver, Quad9 by default; `"upstream_fallbacks": []` turns
-that off). The only thing it downloads is a daily phishing list, and the only thing it
+that off). The only things it downloads are the daily threat lists and a list of popular sites (Tranco,
+so popular sites are never flagged as a whole), and the only thing it
 sends out is the alerts themselves, if you turn on Telegram (domain names can be left out
 of those too).
 
@@ -58,11 +60,12 @@ Keep them. Ghostwall runs on top and covers what a blocklist can't:
 
 | | AdGuard Home / Pi-hole | + Ghostwall |
 |---|---|---|
-| Known phishing domains | blocks them | also tells you which device tried |
+| Known phishing, malware and C2 domains | blocks them (with those lists) | also tells you which device tried, and which list named it |
 | A camera or TV that starts using Telegram's bot API, a paste site, ngrok, a file drop | no | flagged the first time (each device learns its normal services first) |
 | DNS tunnelling, timer-like beacons | no | yes |
 | A device using its own DNS-over-HTTPS | no | flagged if it looks the server up by name; by IP too in gateway mode |
 | Random-looking domains nobody has listed yet (DGA) | no | about 6 in 10 on [public data](agents/dga_eval/results_public.md), plus bursts of them |
+| Malware cycling through generated domains, even word-like ones | no | a burst of failed (NXDOMAIN) lookups: all 25 public DGA families within 10 lookups [in a simulation](agents/dga_eval/results_nx_sim.md) |
 | Per-device "this looks infected" alerts | no | dashboard + Telegram |
 | Can break your DNS | it is your DNS | no (shadow mode only reads the log) |
 
@@ -70,8 +73,9 @@ Keep them. Ghostwall runs on top and covers what a blocklist can't:
 
 | Rule | Meaning | Severity |
 |---|---|---|
-| `threat_feed` | the name is on the phishing list ([Phishing Army](https://phishing.army), ~150k domains, refreshed daily). It lists some link shorteners and apps as a whole, because phishing runs through them: if one you use alerts, `sudo ghostwall allow <name>` (deliberately no one-tap Trust for these) | high |
+| `threat_feed` | the name is on a known-bad list: [URLhaus](https://urlhaus.abuse.ch) (malware), [Phishing Army](https://phishing.army) (phishing) and [HaGeZi TIF mini](https://github.com/hagezi/dns-blocklists) (malware, C2, phishing), about 270k domains, refreshed daily; the alert says which list. A popular site is never listed as a whole: an entry that is a Tranco top-100k domain or a shared platform (`github.io`, `drive.google.com`) is dropped at download time, while hosts under them (`evil.github.io`) stay ([results_feeds.md](agents/dga_eval/results_feeds.md)). Phishing Army lists some link shorteners and apps as a whole, because phishing runs through them: if one you use alerts, `sudo ghostwall allow <name>` (deliberately no one-tap Trust for these) | high |
 | `dga_burst` | one device looked up 5+ different random-looking domains within 10 minutes | high |
+| `nx_burst` | one device failed to resolve (NXDOMAIN) 10+ different unregistered domains within 10 minutes: malware searching for its server among generated names, even word-like ones the models miss. Typos, probes under real domains, local and search-domain names, Chrome's random probes and anything your DNS server blocked never count. Needs the answer code: AdGuard's or Pi-hole's log, or inline mode | high |
 | `dga_high` / `dga_suspect` | a single very random-looking name that is new to your network | high / warn |
 | `dga_corroborated` | a fairly random name on a rarely-legitimate TLD (`.top`, `.xyz`, ...) | warn |
 | `doh_bypass` | a device looked up a known DNS-over-HTTPS server, so it may be skipping your filter | warn |
@@ -116,7 +120,7 @@ sudo ./install.sh
 
 The installer finds your DNS server by itself (AdGuard native, snap or Docker; Pi-hole
 native or Docker), puts the code in `/opt/ghostwall` with its own Python venv, starts
-the systemd services as an unprivileged `ghostwall` user, downloads the phishing list,
+the systemd services as an unprivileged `ghostwall` user, downloads the threat lists,
 and prints the dashboard address and its password. Settings live in `/etc/ghostwall`,
 alerts and state in `/var/lib/ghostwall`; updating and uninstalling both keep them.
 
@@ -250,7 +254,18 @@ It is not the default because it has not been measured on a real network yet. Ei
 on 2017-2019 and tested on 2024-2025, the shipped models catch about 61% of DGA names
 at 1% false positives and 47% at 0.2%
 ([results_shipped.md](agents/dga_eval/results_shipped.md); reproducing it needs the
-dataset). Replaying 12.9 days of the author's network (115,549 queries, before the
+dataset).
+
+**Failed lookups (`nx_burst`).** [results_nx_sim.md](agents/dga_eval/results_nx_sim.md)
+(`agents/dga_eval/nx_sim.py`) feeds each public DGA family's names through the real
+resolver, one every 2 to 60 seconds, assuming they all fail (NXDOMAIN). `nx_burst` fired
+for all 25 families on the 10th lookup, including the four word-based ones the models
+almost never flag (suppobox, matsnu, gozi, nymaim). When 5% of the names resolve and the
+implant stops at the first one that does, it fires first in about 59% of runs. A
+simulation: there is no home traffic in this repo to measure its false positives, so
+each guard against them has a unit test instead.
+
+Replaying 12.9 days of the author's network (115,549 queries, before the
 dynamic-DNS fix and the behaviour rules added since) gave 17 alerts: 4 test lookups the
 author made, 3 devices using DNS-over-HTTPS, 9 random-looking ad-redirect and pop-up
 style domains on the author's computers and phone, and 1 false positive (a weather
@@ -289,10 +304,12 @@ on the missing model's empty score.)
 - **Baselines trust what is already there.** `abused_service` learns each device's usual
   services in its first 3 days, and novelty counts names as normal after a week. A device
   that is already infected when you install Ghostwall teaches it that its malware is
-  normal; the phishing list, bursts, tunnels and DoH rules don't depend on a baseline.
+  normal; the threat lists, bursts, tunnels and DoH rules don't depend on a baseline.
 - **Detection is name-based.** It sees what a device looks up, not what it does
   afterwards. The models miss about 4 in 10 DGA domains, and nearly all made of
-  dictionary words. Malware that talks to shared
+  dictionary words; `nx_burst` catches those by their failed lookups instead, but only
+  while most of them fail, and not an implant slower than about one lookup a minute
+  (its numbers are a simulation, not field results). Malware that talks to shared
   services (cloud storage, CDNs, chat apps) looks like everyone else, and a device with
   hardcoded DNS-over-HTTPS is invisible in shadow mode unless it looks the server up by name
   (gateway mode catches it by IP: `doh_ip`). Any web

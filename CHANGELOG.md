@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased
+
+### New detection
+
+- **`nx_burst`: malware hunting for its server.** A device that fails to resolve (NXDOMAIN)
+  10 or more different unregistered domains within 10 minutes is flagged: what malware
+  cycling through generated domain names (DGA) looks like, including word-based ones such
+  as suppobox and matsnu that the models miss. Works from AdGuard's and Pi-hole's logs and
+  inline. Typos, probes under real domains, local and search-domain names, Chrome's random
+  probes and anything your DNS server blocked never count; a domain that ever resolved on
+  your network never counts either (kept hashed in `state.json`). New settings
+  `nx_burst_enabled`, `nx_burst_min_distinct`, `nx_burst_window`. In a simulation on the
+  public Netlab 360 DGA list it fired for all 25 families within 10 lookups
+  ([results_nx_sim.md](agents/dga_eval/results_nx_sim.md)); a simulation, not a field result.
+- **Malware and C2 lists.** The threat feed adds URLhaus (malware) and HaGeZi TIF mini
+  (malware, C2, phishing) to Phishing Army: 272,674 domains on 2026-11-07, 23 MiB in memory.
+  Alerts name the list (`on URLhaus (malware)`).
+- **Popular sites are never flagged by the feed as a whole.** An entry that is a Tranco
+  top-100k domain or a shared platform (`github.io`, `drive.google.com`) is dropped at
+  download time (104 that day); hosts under them (`evil.github.io`) stay
+  ([results_feeds.md](agents/dga_eval/results_feeds.md)).
+
+### Changed
+
+- A feed source that fails, or shrinks to less than half, keeps its previous contents for
+  up to 14 days while the others update (one dead URL no longer freezes the whole feed or
+  marks the daily job failed). The update now also needs the Tranco list (cached as
+  `/var/lib/ghostwall/popular_domains.txt`); with neither a download nor a cache it keeps
+  the old feed.
+- In learning mode, inline queries are scored once the answer is back, so the answer code
+  reaches `nx_burst`; the answer itself is not delayed.
+
 ## v0.3.0-beta.1 (2026-11-03)
 
 Update as usual: `git pull && sudo ./install.sh` (Docker: `git pull && docker compose up -d --build`).

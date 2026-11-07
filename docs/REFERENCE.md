@@ -58,7 +58,7 @@ against this schema (exit 1 on any invalid line).
 | `time` | yes | ISO 8601 UTC, e.g. `2026-10-20T21:04:05Z` |
 | `device` | yes | device name from `devices.json`, or the client IP |
 | `domain` | yes | lowercase, no trailing dot |
-| `rule` | yes | `threat_feed`, `dga_burst`, `dga_high`, `dga_suspect`, `dga_corroborated`, `doh_bypass`, `abused_service`, `dns_tunnel`, `dns_beacon`, `blocklist`, `raw_ip`, `doh_ip`, `beacon` |
+| `rule` | yes | `threat_feed`, `dga_burst`, `nx_burst`, `dga_high`, `dga_suspect`, `dga_corroborated`, `doh_bypass`, `abused_service`, `dns_tunnel`, `dns_beacon`, `blocklist`, `raw_ip`, `doh_ip`, `beacon` |
 | `action` | yes | `block`, `recommend` or `allow` |
 | `event_id` | yes | `^[A-Za-z0-9_-]{1,64}$` |
 | `severity` | no | `info`, `warn` (default), `high`, `critical` |
@@ -67,7 +67,7 @@ against this schema (exit 1 on any invalid line).
 | `scores` | no | numbers in 0..1, e.g. `{"dga": 0.97}` |
 | `reasons` | no | short human strings |
 | `capture` | no | pcap note |
-| `trust` | no | what Trust allowlists when it isn't `domain`: a `dns_tunnel` alert names one of many throw-away subdomains, so Trust takes the zone (`trust: "example.com"`). `threat_feed` and `dga_burst` alerts offer no Trust (the feed wins anyway; a burst is many different names) |
+| `trust` | no | what Trust allowlists when it isn't `domain`: a `dns_tunnel` alert names one of many throw-away subdomains, so Trust takes the zone (`trust: "example.com"`). `threat_feed`, `dga_burst` and `nx_burst` alerts offer no Trust (the feed wins anyway; a burst is many different names). A `threat_feed` alert's first reason names the list: `evil.example is on URLhaus (malware)`, or for a parent match `x.evil.example is under evil.example, which is on Phishing Army (phishing)` |
 
 ```json
 {"time":"2026-10-20T21:04:05Z","device":"laptop","ip":"192.168.1.10",
@@ -100,6 +100,8 @@ overrides any of them. The most useful keys:
 | `suspect_only_new` | `true` | plain score alerts only for names new to this network |
 | `novelty_days` | `7` | how long a name counts as new |
 | `burst_min_score`, `burst_min_distinct` | `0.80`, `5` | DGA burst: score and count per device in 10 min |
+| `nx_burst_enabled` | `true` | `nx_burst`: alert when one device fails to resolve (NXDOMAIN) many different unregistered domains, the way a DGA implant searches for its server. Needs the answer's response code: AdGuard's query log (`Answer`), Pi-hole's log (`reply ... is NXDOMAIN` lines) or inline mode |
+| `nx_burst_min_distinct`, `nx_burst_window` | `10`, `600` | how many different domains in how many seconds. Only a registrable domain itself (or its `www.`) on a real TLD counts; never one that has resolved on this network before (kept hashed in `state.json`), one whose NXDOMAIN names a zone inside it, a local or search-domain name, a reverse lookup, a `_service` record, WPAD, a trusted name, or anything AdGuard or Pi-hole blocked or answered itself. A name is counted once per device, so a device stuck on the same dead domains alerts at most once. Simulation: [results_nx_sim.md](../agents/dga_eval/results_nx_sim.md) |
 | `tunnel_min_distinct`, `tunnel_min_long` | `30`, `12` | DNS tunnel thresholds per apex in 10 min |
 | `beacon_min_samples`, `beacon_min_dga` | `8`, `0.5` | DNS beacon thresholds |
 | `service_baseline_days` | `3` | `abused_service`: how long each device learns which of those services it normally uses |
@@ -125,8 +127,8 @@ overrides any of them. The most useful keys:
 | `ghostwall status \| version \| devices \| name IP NAME \| alerts \| allow D \| trusted \| untrust D \| unblock D \| learning on\|off \| password \| telegram \| calibrate [--target P] [--apply]` | everyday commands (`ghost_dns/ghostwall_cli.py`, on the PATH after install; actions need sudo) |
 | `ghost_dns/app.py --config FILE` | run ghost-dns; `--shadow --querylog FILE`, `--once` (build and exit), `--dns-port`, `--upstream`, `--enforce`, `--learning/--no-learning` |
 | `ghost_dns/go_shadow.sh` | switch to shadow mode safely (root) |
-| `ghost_dns/update_feed.py --out FILE [--feed URL ...]` | download threat feeds (https only; `GHOSTWALL_FEEDS` in `ghostwall.env`, space-separated, replaces the default list); keeps the old file if any feed fails |
-| `ghost_dns/replay_querylog.py --querylog FILE [--devices FILE]` | dry-run detection over real history (uses the installed phishing list and devices by default) |
+| `ghost_dns/update_feed.py --out FILE [--feed URL ...] [--min N] [--popular-top N] [--tranco-id ID]` | download the threat feeds (https only). Defaults: URLhaus (malware), Phishing Army (phishing), HaGeZi TIF mini (malware, C2, phishing). In `ghostwall.env`: `GHOSTWALL_FEEDS` (space-separated URLs) replaces the default list; `GHOSTWALL_FEED_POPULAR_TOP` (default `100000`, `0` = only the built-in exclusions) and `GHOSTWALL_TRANCO_ID` (pin a list) set the popularity guard. An entry whose exact name (or name without `www.`) is in the Tranco top N, or is a shared platform or service host (`github.io`, `drive.google.com`, ...), is dropped; hosts under them, like `evil.github.io`, stay. The Tranco list is cached as `popular_domains.txt` next to the feed. A source that fails or shrinks below half keeps its previous contents for up to 14 days while the others update (a warning, exit 0). Exit 1 means the file was not written: no source downloaded, fewer than `--min` names, or no popularity list (no download and no cache) |
+| `ghost_dns/replay_querylog.py --querylog FILE [--devices FILE]` | dry-run detection over real history (uses the installed threat list and devices by default; passes the answer code, so `nx_burst` replays too) |
 | `web_ui/demo.py` | the dashboard on demo data, no install needed |
 | `web_ui/make_demo.py` | regenerate the demo data by running the real detector over a scripted day |
 | `ghost_dns/eval_detection.py` | before/after simulation on labelled data |
