@@ -33,6 +33,10 @@ in Docker, shadow mode) on 2026-11-07: [docs/FIELD_RESULTS.md](docs/FIELD_RESULT
 - `ghostwall version` named the wrong release: release tags are lightweight and the
   installer's `git describe` skipped them (v0.3.0-beta.2 showed as
   `v0.2.0-beta.1-86-g...`).
+- **`ghostwall status` timed out after the daily feed update** (shadow mode): the status
+  request itself reloaded the changed lists, about a minute for the top 1M on a Pi 4.
+  Status now reports what is loaded and the next scored query reloads; ghost-dns loads
+  both lists at start, with the control API already answering.
 - REFERENCE.md said popular sites' names still count toward `dga_burst`; since 0.3.0b2
   they don't (as this changelog says below).
 - The control API no longer prints a `BrokenPipeError` traceback into ghost-dns's journal

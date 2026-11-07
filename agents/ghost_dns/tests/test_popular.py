@@ -77,6 +77,19 @@ class PopularDomainsTests(unittest.TestCase):
         self.assertTrue(p.match("new.example", now=2))
         self.assertFalse(p.match("brand.example", now=3))
 
+    def test_status_info_never_loads(self):
+        """`/status` reads info(): loading there (a minute for the top 1M on a Pi, after
+        every daily feed update) made `ghostwall status` time out."""
+        p = D.PopularDomains(self.path, recheck_seconds=0)
+        self.assertTrue(p.match("brand.example", now=1))
+        n_before = p.info()[0]
+        write(self.path, "only.example\n")
+        os.utime(self.path, (time.time() + 5, time.time() + 5))
+        with mock.patch.object(p, "_load", side_effect=AssertionError("info() loaded the file")):
+            self.assertEqual(p.info()[0], n_before)
+        self.assertTrue(p.match("only.example", now=2))      # the next query picks it up
+        self.assertEqual(p.info()[0], 1)
+
     def test_top_n_takes_the_first_entries_in_rank_order(self):
         write(self.path, "# Tranco list TEST1, top 4 in rank order\nfirst.example\nsecond.example\n"
                          "third.example\nfourth.example\n")

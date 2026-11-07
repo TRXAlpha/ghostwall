@@ -182,9 +182,14 @@ class _FileIndex:
         self._lock = threading.Lock()
 
     def info(self) -> tuple[int, float]:
-        """(number of domains, file mtime or 0) for the status page."""
-        n = len(self)
-        return n, self._mtime
+        """(number of domains, file mtime or 0) for the status page: what is loaded now.
+        Never loads or reloads itself: in shadow mode that ran in the request (about a
+        minute for the top 1M on a Pi after each daily feed update) and `ghostwall
+        status` timed out. The next scored query picks up a new file."""
+        return self._size(), self._mtime
+
+    def _size(self) -> int:
+        raise NotImplementedError
 
     def wait_loaded(self, timeout: float | None = None) -> bool:
         """Block until no load is running (tests, and anything that must see the list)."""
@@ -247,6 +252,9 @@ class ThreatFeed(_FileIndex):
 
     def __len__(self) -> int:
         self._maybe_reload(time.monotonic())   # report the real size, not a not-yet-loaded 0
+        return self._size()
+
+    def _size(self) -> int:
         return len(self._feed[0])
 
     def _load(self) -> bool:
@@ -318,6 +326,9 @@ class PopularDomains(_FileIndex):
 
     def __len__(self) -> int:
         self._maybe_reload(time.monotonic())
+        return self._size()
+
+    def _size(self) -> int:
         return len(self._hashes)
 
     def _enabled(self) -> bool:
