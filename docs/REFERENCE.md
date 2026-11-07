@@ -36,8 +36,9 @@ with `{"ok": false, "error": "..."}`. All endpoints take POST with a JSON body;
 | `/device` | `{"name": "laptop"}` | that device plus `last_seen` (its latest query since ghost-dns started, or null); 404 if unknown |
 | `/isolate` | `{"name": "laptop"}` | `{"name", "ip", "isolated": true}`: the device may only reach the Pi's DNS. `ip` is where it queried from last (its name follows its MAC), not necessarily the address in `devices.json`. 409 unless `enforce` is `nft` |
 | `/release` | `{"name": "laptop"}` | `{"name", "isolated": false}` |
-| `/allow` | `{"domain": "example.com"}` | `{"domain", "allowed": true}`: allowlisted network-wide. 400 unless it is a hostname |
+| `/allow` | `{"domain": "example.com"}` | `{"domain", "allowed": true}`: allowlisted network-wide. 400 unless it is a hostname. With `"device": "cam-1"`: adds the domain family to that IoT device's own set only (404 for an unknown device, 409 if it is not IoT) |
 | `/trusted` | `{}` | `{"domains": [...]}`: what was trusted with `/allow` (the starter `allowlist.txt` aside) |
+| `/relearn` | `{"name": "cam-1"}` | forgets an IoT device's learned set; learning starts again with its next lookup. 409 if it is not IoT |
 | `/untrust` | `{"domain": "example.com"}` | `{"domain", "allowed": false}`: undoes `/allow`; 409 for a starter-file entry, 404 if not trusted |
 | `/lockdown` | `{}` | `{"lockdown": bool}`: toggles; drops forwarded traffic except to the Pi and tailnet. 409 unless `enforce` is `nft` and `pi_ip` is set |
 | `/learning` | `{"enabled": true\|false}` | `{"learning": bool}`: learning on means alerts only. Anything but a boolean is a 400 |
@@ -58,7 +59,7 @@ against this schema (exit 1 on any invalid line).
 | `time` | yes | ISO 8601 UTC, e.g. `2026-10-20T21:04:05Z` |
 | `device` | yes | device name from `devices.json`, or the client IP |
 | `domain` | yes | lowercase, no trailing dot |
-| `rule` | yes | `threat_feed`, `dga_burst`, `nx_burst`, `dga_high`, `dga_suspect`, `dga_corroborated`, `doh_bypass`, `abused_service`, `dns_tunnel`, `dns_beacon`, `blocklist`, `raw_ip`, `doh_ip`, `beacon` |
+| `rule` | yes | `threat_feed`, `dga_burst`, `nx_burst`, `dga_high`, `dga_suspect`, `dga_corroborated`, `doh_bypass`, `abused_service`, `dns_tunnel`, `dns_beacon`, `iot_new_domain`, `blocklist`, `raw_ip`, `doh_ip`, `beacon` |
 | `action` | yes | `block`, `recommend` or `allow` |
 | `event_id` | yes | `^[A-Za-z0-9_-]{1,64}$` |
 | `severity` | no | `info`, `warn` (default), `high`, `critical` |
@@ -67,6 +68,7 @@ against this schema (exit 1 on any invalid line).
 | `scores` | no | numbers in 0..1, e.g. `{"dga": 0.97}` |
 | `reasons` | no | short human strings |
 | `capture` | no | pcap note |
+| `would_block` | no | `true` on an `iot_new_domain` alert that `iot_enforce` would have refused but did not (dry-run, shadow mode or learning mode) |
 | `trust` | no | what Trust allowlists when it isn't `domain`: a `dns_tunnel` alert names one of many throw-away subdomains, so Trust takes the zone (`trust: "example.com"`). `threat_feed`, `dga_burst` and `nx_burst` alerts offer no Trust (the feed wins anyway; a burst is many different names). A `threat_feed` alert's first reason names the list: `evil.example is on URLhaus (malware)`, or for a parent match `x.evil.example is under evil.example, which is on Phishing Army (phishing)` |
 
 ```json
@@ -101,6 +103,8 @@ overrides any of them. The most useful keys:
 | `novelty_days` | `7` | how long a name counts as new |
 | `burst_min_score`, `burst_min_distinct` | `0.80`, `5` | DGA burst: score and count per device in 10 min |
 | `nx_burst_enabled` | `true` | `nx_burst`: alert when one device fails to resolve (NXDOMAIN) many different unregistered domains, the way a DGA implant searches for its server. Needs the answer's response code: AdGuard's query log (`Answer`), Pi-hole's log (`reply ... is NXDOMAIN` lines) or inline mode |
+| `iot_learn_days` | `7` | devices marked `"profile": "iot"` in devices.json: days, from the device's first lookup, during which the registrable domains it looks up are learned (hashed in state.json, at most 512 per device) |
+| `iot_enforce` | `"off"` | `"off"`: `iot_new_domain` only alerts. `"dry-run"`: alerts carry `"would_block": true`. `"on"`: inline mode with learning off refuses (as `block_response`) names outside the device's set; shadow and learning mode never refuse. Any other value stops ghost-dns at start. DNS level only: a hard-coded IP or the device's own DoH is not refused (gateway mode still alerts: `raw_ip`, `doh_ip`) |
 | `nx_burst_ignore_devices` | `[]` | device names (or IPs) whose failed lookups never count: a box that checks many domains on purpose (link checker, mail filter, dnstwist) |
 | `nx_burst_min_distinct`, `nx_burst_window` | `10`, `600` | how many different domains in how many seconds. Only a registrable domain itself (or its `www.`) under a TLD of the root zone (IANA's list, `ghost_dns/tlds.txt`) counts, and only on an empty NXDOMAIN (one that carries a CNAME means the name exists; an empty NOERROR proves nothing either way); never one that has resolved on this network before (kept hashed in `state.json`), one whose NXDOMAIN names a zone inside it, a local or search-domain name, a reverse lookup, a `_service` record, WPAD, a trusted name, or anything AdGuard or Pi-hole blocked or answered itself. A name is counted once per device, so a device stuck on the same dead domains alerts at most once. Simulation: [results_nx_sim.md](../agents/dga_eval/results_nx_sim.md) |
 | `tunnel_min_distinct`, `tunnel_min_long` | `30`, `12` | DNS tunnel thresholds per apex in 10 min: that many distinct subdomains (averaging 14+ characters), or that many distinct 40+ character high-entropy ones. Under a domain on the popular list only the second counts |
@@ -114,7 +118,7 @@ overrides any of them. The most useful keys:
 | `popular_path` | `popular_domains.txt` next to `threat_feed_path`; `""` turns it off | popular-domain guard for the DGA rules. A name whose registrable domain is on this list (the Tranco top list `update_feed.py` caches in rank order, `GHOSTWALL_POPULAR_TOP`, 1M by default) never raises `dga_high`, `dga_suspect` or `dga_corroborated` on its score alone and is never blocked on score. It still counts for `threat_feed` and `nx_burst`, and for `dns_tunnel` by its long random labels only (a big site's many service names are not a tunnel); it never raises `dns_beacon`. Reloaded when the file changes; with no file the rules behave as before. `ghostwall status` shows its size; `/status` returns `"popular": {"domains", "updated"}`. Held as sorted 64-bit hashes: 8 MiB for the top 1M (`ghost_dns/bench_lists.py`); in inline mode it loads in the background |
 | `popular_top_n` | `1000000` | how many of the list's entries (in rank order) the guard uses. On public lists the top 1M cut DGA false positives the most and hid no DGA name ([results_fp_independent.md](../agents/dga_eval/results_fp_independent.md)) |
 | `allowlist_path` | `agents/ghost_dns/allowlist.txt` | starter allowlist |
-| `devices_json` | installer: `/etc/ghostwall/devices.json` | device names; unknown clients are named by IP. An entry with a `mac` is known by it: its name follows it to a new IPv4 address, and its old address loses the name once another device has it |
+| `devices_json` | installer: `/etc/ghostwall/devices.json` | device names; unknown clients are named by IP. An entry's `"profile"` is `"normal"` (default), `"strict"` or `"iot"` (default-deny: `iot_learn_days`, `iot_enforce`, rule `iot_new_domain`; set with `sudo ghostwall profile NAME iot`). An entry with a `mac` is known by it: its name follows it to a new IPv4 address, and its old address loses the name once another device has it |
 | `neighbours_path` | `/proc/net/arp` | which MAC is at an address: this default means the kernel's neighbour table (IPv4 and IPv6, read over netlink like `ip neigh`; `/proc/net/arp`, IPv4 only, if netlink isn't available); another path is read as a file in `/proc/net/arp`'s format. Only devices on this box's own network are in it (Docker's bridge network: none, so names stay on addresses). `""` turns it off |
 | `state_path`, `events_path` | installer: `/var/lib/ghostwall/state.json`, `.../events.jsonl` | persistent state and the alert log. The log starts a new file past 32 MiB and keeps one `events.jsonl.1`; the dashboard and bot read across both |
 | `query_log` | `null` (off) | inline mode: a text log of every query |
