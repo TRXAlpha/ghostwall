@@ -73,10 +73,10 @@ Keep them. Ghostwall runs on top and covers what a blocklist can't:
 
 | Rule | Meaning | Severity |
 |---|---|---|
-| `threat_feed` | the name is on a known-bad list: [URLhaus](https://urlhaus.abuse.ch) (malware), [Phishing Army](https://phishing.army) (phishing) and [HaGeZi TIF mini](https://github.com/hagezi/dns-blocklists) (malware, C2, phishing), about 270k domains, refreshed daily; the alert says which list. A popular site is never listed as a whole: an entry that is a Tranco top-100k domain or a shared platform (`github.io`, `drive.google.com`) is dropped at download time, while hosts under them (`evil.github.io`) stay ([results_feeds.md](agents/dga_eval/results_feeds.md)). Phishing Army lists some link shorteners and apps as a whole, because phishing runs through them: if one you use alerts, `sudo ghostwall allow <name>` (deliberately no one-tap Trust for these) | high |
+| `threat_feed` | the name is on a known-bad list: [URLhaus](https://urlhaus.abuse.ch) (malware), [Phishing Army](https://phishing.army) (phishing) and [HaGeZi TIF mini](https://github.com/hagezi/dns-blocklists) (malware, C2, phishing), about 270k domains (3.3 MiB in memory), refreshed daily; the alert says which list. A popular site is never listed as a whole: an entry that is a Tranco top-100k domain or a shared platform (`github.io`, `drive.google.com`) is dropped at download time, while hosts under them (`evil.github.io`) stay ([results_feeds.md](agents/dga_eval/results_feeds.md)). Phishing Army lists some link shorteners and apps as a whole, because phishing runs through them: if one you use alerts, `sudo ghostwall allow <name>` (deliberately no one-tap Trust for these) | high |
 | `dga_burst` | one device looked up 5+ different random-looking domains within 10 minutes | high |
 | `nx_burst` | one device failed to resolve (NXDOMAIN) 10+ different unregistered domains within 10 minutes: malware searching for its server among generated names, even word-like ones the models miss. Typos, probes under real domains, local and search-domain names, Chrome's random probes and anything your DNS server blocked never count. Needs the answer code: AdGuard's or Pi-hole's log, or inline mode | high |
-| `dga_high` / `dga_suspect` | a single very random-looking name that is new to your network (never a popular site's: Tranco top 100k) | high / warn |
+| `dga_high` / `dga_suspect` | a single very random-looking name that is new to your network (never a popular site's: Tranco top 1M) | high / warn |
 | `dga_corroborated` | a fairly random name on a rarely-legitimate TLD (`.top`, `.xyz`, ...) | warn |
 | `doh_bypass` | a device looked up a known DNS-over-HTTPS server, so it may be skipping your filter | warn |
 | `abused_service` | a device that has been on your network for 3+ days starts using a service malware likes for commands, payloads or stolen data: Telegram's bot API, Discord's CDN, paste sites, ngrok and other tunnels, anonymous file drops, raw GitHub downloads, "what is my IP" lookups | warn |
@@ -261,11 +261,10 @@ dataset).
 (`agents/dga_eval/fp_independent.py`) scores Cisco Umbrella's top 1M DNS names as the
 resolver does, treating every name as new: 0.315% would raise a DGA alert (Majestic
 0.300%, a Tranco sample 0.503%), so the thresholds stay as shipped. Skipping names whose
-registrable domain is a Tranco top-100k site brings that to 0.245%, without hiding a
-single name from the 25 DGA families; a top-1M list (`GHOSTWALL_FEED_POPULAR_TOP=1000000`
-in `ghostwall.env`) brings it to 0.098%, at a memory peak of about 80 MB instead of
-10 MB while the list loads, and 650 instead of 105 feed entries dropped as popular. On a real network fewer names are
-new, so fewer alert.
+registrable domain is a Tranco top-1M site brings that to **0.098%** (745 of 761,951 names,
+488 registrable domains) without hiding a single name from the 25 DGA families. The guard
+holds 8 MiB. The threat feed reads only the top 100k of the same list, so a malware domain
+that ranks lower stays listed. On a real network fewer names are new, so fewer alert.
 
 **Failed lookups (`nx_burst`).** [results_nx_sim.md](agents/dga_eval/results_nx_sim.md)
 (`agents/dga_eval/nx_sim.py`) feeds each public DGA family's names through the real

@@ -87,10 +87,12 @@ DEFAULTS = {
     "threat_feed_path": os.path.join(HERE, "threat_feed.txt"),  # built by update_feed.py
     # Popular-domain guard: a name whose registrable domain is on this list never raises
     # dga_high/dga_suspect/dga_corroborated on its score alone. It is the Tranco top
-    # list update_feed.py caches for its own guard (its size: --popular-top or
-    # GHOSTWALL_FEED_POPULAR_TOP, 100k). None = popular_domains.txt next to
-    # threat_feed_path; "" or no file = no guard. agents/dga_eval/fp_independent.py.
+    # list update_feed.py caches in rank order (--cache-top or GHOSTWALL_POPULAR_TOP,
+    # 1M); popular_top_n takes its first N. None = popular_domains.txt next to
+    # threat_feed_path; "" or no file = no guard. On public lists the top 1M cut DGA
+    # false positives the most and hid no DGA name: agents/dga_eval/fp_independent.py.
     "popular_path": None,
+    "popular_top_n": 1000000,
 
     # --- safety / policy ---
     "learning": True,          # True => score-blocks are recommendations only

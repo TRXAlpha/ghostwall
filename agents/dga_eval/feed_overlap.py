@@ -193,7 +193,7 @@ def main(argv=None):
         "## Memory",
         "",
         f"- feed file as written by update_feed.py: {file_bytes / 2 ** 20:.1f} MB, {n_loaded} names",
-        f"- `ThreatFeed` loaded (dict name -> source bitmask), tracemalloc: {mib(cur)} MiB held, "
+        f"- `ThreatFeed` loaded (sorted 64-bit hashes + source bitmask), tracemalloc: {mib(cur)} MiB held, "
         f"{mib(peak)} MiB peak while loading",
         f"- the same names as a plain frozenset (the old representation): {mib(fs_bytes)} MiB",
         f"- a full `update_feed.py` run (download, parse, guard, write; exit code {rc}): "

@@ -28,10 +28,8 @@ from array import array
 from bisect import bisect_left
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from itertools import islice
 
 from tokenizer import PUBLIC_SUFFIXES, registrable_part
-from update_feed import parse_tranco
 
 # DNS-over-HTTPS/TLS resolver hostnames. A LAN client resolving one of these is
 # trying to skip the local resolver. "use-application-dns.net" is Firefox's
@@ -104,47 +102,158 @@ def parents(host: str):
 
 
 # --------------------------------------------------------------------------
-class ThreatFeed:
-    """Known-bad domains loaded from a text file (one per line). Reloads when
-    the file changes, so a daily updater needs no restart.
+def _hash64(name: str) -> int:
+    return int.from_bytes(hashlib.blake2b(name.encode("utf-8"), digest_size=8).digest(), "big")
 
-    update_feed.py writes each source under a '#@source' line. The names are kept in a
-    dict whose value is a bitmask of the sources that list them: the same memory as a
-    frozenset (measured in agents/dga_eval/results_feeds.md), and the alert can say
-    "on URLhaus (malware)" instead of just "on the threat feed"."""
 
-    def __init__(self, path: str | None, recheck_seconds: float = 300.0):
+def _sorted_index(hashes: array, masks: array | None = None) -> tuple[array, array | None]:
+    """Sort 64-bit name hashes (and the source bitmask that goes with each) and merge
+    duplicates, in place. With numpy (always installed with the models) the work is done
+    on the arrays' own buffers, so loading needs about twice the result, not the ten
+    times a million Python ints would."""
+    try:
+        import numpy as np
+    except ImportError:          # pragma: no cover - numpy ships with the models
+        np = None
+    if np is None or not len(hashes):
+        if masks is None:
+            return array("Q", sorted(set(hashes))), None
+        merged: dict[int, int] = {}
+        for k, v in zip(hashes, masks):
+            merged[k] = merged.get(k, 0) | v
+        keys = sorted(merged)
+        return array("Q", keys), array("I", (merged[k] for k in keys))
+    h = np.frombuffer(hashes, dtype=np.uint64)          # views: no copies
+    if masks is None:
+        h.sort()
+        keep = np.empty(len(h), dtype=bool)
+        keep[0] = True
+        np.not_equal(h[1:], h[:-1], out=keep[1:])
+        k = int(keep.sum())
+        if k < len(h):
+            h[:k] = h[keep]
+        del h, keep
+        del hashes[k:]
+        return hashes, None
+    m = np.frombuffer(masks, dtype=np.uint32)
+    order = np.argsort(h, kind="stable")
+    h[:] = h[order]
+    m[:] = m[order]
+    del order
+    keep = np.empty(len(h), dtype=bool)
+    keep[0] = True
+    np.not_equal(h[1:], h[:-1], out=keep[1:])
+    first = np.flatnonzero(keep)
+    del keep
+    k = len(first)
+    if k < len(h):
+        merged_masks = np.bitwise_or.reduceat(m, first)
+        h[:k] = h[first]
+        m[:k] = merged_masks
+        del merged_masks
+    del h, m, first
+    del hashes[k:], masks[k:]
+    return hashes, masks
+
+
+def _find(index: array, h: int) -> int:
+    """Position of hash h in a sorted index, or -1."""
+    i = bisect_left(index, h)
+    return i if i < len(index) and index[i] == h else -1
+
+
+class _FileIndex:
+    """A list loaded from a file and reloaded when the file changes (checked at most every
+    `recheck` seconds), so a daily updater needs no restart. With background=True
+    (inline mode, where a lookup sits on the answer path) every load runs in its own
+    thread and lookups use the previous list meanwhile: a million names take seconds on
+    a Pi, and no DNS answer should wait for that. Otherwise (shadow mode, replays) the
+    load runs in the caller, so no logged query is checked against a half-loaded list."""
+
+    def __init__(self, path: str | None, recheck_seconds: float = 300.0, background: bool = False):
         self.path = path
         self.recheck = recheck_seconds
-        self._feed: tuple[dict[str, int], tuple[str, ...]] = ({}, ())   # swapped as one
+        self.background = background
         self._mtime = 0.0
         self._checked = -1e18
+        self._loading = False
+        self._idle = threading.Event()
+        self._idle.set()
         self._lock = threading.Lock()
-
-    def __len__(self) -> int:
-        self._maybe_reload(time.monotonic())   # report the real size, not a not-yet-loaded 0
-        return len(self._feed[0])
 
     def info(self) -> tuple[int, float]:
         """(number of domains, file mtime or 0) for the status page."""
         n = len(self)
         return n, self._mtime
 
+    def wait_loaded(self, timeout: float | None = None) -> bool:
+        """Block until no load is running (tests, and anything that must see the list)."""
+        return self._idle.wait(timeout)
+
+    def _enabled(self) -> bool:
+        return bool(self.path)
+
     def _maybe_reload(self, now: float) -> None:
-        if not self.path or now - self._checked < self.recheck:
+        if not self._enabled() or now - self._checked < self.recheck:
             return
         with self._lock:
+            if now - self._checked < self.recheck or self._loading:
+                return
             self._checked = now
             try:
                 m = os.path.getmtime(self.path)
             except OSError:
-                return
+                return               # keep what was loaded; a missing file at start means none
             if m == self._mtime:
                 return
-            doms: dict[str, int] = {}
-            labels: list[str] = []
-            bit = 0                      # names before any '#@source' line: no source
-            masks: dict[int, int] = {}   # one int object per distinct mask, not per name
+            self._loading = True
+            self._idle.clear()
+            if self.background:
+                threading.Thread(target=self._load_and_swap, args=(m,), daemon=True,
+                                 name=f"load-{os.path.basename(self.path)}").start()
+                return
+        self._load_and_swap(m)
+
+    def _load_and_swap(self, mtime: float) -> None:
+        try:
+            if self._load():         # builds the new list, then swaps it in as one assignment
+                self._mtime = mtime
+        except Exception as exc:     # noqa: BLE001 - a bad file must never stop DNS
+            print(f"[ghost-dns] could not load {self.path}: {exc}; keeping the previous list", flush=True)
+        finally:
+            self._loading = False
+            self._idle.set()
+
+    def _load(self) -> bool:
+        raise NotImplementedError
+
+
+class ThreatFeed(_FileIndex):
+    """Known-bad domains loaded from a text file (one per line).
+
+    update_feed.py writes each source under a '#@source' line; each name keeps a
+    bitmask of the sources that list it, so the alert can say "on URLhaus (malware)".
+    Names are held as sorted 64-bit hashes (8 bytes a name plus 4 for the sources: 3.3
+    MiB for 267k names instead of 23 MiB as Python strings), so even while a new file
+    loads beside the old one the resolver stays small on a Pi. A lookup hashes the
+    name and each parent: the listed name in the alert is always the real string
+    queried. A false match needs a 64-bit collision: about 1 in 10^14 per lookup."""
+
+    MAX_SOURCES = 32               # bits in a mask; more sources still match, unnamed
+
+    def __init__(self, path: str | None, recheck_seconds: float = 300.0, background: bool = False):
+        super().__init__(path, recheck_seconds, background)
+        self._feed: tuple[array, array, tuple[str, ...]] = (array("Q"), array("I"), ())   # swapped as one
+
+    def __len__(self) -> int:
+        self._maybe_reload(time.monotonic())   # report the real size, not a not-yet-loaded 0
+        return len(self._feed[0])
+
+    def _load(self) -> bool:
+        hashes, masks = array("Q"), array("I")
+        labels: list[str] = []
+        bit = 0                      # names before any '#@source' line: no source
+        try:
             with open(self.path, encoding="utf-8", errors="replace") as f:
                 for line in f:
                     if line.startswith("#@source\t"):
@@ -153,26 +262,30 @@ class ThreatFeed:
                         label = f"{name} ({kind})" if name and kind else (name or "the threat feed")
                         if label not in labels:
                             labels.append(label)
-                        bit = 1 << labels.index(label)
+                        i = labels.index(label)
+                        bit = 1 << i if i < self.MAX_SOURCES else 0
                         continue
                     line = line.strip().lower()
                     if line and not line.startswith(("#", "!")) and _DOMAIN_LINE.match(line) and "." in line:
-                        v = doms.get(line, 0) | bit
-                        doms[line] = masks.setdefault(v, v)
-            self._feed = (doms, tuple(labels))
-            self._mtime = m
+                        hashes.append(_hash64(line))
+                        masks.append(bit)
+        except OSError:
+            return False             # keep what was loaded
+        idx, msk = _sorted_index(hashes, masks)
+        self._feed = (idx, msk, tuple(labels))
+        return True
 
     def match(self, host: str, now: float = 0.0) -> tuple[str, bool] | None:
         """(listed_domain, exact) if host or a parent is listed, else None. Only
         parents: a listed evil.github.io never makes github.io itself a hit."""
         self._maybe_reload(now)
-        doms = self._feed[0]
-        if not doms:
+        idx = self._feed[0]
+        if not idx:
             return None
-        if host in doms:
+        if _find(idx, _hash64(host)) >= 0:
             return host, True
         for cand in parents(host):
-            if cand in doms:
+            if _find(idx, _hash64(cand)) >= 0:
                 return cand, False
         return None
 
@@ -180,72 +293,74 @@ class ThreatFeed:
         """Which lists name `listed`, e.g. ["URLhaus (malware)"]; [] if unknown."""
         if not self._feed[0]:
             self._maybe_reload(time.monotonic())
-        doms, labels = self._feed
-        mask = doms.get(listed, 0)
-        return [lab for i, lab in enumerate(labels) if mask >> i & 1]
+        idx, msk, labels = self._feed
+        i = _find(idx, _hash64(listed)) if idx else -1
+        mask = msk[i] if i >= 0 else 0
+        return [lab for j, lab in enumerate(labels) if mask >> j & 1]
 
 
-# --------------------------------------------------------------------------
-def _hash64(name: str) -> int:
-    return int.from_bytes(hashlib.blake2b(name.encode("utf-8"), digest_size=8).digest(), "big")
-
-
-class PopularDomains:
+class PopularDomains(_FileIndex):
     """Registrable domains of the most popular sites: the Tranco top list that
-    update_feed.py downloads for its own guard and caches as popular_domains.txt next
-    to the threat feed. Their labels are brands and abbreviations, not algorithm
-    output, so a random-looking score alone is no reason to alert on them.
+    update_feed.py downloads and caches, in rank order, as popular_domains.txt next to
+    the threat feed. Their labels are brands and abbreviations, not algorithm output,
+    so a random-looking score alone is no reason to alert on them. `top` takes the
+    first N entries (the feed's own guard uses a smaller N from the same file).
 
-    Kept as sorted 64-bit hashes of registrable_part(entry): about 8 bytes a domain,
-    a tenth of a set of strings (agents/dga_eval/results_fp_independent.md). Reloads
-    when the file changes. No file or an unreadable one means no guard."""
+    Kept as sorted 64-bit hashes of registrable_part(entry): 8 bytes a domain (8 MiB
+    for the top 1M, 16 MiB peak while loading; a set of strings would be 84 MiB).
+    No file or an unreadable one means no guard."""
 
-    def __init__(self, path: str | None, recheck_seconds: float = 300.0):
-        self.path = path
-        self.recheck = recheck_seconds
+    def __init__(self, path: str | None, recheck_seconds: float = 300.0, top: int = 1_000_000,
+                 background: bool = False):
+        super().__init__(path, recheck_seconds, background)
+        self.top = int(top)
         self._hashes = array("Q")
-        self._mtime = 0.0
-        self._checked = -1e18
-        self._lock = threading.Lock()
 
     def __len__(self) -> int:
         self._maybe_reload(time.monotonic())
         return len(self._hashes)
 
-    def info(self) -> tuple[int, float]:
-        """(number of domains, file mtime or 0) for the status page."""
-        n = len(self)
-        return n, self._mtime
+    def _enabled(self) -> bool:
+        return bool(self.path) and self.top > 0
 
-    def _maybe_reload(self, now: float) -> None:
-        if not self.path or now - self._checked < self.recheck:
-            return
-        with self._lock:
-            self._checked = now
-            try:
-                m = os.path.getmtime(self.path)
-                if m == self._mtime:
-                    return
-                hashes: set[int] = set()
-                with open(self.path, encoding="utf-8", errors="replace") as f:
-                    # the updater's own reader, 10k lines at a time: never all names at once
-                    for chunk in iter(lambda: "".join(islice(f, 10000)), ""):
-                        # IP addresses and single labels are never scored as domains
-                        hashes.update(_hash64(registrable_part(n)) for n in parse_tranco(chunk, 10 ** 7)
-                                      if "." in n and not n.rsplit(".", 1)[1].isdigit())
-            except OSError:
-                return   # keep what was loaded; a missing file at start means no guard
-            self._hashes = array("Q", sorted(hashes))
-            self._mtime = m
+    def _load(self) -> bool:
+        hashes, taken = array("Q"), 0
+        try:
+            with open(self.path, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    name = popular_entry(line)
+                    if name is None:
+                        continue
+                    taken += 1
+                    if taken > self.top:
+                        break
+                    # IP addresses and single labels are never scored as domains
+                    if "." in name and not name.rsplit(".", 1)[1].isdigit():
+                        hashes.append(_hash64(registrable_part(name)))
+        except OSError:
+            return False
+        self._hashes = _sorted_index(hashes)[0]
+        return True
 
     def match(self, host: str, now: float = 0.0) -> bool:
         """True if host's registrable domain (the part that is scored) is popular."""
         self._maybe_reload(now)
         if not self._hashes:
             return False
-        h = _hash64(registrable_part(host))
-        i = bisect_left(self._hashes, h)
-        return i < len(self._hashes) and self._hashes[i] == h
+        return _find(self._hashes, _hash64(registrable_part(host))) >= 0
+
+
+_POPULAR_HOST = re.compile(r"^[a-z0-9]([a-z0-9._-]{0,251}[a-z0-9])?$")
+
+
+def popular_entry(line: str) -> str | None:
+    """The domain on one line of a Tranco CSV ('rank,domain') or of the cache
+    update_feed.py writes (one domain a line, '#' comments); None for anything else."""
+    line = line.strip().lower()
+    if not line or line.startswith("#"):
+        return None
+    name = line.split(",", 1)[-1].strip().rstrip(".")
+    return name if _POPULAR_HOST.match(name) else None
 
 
 # --------------------------------------------------------------------------
@@ -508,8 +623,15 @@ class Detectors:
     """Bundle configured from the resolver's cfg dict."""
 
     def __init__(self, cfg: dict):
-        self.threat_feed = ThreatFeed(cfg.get("threat_feed_path"))
-        self.popular = PopularDomains(cfg.get("popular_path"))
+        # Inline mode answers DNS: lists load beside the old ones, never on a query's path.
+        bg = not cfg.get("shadow", True)
+        self.threat_feed = ThreatFeed(cfg.get("threat_feed_path"), background=bg)
+        self.popular = PopularDomains(cfg.get("popular_path"), top=int(cfg.get("popular_top_n", 1_000_000)),
+                                      background=bg)
+        if bg:                       # start loading now, not at the first query
+            now = time.monotonic()
+            self.threat_feed._maybe_reload(now)
+            self.popular._maybe_reload(now)
         self.doh = DohDetector(cfg.get("doh_ignore_clients",
                                        [ip for ip in ("127.0.0.1", "::1", cfg.get("pi_ip")) if ip]))
         self.tunnel = TunnelDetector(min_distinct=int(cfg.get("tunnel_min_distinct", 30)),
@@ -520,3 +642,7 @@ class Detectors:
         self.nx = NxBurst(min_distinct=int(cfg.get("nx_burst_min_distinct", 10)),
                           window=float(cfg.get("nx_burst_window", 600)))
         self.lock = threading.Lock()
+
+    def wait_loaded(self, timeout: float | None = None) -> bool:
+        """True once the threat feed and the popular list have finished loading."""
+        return self.threat_feed.wait_loaded(timeout) and self.popular.wait_loaded(timeout)

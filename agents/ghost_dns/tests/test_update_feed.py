@@ -79,10 +79,13 @@ class MainTests(unittest.TestCase):
         return page
 
     def run_main(self, *extra):
+        return self.run_main_raw("--popular-top", "2", "--cache-top", "0", *extra)
+
+    def run_main_raw(self, *extra):
         err, out = io.StringIO(), io.StringIO()
         with mock.patch.object(U, "fetch", self.fake_fetch), \
                 contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
-            rc = U.main(["--out", self.out, "--feed", A, "--feed", B, "--min", "3", "--popular-top", "2", *extra])
+            rc = U.main(["--out", self.out, "--feed", A, "--feed", B, "--min", "3", *extra])
         return rc, out.getvalue() + err.getvalue()
 
     def feed(self):
@@ -107,12 +110,40 @@ class MainTests(unittest.TestCase):
         with open(os.path.join(self.dir, "popular_domains.txt")) as fh:
             self.assertIn("popular.example", fh.read())
 
+    def test_cache_keeps_more_names_in_rank_order_than_the_feed_guard_uses(self):
+        ranked = "1,popular.example\n2,second.example\n3,a1.example\n4,b0.example\n"
+        self.pages[U.TRANCO_LIST_URL.format(id="TEST1", n=4)] = ranked
+        self.pages[A], self.pages[B] = lines(3, "a"), lines(3, "b")
+        rc, log = self.run_main_raw("--popular-top", "2", "--cache-top", "4")
+        self.assertEqual(rc, 0, log)
+        self.assertIn("top 4 cached for the DGA rules", log)
+        with open(os.path.join(self.dir, "popular_domains.txt")) as fh:
+            body = [ln.strip() for ln in fh if not ln.startswith("#")]
+        self.assertEqual(body, ["popular.example", "second.example", "a1.example", "b0.example"])
+        f = self.feed()
+        self.assertIsNotNone(f.match("a1.example"))      # rank 3: only the DGA guard skips it
+        self.assertIsNotNone(f.match("b0.example"))
+
+    def test_failed_download_leaves_the_cache_alone(self):
+        self.pages[A], self.pages[B] = lines(3, "a"), lines(3, "b")
+        self.assertEqual(self.run_main()[0], 0)
+        cache = os.path.join(self.dir, "popular_domains.txt")
+        with open(cache) as fh:
+            before = fh.read()
+        self.pages[U.TRANCO_LIST_URL.format(id="TEST1", n=2)] = "1,only.example\n"   # too short
+        rc, log = self.run_main()
+        self.assertEqual(rc, 0, log)
+        self.assertIn("only 1 of 2 domains", log)
+        with open(cache) as fh:
+            self.assertEqual(fh.read(), before)
+        self.assertEqual([n for n in os.listdir(self.dir) if n.startswith(".popular-")], [])
+
     def test_known_source_gets_its_label(self):
         url = U.DEFAULT_SOURCES[0].url
         self.pages[url] = lines(4, "m")
         err = io.StringIO()
         with mock.patch.object(U, "fetch", self.fake_fetch), contextlib.redirect_stdout(err):
-            self.assertEqual(U.main(["--out", self.out, "--feed", url, "--min", "3", "--popular-top", "2"]), 0)
+            self.assertEqual(U.main(["--out", self.out, "--feed", url, "--min", "3", "--popular-top", "2", "--cache-top", "0"]), 0)
         self.assertEqual(self.feed().sources("m1.example"), ["URLhaus (malware)"])
 
     def test_failed_source_keeps_its_previous_contents(self):
