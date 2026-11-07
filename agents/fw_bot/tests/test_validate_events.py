@@ -27,6 +27,13 @@ class ValidatorTests(unittest.TestCase):
                                         "action", "event_id")}
         self.assertEqual(validate_event(minimal), [])
 
+    def test_iot_new_domain_fields(self):
+        iot = dict(GOOD, rule="iot_new_domain", action="recommend", severity="warn",
+                   domain="c2.badhost.example", trust="badhost.example", would_block=True)
+        self.assertEqual(validate_event(iot), [])
+        self.assertTrue(validate_event(dict(iot, would_block="yes")))
+        self.assertTrue(validate_event(dict(iot, trust="Bad Host")))
+
     def test_missing_required(self):
         for f in ("time", "device", "domain", "rule", "action", "event_id"):
             evt = {k: v for k, v in GOOD.items() if k != f}

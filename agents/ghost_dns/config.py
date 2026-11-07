@@ -35,7 +35,7 @@ DEFAULTS = {
     "event_dedupe_seconds": 86400,  # one alert per device per domain family per day
     # ...except where a daily repeat is only noise: a phone with "Private DNS" or a browser
     # with "secure DNS" on keeps using its DoH provider; say so once a month, not daily.
-    "rule_dedupe_seconds": {"doh_bypass": 30 * 86400},
+    "rule_dedupe_seconds": {"doh_bypass": 30 * 86400, "iot_new_domain": 30 * 86400},
     "alert_rate_per_device": 30,    # alerts per device per minute at most (0 = no cap)
     "workers": 16,                  # concurrent in-flight queries
     "resolved_dedupe_seconds": 300,  # min gap before re-logging a resolved IP
@@ -84,6 +84,12 @@ DEFAULTS = {
     "beacon_min_samples": 8,          # regular repeats of one name before alerting
     "service_baseline_days": 3,       # abused_service: learn each device's normal services this long
     "beacon_min_dga": 0.5,            # ...and only if the name itself looks odd (apps poll on timers)
+    # IoT default-deny (devices marked "profile": "iot" in devices.json; docs/OPERATIONS.md):
+    # learn the registrable domains each one looks up for iot_learn_days, then alert on any
+    # other. iot_enforce: "off" (alert only), "dry-run" (alert says would_block) or "on"
+    # (inline mode with learning off refuses names outside the set; shadow mode never blocks).
+    "iot_learn_days": 7,
+    "iot_enforce": "off",
     "tunnel_min_long": 12,            # distinct 40+ char random subdomains of one apex per 10 min
     "threat_feed_path": os.path.join(HERE, "threat_feed.txt"),  # built by update_feed.py
     # Popular-domain guard: a name whose registrable domain is on this list never raises
@@ -124,6 +130,8 @@ DEFAULTS = {
 }
 
 
+IOT_ENFORCE = ("off", "dry-run", "on")
+
 V3_PUBLIC = {
     "onnx_model": None,
     "lr_coef": os.path.join(ROOT, "ghostwall", "models", "lr_v3_public.npy"),
@@ -159,4 +167,6 @@ def load_config(path: str | None = None, overrides: dict | None = None) -> dict:
                 cfg[k] = float(v)
     elif cfg.get("models") not in (None, "default"):
         raise ValueError(f'models must be "default" or "v3-public", not {cfg.get("models")!r}')
+    if cfg.get("iot_enforce") not in IOT_ENFORCE:   # a typo must not quietly mean "off"
+        raise ValueError(f'iot_enforce must be "off", "dry-run" or "on", not {cfg.get("iot_enforce")!r}')
     return cfg

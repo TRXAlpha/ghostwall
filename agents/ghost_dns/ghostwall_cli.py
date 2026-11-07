@@ -7,6 +7,10 @@
     ghostwall name IP NAME           name a device, so alerts say "laptop" instead of an address
     ghostwall allow DOMAIN           trust a domain network-wide (no more alerts for it)
     ghostwall trusted                what you have trusted;  ghostwall untrust DOMAIN  undoes one
+    ghostwall profile NAME iot|normal   mark a device as IoT: it learns its domains, then
+                                     alerts on any other (iot_learn_days, iot_enforce)
+    ghostwall allow DOMAIN --device NAME    allow a domain for one IoT device only
+    ghostwall untrust DOMAIN --device NAME  undo that;  ghostwall relearn NAME  learn again
     ghostwall unblock DOMAIN         take a domain off the blocklist (inline mode)
     ghostwall learning on|off        alerts only (on) or allow blocking (off, inline mode)
     ghostwall password               the dashboard password
@@ -106,6 +110,18 @@ def _local(iso: str | None) -> str:
     return t.astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _iot_note(d: dict) -> str:
+    """` IoT: learning until ...` / ` IoT: 12 domains` for a device marked "profile": "iot"."""
+    if d.get("profile") != "iot":
+        return ""
+    until = d.get("iot_learning_until")
+    if not until:
+        return " IoT: learns from its first lookup"
+    if until > datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"):
+        return f" IoT: learning until {_local(until)}"
+    return f" IoT: {d.get('iot_domains', 0)} domains"
+
+
 def cmd_status(_a) -> int:
     st = control("/status")
     mode = ("shadow (reads your DNS server's log, can't block)" if st.get("shadow")
@@ -128,9 +144,13 @@ def cmd_status(_a) -> int:
     named, unnamed = st.get("named_devices", len(devs)), st.get("unnamed_clients", len(st.get("clients") or []))
     print(f"devices:  {named} named" + (f", {unnamed} unnamed (sudo ghostwall devices)" if unnamed else "")
           + (" (sudo ghostwall status lists them)" if st.get("devices_hidden") and named else ""))
+    iot = sum(1 for d in devs if d.get("profile") == "iot")
+    if iot:
+        print(f"iot:      {iot} IoT device(s), iot_enforce {st.get('iot_enforce', 'off')} "
+              "(off: alerts, dry-run: alerts say it would be refused, on: refused)")
     for d in devs:
         iso = " ISOLATED" if d.get("isolated") else ""
-        print(f"  {d.get('name'):<16} {d.get('ip'):<16} last query {_ago(d.get('last_seen'))}{iso}")
+        print(f"  {d.get('name'):<16} {d.get('ip'):<16} last query {_ago(d.get('last_seen'))}{iso}{_iot_note(d)}")
     if stats.get("queries", 0) == 0:
         print("\nNothing scored yet. If that stays so for minutes: journalctl -u ghostwall-dns -n 30")
     return 0
@@ -179,9 +199,49 @@ def _domain(d: str) -> str:
 
 
 def cmd_allow(a) -> int:
+    if a.device:
+        r = control("/allow", {"domain": _domain(a.domain), "device": a.device})
+        print(f"Allowed {r.get('domain')} for {r.get('device')} only: it is now part of what that "
+              "device normally talks to (other devices are not affected).")
+        return 0
     r = control("/allow", {"domain": _domain(a.domain)})
     print(f"Trusted {r.get('domain')}: no more alerts for it or its subdomains (a subdomain that is "
           "itself on the threat feed still alerts).")
+    return 0
+
+
+def cmd_profile(a) -> int:
+    path = os.path.join(ETC, "devices.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        raise CliError(f"no {path}: name the device first (sudo ghostwall name IP NAME)")
+    except PermissionError:
+        raise CliError(f"can't read {path}: run this with sudo")
+    except ValueError as e:
+        raise CliError(f"{path} is not valid JSON ({e})")
+    entries = data if isinstance(data, list) else list(data.get("devices", [])) + list(data.get("_pending", []))
+    target = next((e for e in entries if isinstance(e, dict) and e.get("name") == a.name), None)
+    if target is None:
+        raise CliError(f"no device named {a.name} (sudo ghostwall devices)")
+    if str(target.get("profile") or "normal") == a.profile:
+        print(f"{a.name} already has profile {a.profile}.")
+        return 0
+    target["profile"] = a.profile
+    write_private(path, json.dumps(data, indent=2) + "\n")
+    if a.profile == "iot":
+        print(f"{a.name} is an IoT device: from its next lookup Ghostwall learns the domains it uses "
+              "(iot_learn_days, a week by default), then alerts on any other. Nothing is refused "
+              "unless iot_enforce is \"on\" (inline mode, learning off).")
+    else:
+        print(f"{a.name} is a normal device again (what it learned is kept; sudo ghostwall relearn "
+              f"{a.name} while it is marked iot starts over).")
+    if shutil_which("systemctl") and os.path.exists("/etc/systemd/system/ghostwall-dns.service"):
+        subprocess.run(["systemctl", "restart", "ghostwall-dns"], check=False)
+        print("Restarted ghostwall-dns.")
+    else:
+        print("Restart ghost-dns (Docker: docker compose restart ghostwall) to apply it.")
     return 0
 
 
@@ -269,8 +329,19 @@ def cmd_trusted(_a) -> int:
 
 
 def cmd_untrust(a) -> int:
+    if a.device:
+        r = control("/untrust", {"domain": _domain(a.domain), "device": a.device})
+        print(f"{r.get('domain')} is no longer allowed for {r.get('device')}: it alerts again from that device.")
+        return 0
     r = control("/untrust", {"domain": _domain(a.domain)})
     print(f"{r.get('domain')} is no longer trusted: it can raise alerts again.")
+    return 0
+
+
+def cmd_relearn(a) -> int:
+    r = control("/relearn", {"name": a.name})
+    print(f"{r.get('name')} learns again from its next lookup, for iot_learn_days; "
+          "what it learned before and what you allowed for it are forgotten.")
     return 0
 
 
@@ -543,7 +614,15 @@ def main(argv=None) -> int:
     p.set_defaults(fn=cmd_alerts)
     p = sub.add_parser("allow", help="trust a domain")
     p.add_argument("domain")
+    p.add_argument("--device", help="an IoT device (profile iot): allow it for that device only")
     p.set_defaults(fn=cmd_allow)
+    p = sub.add_parser("profile", help="mark a device as iot (default-deny) or normal")
+    p.add_argument("name")
+    p.add_argument("profile", choices=["iot", "normal"])
+    p.set_defaults(fn=cmd_profile)
+    p = sub.add_parser("relearn", help="an IoT device learns what it talks to again")
+    p.add_argument("name")
+    p.set_defaults(fn=cmd_relearn)
     sub.add_parser("devices", help="named devices and unnamed addresses seen").set_defaults(fn=cmd_devices)
     p = sub.add_parser("name", help="name a device by its address")
     p.add_argument("ip")
@@ -552,6 +631,7 @@ def main(argv=None) -> int:
     sub.add_parser("trusted", help="domains you have trusted").set_defaults(fn=cmd_trusted)
     p = sub.add_parser("untrust", help="undo a trust")
     p.add_argument("domain")
+    p.add_argument("--device", help="undo an allow for that IoT device only")
     p.set_defaults(fn=cmd_untrust)
     p = sub.add_parser("unblock", help="take a domain off the blocklist")
     p.add_argument("domain")
