@@ -486,7 +486,11 @@ class BeaconDetector:
         self._t: dict[tuple, deque] = defaultdict(lambda: deque(maxlen=24))
         self._flagged: dict[tuple, float] = {}
 
-    def observe(self, device: str, host: str, now: float) -> Hit | None:
+    def observe(self, device: str, host: str, now: float, popular=False) -> Hit | None:
+        """popular: the name's registrable domain is on the popular-domain list (a bool,
+        or a callable asked only when the timing test would fire). Under a popular site a
+        timer is someone's script or a polled page (weather, timetables, course sites),
+        not a call-home: a C2 needs a domain its operator controls."""
         key = (device, host)
         q = self._t[key]
         # collapse retries of one lookup (resolvers re-ask within seconds)
@@ -505,6 +509,8 @@ class BeaconDetector:
             return None
         cv = statistics.pstdev(gaps) / mean
         if cv > self.max_cv:
+            return None
+        if popular() if callable(popular) else popular:
             return None
         self._flagged[key] = now
         return Hit("dns_beacon", "warn",

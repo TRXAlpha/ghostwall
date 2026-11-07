@@ -189,6 +189,27 @@ class TunnelTests(unittest.TestCase):
 
 
 class BeaconTests(unittest.TestCase):
+    def test_popular_domain_on_a_timer_not_flagged(self):
+        """A script polling a weather or course site every 15 min: the site is popular."""
+        b = D.BeaconDetector(min_samples=8, min_interval=30)
+        for k in range(20):
+            self.assertIsNone(b.observe("laptop", "forecast.example.com", 1000 + 900 * k, popular=True))
+
+    def test_popular_list_asked_only_when_the_beacon_would_fire(self):
+        asked = []
+        b = D.BeaconDetector(min_samples=8, min_interval=30)
+        for k in range(10):
+            b.observe("laptop", "forecast.example.com", 1000 + 60 * k,
+                      popular=lambda: asked.append(1) or False)
+        # the 8th, 9th and 10th lookups pass the timing test; the 8th alerts (not popular)
+        # and starts the cooldown, so the list is asked once
+        self.assertEqual(len(asked), 1)
+        asked.clear()
+        b2 = D.BeaconDetector(min_samples=8, min_interval=30)
+        for k in range(5):
+            b2.observe("laptop", "forecast.example.com", 1000 + 60 * k, popular=lambda: asked.append(1) or True)
+        self.assertEqual(asked, [])                                # too few samples: never asked
+
     def test_regular_interval_flagged(self):
         b = D.BeaconDetector(min_samples=8, min_interval=30)
         hit = None
@@ -400,6 +421,20 @@ class ResolverWiringTests(unittest.TestCase):
         for k in range(20):
             self.now = 1000 + 300 * k
             r.decide("192.168.1.30", "catalog.example", "A")
+        self.assertNotIn("dns_beacon", [e["rule"] for e in self.events()])
+
+    def test_beacon_on_a_popular_domain_is_ignored(self):
+        """Even random-looking or on a rare TLD: a popular site's timer is a polled page."""
+        pop = os.path.join(tempfile.mkdtemp(), "popular_domains.txt")
+        with open(pop, "w") as f:
+            f.write("# rank order\nqzkweather.example\npolled.top\n")
+        r = self.build(popular_path=pop)
+        self.assertTrue(r.det.wait_loaded(10))
+        r.scorer = FakeScorer(0.6)
+        for k in range(10):
+            self.now = 1000 + 600 * k
+            r.decide("192.168.1.30", "api.qzkweather.example", "A")
+            r.decide("192.168.1.30", "feed.polled.top", "A")
         self.assertNotIn("dns_beacon", [e["rule"] for e in self.events()])
 
     def test_beacon_on_rare_tld_alerts_even_with_low_score(self):
