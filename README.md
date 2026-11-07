@@ -87,8 +87,8 @@ Keep them. Ghostwall runs on top and covers what a blocklist can't:
 
 **Opt-in containment.** In gateway mode, `auto_isolate` cuts a device off the moment it hits an
 exact malware-list entry or tunnels data over DNS (at most 2 an hour, one-tap Release in
-Telegram); IoT devices can be locked to the domains they learned (`iot_enforce`). Both start
-as dry-run: see [docs/OPERATIONS.md](docs/OPERATIONS.md).
+Telegram); IoT devices can be locked to the domains they learned (`iot_enforce`). Both are off
+by default; run them as dry-run first: see [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 An alert, as written to `events.jsonl` and sent to Telegram:
 
