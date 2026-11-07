@@ -36,7 +36,7 @@ Cells are `lookups until the first alert (minutes)`; `no` = not within 300 looku
 | tinba | 99.8% | 83.8% | 94.0% | 10 (0.3 min) | 10 (1.5 min) | 10 (4.5 min) | 10 (9.0 min) | 6 (0.8 min) | 1 (0.0 min) |
 | vawtrak | 100.0% | 0.4% | 3.1% | 10 (0.3 min) | 10 (1.5 min) | 10 (4.5 min) | 10 (9.0 min) | no (300 lookups) | 77 (12.7 min) |
 
-nx_burst fired for 25/25 families at 1 lookup / 2 s, 25/25 families at 1 lookup / 10 s, 25/25 families at 1 lookup / 30 s, 25/25 families at 1 lookup / 60 s. "model: single-name alert" is the share of 2000 sampled names scoring >= 0.96 (`dga_suspect`/`dga_high`); "counts toward dga_burst" is the share scoring >= 0.8. Slower than one lookup per 67 s, 10 names never fit in one 600 s window.
+nx_burst fired for 25/25 families at 1 lookup / 2 s, 25/25 families at 1 lookup / 10 s, 25/25 families at 1 lookup / 30 s, 25/25 families at 1 lookup / 60 s. "model: single-name alert" is the share of 2000 sampled names scoring >= 0.96 (`dga_suspect`/`dga_high`); "counts toward dga_burst" is the share scoring >= 0.8. Slower than one lookup per 67 s, 10 names never fit in one 600 s window. One storm raises one alert: where dga_burst alerts first, nx_burst's detector still fires at the lookup shown but its alert is skipped.
 
 ## 5% of names resolve (NOERROR), the implant keeps looking
 
