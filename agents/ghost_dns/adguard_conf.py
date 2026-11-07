@@ -73,7 +73,8 @@ def main(argv=None) -> int:
     with open(a.yaml, encoding="utf-8") as f:
         text = f.read()
     if a.check:
-        print("\n".join(problems(text)))
+        for p in problems(text):   # nothing at all when the config is fine
+            print(p)
         return 0
     new, changes = edit(text, a.flush, a.port_back)
     if changes:

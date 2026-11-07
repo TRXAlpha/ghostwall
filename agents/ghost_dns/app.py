@@ -122,6 +122,13 @@ def main(argv=None):
     threading.Thread(target=flusher, daemon=True).start()
     try:
         if follower:
+            # Load the lists now (about a minute on a Pi for the top 1M), with the control
+            # API already answering, so /status reports them and queries written
+            # meanwhile wait in the log rather than being scored without them.
+            det = getattr(resolver, "det", None)
+            for lst in (getattr(det, "threat_feed", None), getattr(det, "popular", None)):
+                if lst is not None:
+                    len(lst)
             follower.run()
         else:
             resolver.serve_forever()

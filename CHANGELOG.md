@@ -1,5 +1,63 @@
 # Changelog
 
+## Unreleased
+
+Found by a field test of v0.3.0-beta.2 on one home network (Raspberry Pi 4, AdGuard Home
+in Docker, shadow mode) on 2026-11-07: [docs/FIELD_RESULTS.md](docs/FIELD_RESULTS.md).
+
+### Fixed
+
+- **The upgrade stopped half-way and left ghost-dns stopped** on every AdGuard Home setup
+  with nothing to warn about. `go_shadow.sh` (run by `install.sh`) printed AdGuard's
+  settings warnings in a loop whose last test was false for an empty line, which
+  `set -e -o pipefail` turned into an exit; DNS kept working (AdGuard serves it), but
+  nothing was scored until `go_shadow.sh` was re-run by hand. The warnings can no longer
+  stop the script, and `adguard_conf.py --check` prints nothing for a clean config. If
+  your upgrade ended right after "DNS answers on :53", run
+  `sudo bash /opt/ghostwall/agents/ghost_dns/go_shadow.sh` once after updating.
+- **`replay_querylog.py` replayed with the wrong settings and lists.** It ignored
+  `/etc/ghostwall/ghost_dns.json`, so "replay your history first" showed the defaults, not
+  your thresholds; and on installs upgraded from before 0.2.0b2 it used the stale feed left
+  next to the code and then found no popular list beside it, so the popular-domain guard
+  was off in the replay. It now uses your config, the feed it names (else
+  `/var/lib/ghostwall/threat_feed.txt`) and the popular list next to that.
+- Replayed alerts carry the time of the query that raised them, not the time of the
+  replay, and the summary counts them per day.
+- **`dns_tunnel` flagged a game launcher.** Its "many distinct subdomains" test needs only
+  30 names averaging 14+ characters, and a big site's own word-based service names
+  pass it: 4 false
+  alerts in 20 days on the field network, all one launcher. Under a domain on the
+  popular list only the long random labels a tunnel's payload needs count now; any other
+  domain is checked as before. On the field log: 27 alerts before, 23 after, the 4
+  launcher alerts gone and nothing else changed.
+- **`dns_beacon` could never fire in shadow mode on AdGuard Home.** The timing rules used
+  the time ghost-dns *read* each query, and AdGuard writes its log in batches (10 queries
+  since the installer's change), so lookups asked a minute apart arrived together and the
+  beacon rule took them for retries. They now use each query's own time from the log
+  (`T`), so beacon, tunnel, `nx_burst` and `dga_burst` windows match what the devices
+  did. On the field network a live test (9 lookups, 31 s apart) raised nothing; the same
+  queries replayed by their own times raise `dns_beacon`. Pi-hole was not affected (it
+  writes each line as it happens). Expect the beacon alerts the replay already showed:
+  3 in 20 days on the field network, all scripts polling a site on a timer (trust them
+  with `ghostwall allow`).
+- `ghostwall version` named the wrong release: release tags are lightweight and the
+  installer's `git describe` skipped them (v0.3.0-beta.2 showed as
+  `v0.2.0-beta.1-86-g...`).
+- **`ghostwall status` timed out after the daily feed update** (shadow mode): the status
+  request itself reloaded the changed lists, about a minute for the top 1M on a Pi 4.
+  Status now reports what is loaded and the next scored query reloads; ghost-dns loads
+  both lists at start, with the control API already answering.
+- REFERENCE.md said popular sites' names still count toward `dga_burst`; since 0.3.0b2
+  they don't (as this changelog says below).
+- The control API no longer prints a `BrokenPipeError` traceback into ghost-dns's journal
+  when a client hangs up before the answer (a status poll that timed out).
+
+### Changed
+
+- `replay_querylog.py --set KEY=VALUE` tries another value for one replay without
+  editing your config (`--set nx_burst_min_distinct=15`, repeatable); `--config FILE` or
+  `--no-config` picks the settings; `--events-out FILE` keeps every alert.
+
 ## v0.3.0-beta.2 (2026-11-07)
 
 Update as usual: `git pull && sudo ./install.sh` (Docker: `git pull && docker compose up -d --build`).

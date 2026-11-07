@@ -96,7 +96,7 @@ class ControlApiTests(unittest.TestCase):
         self.state = GhostState(self.cfg["state_path"])
         self.enforcer = Enforcer(self.backend())
         self.devices = DeviceMap.from_json(
-            [{"name": "dell", "ip": "192.168.1.30", "mac": "aa:bb:cc:dd:ee:01"}])
+            [{"name": "workpc", "ip": "192.168.1.30", "mac": "aa:bb:cc:dd:ee:01"}])
         self.server = ControlServer(self.cfg, self.state, self.enforcer, self.devices)
         self.port = self.server.httpd.server_address[1]
         self.t = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -121,12 +121,12 @@ class ControlApiTests(unittest.TestCase):
         self.assertTrue(r["learning"])
         self.assertFalse(r["lockdown"])
         self.assertEqual(r["enforce"], "null")
-        self.assertEqual(r["devices"][0]["name"], "dell")
+        self.assertEqual(r["devices"][0]["name"], "workpc")
         self.assertIsNone(r["devices"][0]["last_seen"])
         self.assertIsInstance(r["stats"], dict)
 
     def test_device(self):
-        r = self.client.device("dell")
+        r = self.client.device("workpc")
         self.assertEqual(r["ip"], "192.168.1.30")
         self.assertIn("last_seen", r)
 
@@ -138,19 +138,19 @@ class ControlApiTests(unittest.TestCase):
     def test_isolate_refused_without_enforcement(self):
         # Saying "isolated" while nothing changed would be worse than refusing.
         with self.assertRaises(ControlError) as cm:
-            self.client.isolate("dell")
+            self.client.isolate("workpc")
         self.assertEqual(cm.exception.status, 409)
         self.assertIn("enforcement is off", str(cm.exception))
-        self.assertFalse(self.state.is_isolated("dell"))
+        self.assertFalse(self.state.is_isolated("workpc"))
         with self.assertRaises(ControlError) as cm:
             self.client.lockdown()
         self.assertEqual(cm.exception.status, 409)
         self.assertFalse(self.state.lockdown)
 
     def test_release_always_allowed(self):
-        self.state.isolate("dell")  # e.g. left by an older version
-        self.assertFalse(self.client.release("dell")["isolated"])
-        self.assertFalse(self.state.is_isolated("dell"))
+        self.state.isolate("workpc")  # e.g. left by an older version
+        self.assertFalse(self.client.release("workpc")["isolated"])
+        self.assertFalse(self.state.is_isolated("workpc"))
 
     def test_allow(self):
         r = self.client.allow("example.com")
@@ -195,7 +195,7 @@ class ControlApiTests(unittest.TestCase):
     def test_unblock_by_event_id(self):
         self.state.add_block("c2.example")
         self.state.record_event({"event_id": "evt_1", "domain": "c2.example",
-                                 "device": "dell", "ip": "192.168.1.30", "time": "t"})
+                                 "device": "workpc", "ip": "192.168.1.30", "time": "t"})
         # client requires a domain arg; API resolves it from the event when blank
         import urllib.request, json
         req = urllib.request.Request(
@@ -217,26 +217,26 @@ class EnforcingControlApiTests(ControlApiTests):
         self.assertEqual(self.client.status()["enforce"], "nft")
 
     def test_isolate_refused_without_enforcement(self):
-        self.assertTrue(self.client.isolate("dell")["isolated"])
-        self.assertTrue(self.state.is_isolated("dell"))
+        self.assertTrue(self.client.isolate("workpc")["isolated"])
+        self.assertTrue(self.state.is_isolated("workpc"))
         self.assertTrue(any("isolated_dev" in c for c in self.enforcer.backend.calls))
-        self.assertFalse(self.client.release("dell")["isolated"])
-        self.assertFalse(self.state.is_isolated("dell"))
+        self.assertFalse(self.client.release("workpc")["isolated"])
+        self.assertFalse(self.state.is_isolated("workpc"))
 
     def test_isolate_hits_where_the_device_is_now(self):
-        # dell's address in devices.json may belong to another device by now (DHCP); its
-        # queries come from .31, so isolating "dell" must cut off .31, not .30.
-        res = type("R", (), {"current_ip": {"dell": "192.168.1.31"}, "last_seen": {
+        # workpc's address in devices.json may belong to another device by now (DHCP); its
+        # queries come from .31, so isolating "workpc" must cut off .31, not .30.
+        res = type("R", (), {"current_ip": {"workpc": "192.168.1.31"}, "last_seen": {
             "192.168.1.31": "2026-11-03T10:00:00Z", "192.168.1.30": "2026-11-03T10:01:00Z"}})()
         self.server.httpd.RequestHandlerClass.state["resolver"] = res
-        self.assertEqual(self.client.isolate("dell")["ip"], "192.168.1.31")
+        self.assertEqual(self.client.isolate("workpc")["ip"], "192.168.1.31")
         calls = " ".join(" ".join(c) for c in self.enforcer.backend.calls)
         self.assertIn("192.168.1.31", calls)
         self.assertNotIn("192.168.1.30", calls)
         st = self.client.status()
-        self.assertEqual([(d["name"], d["ip"]) for d in st["devices"]], [("dell", "192.168.1.31")])
+        self.assertEqual([(d["name"], d["ip"]) for d in st["devices"]], [("workpc", "192.168.1.31")])
         self.assertEqual([c["ip"] for c in st["clients"]], ["192.168.1.30"])   # the newcomer at .30
-        self.assertFalse(self.client.release("dell")["isolated"])
+        self.assertFalse(self.client.release("workpc")["isolated"])
 
     def test_lockdown_toggles(self):
         self.assertTrue(self.client.lockdown()["lockdown"])
@@ -251,8 +251,6 @@ class EnforcingControlApiTests(ControlApiTests):
         self.assertFalse(self.state.lockdown)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class ControlAuthTests(unittest.TestCase):
@@ -267,7 +265,7 @@ class ControlAuthTests(unittest.TestCase):
         self.token = ensure_token(self.tpath)
         self.server = ControlServer(self.cfg, GhostState(self.cfg["state_path"]),
                                     Enforcer(NullBackend()),
-                                    DeviceMap.from_json([{"name": "dell", "ip": "192.168.1.30"}]),
+                                    DeviceMap.from_json([{"name": "workpc", "ip": "192.168.1.30"}]),
                                     token=self.token)
         self.port = self.server.httpd.server_address[1]
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -326,13 +324,13 @@ class ControlAuthTests(unittest.TestCase):
                 self.assertTrue(st["devices_hidden"], (method, auth))
                 self.assertNotIn("devices", st)
                 self.assertNotIn("clients", st)
-                for leak in ("dell", "192.168.1.30", "192.168.1.77"):
+                for leak in ("workpc", "192.168.1.30", "192.168.1.77"):
                     self.assertNotIn(leak, raw, (method, auth))
                 self.assertEqual((st["named_devices"], st["unnamed_clients"]), (1, 1))
                 self.assertIn("stats", st)                     # health checks still work
             full = self._status_body("Bearer " + self.token, method)
             self.assertNotIn("devices_hidden", full)
-            self.assertEqual([d["name"] for d in full["devices"]], ["dell"])
+            self.assertEqual([d["name"] for d in full["devices"]], ["workpc"])
             self.assertEqual([c["ip"] for c in full["clients"]], ["192.168.1.77"])
 
     def test_allow_rejects_non_domains(self):
@@ -362,3 +360,26 @@ class TrustListTests(ControlAuthTests):
         self.assertEqual(self._post("/untrust", {"domain": "mine.example"}, tok), 200)
         self.assertFalse(g.is_allowed("mine.example"))
         self.assertEqual(self._post("/untrust", {"domain": "mine.example"}, tok), 404)
+
+
+class ClientHangsUp(unittest.TestCase):
+    """A client that gives up before the answer (a status poll with a short timeout)
+    used to print a BrokenPipeError traceback into ghost-dns's journal."""
+
+    def test_send_to_a_closed_client_is_quiet(self):
+        import io
+        from control_api import ControlHandler
+
+        class Gone(io.RawIOBase):
+            def write(self, b):
+                raise BrokenPipeError(32, "Broken pipe")
+
+        h = ControlHandler.__new__(ControlHandler)
+        h.wfile, h.request_version, h.requestline, h.command = Gone(), "HTTP/1.1", "GET /status HTTP/1.1", "GET"
+        h.close_connection = False
+        h._send(200, {"ok": True})            # must not raise
+        self.assertTrue(h.close_connection)
+
+
+if __name__ == "__main__":
+    unittest.main()

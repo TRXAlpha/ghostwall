@@ -111,26 +111,26 @@ class TunnelTests(unittest.TestCase):
         t = D.TunnelDetector(min_distinct=30)
         hit = None
         for i in range(35):
-            hit = t.observe("dell", f"{'a1b2c3d4e5f6g7h8i9'}{i:03d}.t.tunnel.example", i) or hit
+            hit = t.observe("workpc", f"{'a1b2c3d4e5f6g7h8i9'}{i:03d}.t.tunnel.example", i) or hit
         self.assertEqual(hit.rule, "dns_tunnel")
         self.assertEqual(hit.severity, "high")
 
     def test_normal_subdomain_use_not_flagged(self):
         t = D.TunnelDetector()
         for i in range(200):
-            self.assertIsNone(t.observe("dell", f"www{i % 3}.example.com", i))
+            self.assertIsNone(t.observe("workpc", f"www{i % 3}.example.com", i))
 
     def test_many_short_subdomains_not_flagged(self):
         t = D.TunnelDetector(min_distinct=30, min_avg_label=14)
         for i in range(60):
-            self.assertIsNone(t.observe("dell", f"h{i}.cdn.example.com", i))
+            self.assertIsNone(t.observe("workpc", f"h{i}.cdn.example.com", i))
 
     def test_exfil_long_random_labels(self):
         t = D.TunnelDetector(min_long=12)
         hit = None
         for i in range(14):
             lab = rand_label(i)
-            hit = t.observe("dell", f"{lab}.exfil.example", i) or hit
+            hit = t.observe("workpc", f"{lab}.exfil.example", i) or hit
         self.assertIsNotNone(hit)
 
     def test_a_few_long_random_labels_are_normal_web_traffic(self):
@@ -138,13 +138,13 @@ class TunnelTests(unittest.TestCase):
         t = D.TunnelDetector(min_long=12)
         for i in range(5):
             lab = rand_label(i)
-            self.assertIsNone(t.observe("dell", f"{lab}.online-metrix.example", i))
+            self.assertIsNone(t.observe("workpc", f"{lab}.online-metrix.example", i))
 
     def test_same_long_host_repeated_is_not_distinct(self):
         t = D.TunnelDetector(min_long=3)
         lab = rand_label(99)
         for i in range(20):
-            self.assertIsNone(t.observe("dell", f"{lab}.cdn.example", i))
+            self.assertIsNone(t.observe("workpc", f"{lab}.cdn.example", i))
 
     def test_cooldown_prevents_repeat(self):
         t = D.TunnelDetector(min_distinct=5, min_avg_label=1)
@@ -154,29 +154,62 @@ class TunnelTests(unittest.TestCase):
     def test_apex_itself_ignored(self):
         self.assertIsNone(D.TunnelDetector().observe("d", "example.com", 0))
 
+    # A big site's own service names: long, distinct, made of words (a game launcher's
+    # presence/friends/catalog services). On a home network one launcher start gave
+    # 30 of them in 10 minutes.
+    SERVICES = [f"{a}-{b}-service-{c}.ol.example.com" for a in ("presence", "friends", "catalog", "links", "followers")
+                for b in ("public", "social") for c in ("prod", "live", "stage")]
+
+    def test_popular_apex_service_names_not_flagged(self):
+        t = D.TunnelDetector(min_distinct=30)
+        for i, host in enumerate(self.SERVICES):
+            self.assertIsNone(t.observe("laptop", host, i, popular=True), host)
+
+    def test_popular_list_asked_only_when_it_matters(self):
+        asked = []
+        t = D.TunnelDetector(min_distinct=30)
+        for i, host in enumerate(self.SERVICES):
+            t.observe("laptop", host, i, popular=lambda: asked.append(1) or True)
+        self.assertEqual(len(asked), 1)   # only when the 30th name would have alerted
+
+    def test_same_names_on_an_unknown_apex_still_flagged(self):
+        t = D.TunnelDetector(min_distinct=30)
+        hits = [t.observe("laptop", host, i) for i, host in enumerate(self.SERVICES)]
+        self.assertEqual(sum(1 for h in hits if h), 1)
+
+    def test_popular_apex_with_random_payload_still_flagged(self):
+        """A tunnel can't run under a site it doesn't control, but if the list is wrong
+        (or a platform hands out subzones) the long random labels still count."""
+        t = D.TunnelDetector(min_long=12)
+        hit = None
+        for i in range(14):
+            hit = t.observe("laptop", f"{rand_label(i)}.exfil.example.com", i, popular=True) or hit
+        self.assertIsNotNone(hit)
+        self.assertIn("very long high-entropy", hit.reasons[0])
+
 
 class BeaconTests(unittest.TestCase):
     def test_regular_interval_flagged(self):
         b = D.BeaconDetector(min_samples=8, min_interval=30)
         hit = None
         for k in range(10):
-            hit = b.observe("dell", "c2.example", 1000 + 60 * k) or hit
+            hit = b.observe("workpc", "c2.example", 1000 + 60 * k) or hit
         self.assertEqual(hit.rule, "dns_beacon")
 
     def test_jittery_not_flagged(self):
         b = D.BeaconDetector()
         for k, t in enumerate([0, 40, 190, 230, 500, 520, 900, 1500, 1520, 2300]):
-            self.assertIsNone(b.observe("dell", "x.example", t))
+            self.assertIsNone(b.observe("workpc", "x.example", t))
 
     def test_fast_repeats_not_a_beacon(self):
         b = D.BeaconDetector(min_interval=30)
         for k in range(30):
-            self.assertIsNone(b.observe("dell", "chatty.example", k * 10))
+            self.assertIsNone(b.observe("workpc", "chatty.example", k * 10))
 
     def test_retries_collapse(self):
         b = D.BeaconDetector(min_samples=3)
         for t in (0, 1, 2, 3):                 # one lookup retried
-            self.assertIsNone(b.observe("dell", "x.example", t))
+            self.assertIsNone(b.observe("workpc", "x.example", t))
 
     def test_per_device(self):
         b = D.BeaconDetector(min_samples=8)
@@ -189,24 +222,24 @@ class BurstTests(unittest.TestCase):
         d = D.DgaBurst(min_distinct=5)
         hit = None
         for i in range(5):
-            hit = d.observe("dell", f"xk{i}qzvw.biz", 0.9, i * 10) or hit
+            hit = d.observe("workpc", f"xk{i}qzvw.biz", 0.9, i * 10) or hit
         self.assertEqual(hit.rule, "dga_burst")
 
     def test_same_domain_repeated_is_not_a_burst(self):
         d = D.DgaBurst(min_distinct=5)
         for i in range(30):
-            self.assertIsNone(d.observe("dell", "a.xkqzvw.biz", 0.95, i))
+            self.assertIsNone(d.observe("workpc", "a.xkqzvw.biz", 0.95, i))
 
     def test_low_scores_ignored(self):
         d = D.DgaBurst(min_distinct=3)
         for i in range(10):
-            self.assertIsNone(d.observe("dell", f"d{i}.example", 0.5, i))
+            self.assertIsNone(d.observe("workpc", f"d{i}.example", 0.5, i))
 
     def test_window_expires(self):
         d = D.DgaBurst(min_distinct=5, window=600)
         for i in range(4):
-            d.observe("dell", f"x{i}.biz", 0.9, i)
-        self.assertIsNone(d.observe("dell", "x9.biz", 0.9, 5000))   # old ones expired
+            d.observe("workpc", f"x{i}.biz", 0.9, i)
+        self.assertIsNone(d.observe("workpc", "x9.biz", 0.9, 5000))   # old ones expired
 
 
 class FakeScorer:
@@ -231,7 +264,7 @@ class ResolverWiringTests(unittest.TestCase):
         self.state = GhostState(cfg["state_path"], learning_default=cfg.get("learning", True))
         for a in allow:
             self.state.allow(a)
-        dm = DeviceMap.from_json([{"name": "dell", "ip": "192.168.1.30"}])
+        dm = DeviceMap.from_json([{"name": "workpc", "ip": "192.168.1.30"}])
         self.now = 1000.0
         self.r = Resolver(cfg, self.state, FakeScorer(0.0), Enforcer(NullBackend()), dm, EventLog(cfg["events_path"]))
         self.assertTrue(self.r.det.wait_loaded(10))   # inline mode loads lists in the background

@@ -216,6 +216,7 @@ sudo ghostwall calibrate          # after a few days: what each threshold would 
   [docs/OPERATIONS.md](docs/OPERATIONS.md#telegram).
 - **Check it against your own history** (changes nothing):
   `sudo /opt/ghostwall/.venv/bin/python /opt/ghostwall/agents/ghost_dns/replay_querylog.py --querylog <querylog.json or pihole.log>`
+  (with your settings; add `--set nx_burst_min_distinct=15`, or any other key, to try a value first)
 - **Update:** `git pull && sudo ./install.sh`. **Remove:** `sudo /opt/ghostwall/uninstall.sh`
   (keeps your settings and alerts; `--purge` removes them too).
 

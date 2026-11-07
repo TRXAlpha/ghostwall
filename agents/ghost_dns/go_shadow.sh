@@ -44,6 +44,18 @@ except Exception:
 PYEOF
 }
 
+adguard_warnings() {  # adguard_warnings <check command...>: print what it reports as warnings
+  # Advisory only, so it must never stop the script: under `set -e -o pipefail` a loop
+  # whose last command was a false test (`[ -n "" ] && ...` on an empty line) used to
+  # abort here on every clean AdGuard config, leaving ghost-dns stopped.
+  local out p
+  out=$("$@" 2>&1) || { echo "   WARNING: could not check AdGuard's settings ($*)" >&2; return 0; }
+  while IFS= read -r p; do
+    if [ -n "$p" ]; then echo "   WARNING: $p" >&2; fi
+  done <<<"$out"
+  return 0
+}
+
 echo "1) stop ghost-dns"
 systemctl stop ghostwall-dns 2>/dev/null || true
 
@@ -81,9 +93,7 @@ else
   echo "   DNS answers on :53 ($n records for google.com)"
 fi
 if [ "$SOURCE" = adguard ] && [ -f "$YAML" ]; then
-  "$PY" /opt/ghostwall/agents/ghost_dns/adguard_conf.py "$YAML" --check | while IFS= read -r p; do
-    [ -n "$p" ] && echo "   WARNING: $p" >&2
-  done
+  adguard_warnings "$PY" /opt/ghostwall/agents/ghost_dns/adguard_conf.py "$YAML" --check
 fi
 if [ ! -f "$QUERYLOG" ]; then
   if [ "$SOURCE" = pihole ]; then

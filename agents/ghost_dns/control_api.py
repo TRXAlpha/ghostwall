@@ -89,8 +89,13 @@ class ControlHandler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # The client gave up first (a status poll with a short timeout, a restart):
+            # nothing to answer, and not worth a traceback in the journal.
+            self.close_connection = True
 
     def _body(self) -> dict:
         try:

@@ -149,7 +149,7 @@ class TestDhcpLeases(unittest.TestCase):
 
     def test_real_devices_present(self):
         # Values come from devices.example.json (made-up MACs/IPs).
-        self.assertIn("dhcp-host=aa:bb:cc:dd:ee:01,192.168.1.50,dell,", self.t)
+        self.assertIn("dhcp-host=aa:bb:cc:dd:ee:01,192.168.1.50,workpc,", self.t)
         self.assertIn("dhcp-host=aa:bb:cc:dd:ee:02,192.168.1.51,bambu-a1mini,", self.t)
 
     def test_pending_devices_are_commented_out(self):

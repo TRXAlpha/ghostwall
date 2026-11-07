@@ -9,14 +9,14 @@ from devices import DeviceMap
 
 class DeviceMapTests(unittest.TestCase):
     def test_netconf_shape(self):
-        raw = {"devices": [{"name": "dell", "ip": "192.168.1.30",
+        raw = {"devices": [{"name": "workpc", "ip": "192.168.1.30",
                             "mac": "aa:bb:cc:dd:ee:01", "profile": "normal"}],
                "_pending": [{"name": "ps4", "ip": "192.168.1.40", "mac": None}]}
         dm = DeviceMap.from_json(raw)
-        self.assertEqual(dm.device_for_ip("192.168.1.30").name, "dell")
-        self.assertEqual(dm.device_for_name("dell").mac, "aa:bb:cc:dd:ee:01")
+        self.assertEqual(dm.device_for_ip("192.168.1.30").name, "workpc")
+        self.assertEqual(dm.device_for_name("workpc").mac, "aa:bb:cc:dd:ee:01")
         self.assertEqual(dm.device_for_name("ps4").ip, "192.168.1.40")  # pending is named
-        self.assertEqual(sorted(dm.names()), ["dell", "ps4"])
+        self.assertEqual(sorted(dm.names()), ["ps4", "workpc"])
 
     def test_list_shape(self):
         raw = [{"name": "laptop", "ip": "192.168.1.51", "mac": "aa:bb:cc:dd:ee:02"}]

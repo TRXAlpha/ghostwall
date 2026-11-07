@@ -32,12 +32,12 @@ class StateTests(unittest.TestCase):
     def test_persistence(self):
         s = self._fresh()
         s.add_block("bad.example")
-        s.isolate("dell")
+        s.isolate("workpc")
         s.set_learning(False)
         s.set_lockdown(True)
         s2 = GhostState(self.path)
         self.assertTrue(s2.is_blocked("bad.example"))
-        self.assertTrue(s2.is_isolated("dell"))
+        self.assertTrue(s2.is_isolated("workpc"))
         self.assertFalse(s2.learning)
         self.assertTrue(s2.lockdown)
 
@@ -66,15 +66,15 @@ class StateTests(unittest.TestCase):
 
     def test_isolate_release(self):
         s = self._fresh()
-        s.isolate("dell")
-        self.assertTrue(s.is_isolated("dell"))
-        s.release("dell")
-        self.assertFalse(s.is_isolated("dell"))
+        s.isolate("workpc")
+        self.assertTrue(s.is_isolated("workpc"))
+        s.release("workpc")
+        self.assertFalse(s.is_isolated("workpc"))
 
     def test_record_and_lookup_event(self):
         s = self._fresh()
         s.record_event({"event_id": "evt_1", "domain": "x.example",
-                        "device": "dell", "ip": "192.168.1.30", "time": "t"})
+                        "device": "workpc", "ip": "192.168.1.30", "time": "t"})
         self.assertEqual(s.event("evt_1")["domain"], "x.example")
         self.assertIsNone(s.event("missing"))
 

@@ -182,9 +182,14 @@ class _FileIndex:
         self._lock = threading.Lock()
 
     def info(self) -> tuple[int, float]:
-        """(number of domains, file mtime or 0) for the status page."""
-        n = len(self)
-        return n, self._mtime
+        """(number of domains, file mtime or 0) for the status page: what is loaded now.
+        Never loads or reloads itself: in shadow mode that ran in the request (about a
+        minute for the top 1M on a Pi after each daily feed update) and `ghostwall
+        status` timed out. The next scored query picks up a new file."""
+        return self._size(), self._mtime
+
+    def _size(self) -> int:
+        raise NotImplementedError
 
     def wait_loaded(self, timeout: float | None = None) -> bool:
         """Block until no load is running (tests, and anything that must see the list)."""
@@ -247,6 +252,9 @@ class ThreatFeed(_FileIndex):
 
     def __len__(self) -> int:
         self._maybe_reload(time.monotonic())   # report the real size, not a not-yet-loaded 0
+        return self._size()
+
+    def _size(self) -> int:
         return len(self._feed[0])
 
     def _load(self) -> bool:
@@ -318,6 +326,9 @@ class PopularDomains(_FileIndex):
 
     def __len__(self) -> int:
         self._maybe_reload(time.monotonic())
+        return self._size()
+
+    def _size(self) -> int:
         return len(self._hashes)
 
     def _enabled(self) -> bool:
@@ -427,7 +438,12 @@ class TunnelDetector:
         self._seen: dict[tuple, deque] = defaultdict(deque)   # (dev, apex) -> (t, host, labellen, entropy)
         self._flagged: dict[tuple, float] = {}
 
-    def observe(self, device: str, host: str, now: float) -> Hit | None:
+    def observe(self, device: str, host: str, now: float, popular=False) -> Hit | None:
+        """popular: the apex is on the popular-domain list (a bool, or a callable asked
+        only when the many-subdomains test would fire, so most queries never look it up). A tunnel needs a zone its
+        operator runs, and a big site's own many word-based service names (one host
+        per microservice) are long and distinct too, so there only the long random
+        labels of real payload count."""
         apex = registrable_part(host)
         if host == apex:
             return None
@@ -448,6 +464,8 @@ class TunnelDetector:
         avg = sum(l for _, _, l, _ in q) / len(q)
         long_hi = len({h for _, h, l, e in q if l >= self.long_label and e >= 3.2})   # DISTINCT long random hosts
         many = n >= self.min_distinct and avg >= self.min_avg_label
+        if many and (popular() if callable(popular) else popular):
+            many = False
         exfil = long_hi >= self.min_long
         if not (many or exfil):
             return None

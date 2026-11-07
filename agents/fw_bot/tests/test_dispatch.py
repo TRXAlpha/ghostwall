@@ -13,7 +13,7 @@ class FakeClient:
 
     def status(self):
         self.calls.append("status")
-        return {"lockdown": False, "learning": True, "devices": [{"name": "dell", "ip": "1.2.3.4"}]}
+        return {"lockdown": False, "learning": True, "devices": [{"name": "workpc", "ip": "1.2.3.4"}]}
 
     def isolate(self, name):
         self.calls.append(("isolate", name))
@@ -25,7 +25,7 @@ class FakeClient:
 
 
 def ev(i, action="recommend", rule="dga_high", t="2026-10-26T10:00:00Z", score=0.99):
-    return {"time": t, "device": "dell", "domain": f"d{i}.example", "action": action,
+    return {"time": t, "device": "workpc", "domain": f"d{i}.example", "action": action,
             "rule": rule, "severity": "high", "event_id": f"evt_{i}", "scores": {"dga": score}}
 
 
@@ -60,8 +60,8 @@ class DispatchTests(unittest.TestCase):
 
     def test_status_and_isolate_route_to_control(self):
         self.assertIn("ghostwall status", self.d.text("/fw status"))
-        self.d.text("/fw isolate dell")
-        self.assertIn(("isolate", "dell"), self.client.calls)
+        self.d.text("/fw isolate workpc")
+        self.assertIn(("isolate", "workpc"), self.client.calls)
 
     def test_learning_route(self):
         self.d.text("/fw learning off")

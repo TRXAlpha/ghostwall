@@ -54,6 +54,8 @@ AdGuard keeps `querylog.size_memory` queries in memory before writing them (1,00
 default), which delayed alerts by hours on a home network. The installer lowers it to
 10 (`ADGUARD_FLUSH_EVERY` in `ghostwall.env`; `0` leaves it alone), keeps a backup of
 `AdGuardHome.yaml` next to it, and restarts AdGuard once (a few seconds without DNS).
+The batching delays alerts but does not blur them: the timing rules (beacon, tunnel,
+bursts) use each query's own time from the log, not the time Ghostwall read it.
 
 **Pi-hole:** Ghostwall reads `/var/log/pihole/pihole.log`, which Pi-hole writes as
 queries happen, so there is no delay and nothing in Pi-hole is changed.
@@ -74,11 +76,15 @@ To update later: `git pull && sudo ./install.sh`.
 
   ```bash
   sudo /opt/ghostwall/.venv/bin/python /opt/ghostwall/agents/ghost_dns/replay_querylog.py \
-      --querylog /opt/AdGuardHome/data/querylog.json
+      --querylog /opt/AdGuardHome/data/querylog.json --set recommend_threshold=0.98
   ```
 
   The replay uses a throw-away state and events file; it changes and sends nothing. It
-  picks up the installed threat list and `/etc/ghostwall/devices.json` by itself.
+  uses your settings in `/etc/ghostwall/ghost_dns.json`, the installed threat list and
+  popular list and `/etc/ghostwall/devices.json`; each `--set KEY=VALUE` tries one other
+  value (run it once without to compare). Up to 0.3.0b2 the replay ignored
+  `ghost_dns.json`, and on installs upgraded from before 0.2.0b2 it replayed with an old
+  copy of the feed and without the popular-domain guard.
 
 ## Telegram
 

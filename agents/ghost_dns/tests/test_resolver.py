@@ -48,7 +48,7 @@ class ResolverTests(unittest.TestCase):
             "threat_feed_path": None, "allowlist_path": None,
         })
         self.devices = DeviceMap.from_json(
-            [{"name": "dell", "ip": "192.168.1.30", "mac": "aa:bb:cc:dd:ee:01"}])
+            [{"name": "workpc", "ip": "192.168.1.30", "mac": "aa:bb:cc:dd:ee:01"}])
         self.events = EventLog(self.cfg["events_path"])
 
     def _resolver(self, dga, learning):
@@ -58,16 +58,16 @@ class ResolverTests(unittest.TestCase):
 
     def test_alerts_name_the_device_by_mac_not_by_address(self):
         state = GhostState(self.cfg["state_path"], learning_default=True)
-        arp = {"192.168.1.31": "aa:bb:cc:dd:ee:01",      # dell, moved by DHCP
+        arp = {"192.168.1.31": "aa:bb:cc:dd:ee:01",      # workpc, moved by DHCP
                "192.168.1.30": "02:00:00:00:00:99"}      # its old address: someone else now
         neigh = type("N", (), {"mac": lambda self, ip: arp.get(ip)})()
         r = Resolver(self.cfg, state, FakeScorer(0.7), Enforcer(NullBackend()), self.devices,
                      self.events, neighbours=neigh)
-        self.assertEqual(r.decide("192.168.1.31", "suspect-one.example", "A").event["device"], "dell")
+        self.assertEqual(r.decide("192.168.1.31", "suspect-one.example", "A").event["device"], "workpc")
         other = r.decide("192.168.1.30", "suspect-two.example", "A").event
         self.assertEqual(other["device"], "192.168.1.30")
         self.assertEqual(other["mac"], "02:00:00:00:00:99")
-        self.assertEqual(r.current_ip, {"dell": "192.168.1.31"})
+        self.assertEqual(r.current_ip, {"workpc": "192.168.1.31"})
 
     def test_trust_on_a_tunnel_alert_trusts_its_zone(self):
         # Every tunnel query is a new subdomain: Trust on the one in the alert would never
