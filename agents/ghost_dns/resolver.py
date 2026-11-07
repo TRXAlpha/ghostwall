@@ -15,7 +15,8 @@ docs/ARCHITECTURE.md):
      (otherwise the same score      -> RECOMMEND: forwarded, event action=recommend)
   * dga >= recommend_threshold     -> RECOMMEND (forwarded), event action=recommend
   (a name whose registrable domain is on the popular list, Tranco top N, gets neither:
-   its score alone raises nothing; feed, tunnel, beacon and burst rules still apply)
+   its score alone raises nothing, nor does a timer on it (dns_beacon); the feed, tunnel
+   and nx_burst rules still apply)
   * everything else                -> ALLOW, no event
 """
 from __future__ import annotations
@@ -176,7 +177,8 @@ class Resolver:
         with self.det.lock:
             tun = self.det.tunnel.observe(dev.name, domain, t,
                                           popular=lambda: self.det.popular.match(domain, now))
-            bea = self.det.beacon.observe(dev.name, domain, t)
+            bea = self.det.beacon.observe(dev.name, domain, t,
+                                          popular=lambda: self.det.popular.match(domain, now))
         if bea and not (dga >= float(self.cfg.get("beacon_min_dga", 0.5)) or tld_of(domain) in RARE_TLDS):
             bea = None
         for hit in (tun, bea):

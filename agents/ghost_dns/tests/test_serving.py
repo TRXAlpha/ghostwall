@@ -481,7 +481,7 @@ class QueryTimeTests(Base):
         open(self.log, "w").close()
         self.seen = []
         real = self.r.det.beacon.observe
-        self.r.det.beacon.observe = lambda dev, host, t: (self.seen.append(t), real(dev, host, t))[1]
+        self.r.det.beacon.observe = lambda dev, host, t, **kw: (self.seen.append(t), real(dev, host, t, **kw))[1]
 
     def _write(self, rows):
         with open(self.log, "a", encoding="utf-8") as f:

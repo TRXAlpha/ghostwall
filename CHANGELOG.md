@@ -54,6 +54,12 @@ in Docker, shadow mode) on 2026-11-07: [docs/FIELD_RESULTS.md](docs/FIELD_RESULT
 
 ### Changed
 
+- **`dns_beacon` skips popular sites.** All 3 `dns_beacon` alerts in the field test were
+  false: a script polling a weather site every 15 min (2) and a course website polled
+  every 10 min, all on the popular list. Now that shadow mode times queries correctly
+  these would fire live, so a name under a domain on the popular list no longer raises
+  `dns_beacon` (the list is only asked when the timing test would fire). Odd-looking
+  names and rare TLDs on domains that aren't on it alert as before.
 - `replay_querylog.py --set KEY=VALUE` tries another value for one replay without
   editing your config (`--set nx_burst_min_distinct=15`, repeatable); `--config FILE` or
   `--no-config` picks the settings; `--events-out FILE` keeps every alert.
