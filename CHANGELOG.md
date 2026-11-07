@@ -72,6 +72,12 @@ in Docker, shadow mode) on 2026-11-07: [docs/FIELD_RESULTS.md](docs/FIELD_RESULT
 
 ### Changed
 
+- **Gateway mode drops ports no home device needs toward the internet:** Telnet (23,
+  2323), SMTP (25), Windows RPC / NetBIOS / SMB (135, 137-139, 445) and UPnP (1900). The
+  ports botnets spread on, spam bots send on, and worms and ransomware use. Configurable in
+  `agents/netconf/config.json`. Re-run `gen.py` to apply.
+- **IoT egress lock (opt-in, gateway mode):** `iot_egress_lock` `"log"` / `"on"` limits devices
+  marked `"profile": "iot"` to web, MQTT over TLS and time toward the internet.
 - **Gateway mode blocks DoH to about 90 public resolver addresses** (91, was 19): one list,
   `agents/netconf/doh_ips.txt`, for the firewall's `doh_ip4` / `doh_ip6` sets and
   ghost-flow's `doh_ip` alert, which had drifted apart. Adds Cloudflare's security and
