@@ -200,7 +200,7 @@ class ResolverGuardTests(unittest.TestCase):
             self.assertEqual(cfg["popular_path"], pop)
         self.cfg = cfg
         self.state = GhostState(cfg["state_path"], learning_default=cfg.get("learning", True))
-        dm = DeviceMap.from_json([{"name": "dell", "ip": DEV}])
+        dm = DeviceMap.from_json([{"name": "workpc", "ip": DEV}])
         self.now = 1000.0
         self.r = Resolver(cfg, self.state, FakeScorer(dga), Enforcer(NullBackend()), dm,
                           EventLog(cfg["events_path"]))

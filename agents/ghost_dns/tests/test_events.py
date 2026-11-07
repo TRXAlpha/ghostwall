@@ -13,14 +13,14 @@ import validate_events as V
 
 class EventsTests(unittest.TestCase):
     def test_make_event_is_schema_valid(self):
-        evt = E.make_event(device="dell", ip="192.168.1.30",
+        evt = E.make_event(device="workpc", ip="192.168.1.30",
                            mac="aa:bb:cc:dd:ee:01", domain="bad.example",
                            rule="dga_high", action="block", severity="high",
                            scores={"dga": 0.97}, reasons=["dga score 0.97"])
         self.assertEqual(V.validate_event(evt), [])
 
     def test_flow_pseudo_domain_valid(self):
-        evt = E.make_event(device="dell", domain="raw-ip.flow.ghostwall",
+        evt = E.make_event(device="workpc", domain="raw-ip.flow.ghostwall",
                            dst_ip="185.199.108.153", rule="raw_ip",
                            action="recommend", severity="warn")
         self.assertEqual(V.validate_event(evt), [])

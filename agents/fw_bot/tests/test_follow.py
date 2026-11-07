@@ -16,7 +16,7 @@ class FakeBot:
 
 
 def evt(i):
-    return {"time": "2026-10-26T10:00:00Z", "device": "dell", "domain": f"d{i}.example.com",
+    return {"time": "2026-10-26T10:00:00Z", "device": "workpc", "domain": f"d{i}.example.com",
             "rule": "dga_high", "action": "recommend", "severity": "high", "event_id": f"evt_{i}"}
 
 
@@ -123,7 +123,7 @@ class CommandRouterTests(unittest.TestCase):
         self.assertEqual(self.sent, [(42, "reply:/fw log 5")])
 
     def test_stranger_is_ignored(self):
-        self.assertEqual(self.r.handle(self.msg(7, "/fw isolate dell")), "ignored: not owner")
+        self.assertEqual(self.r.handle(self.msg(7, "/fw isolate workpc")), "ignored: not owner")
         self.assertEqual(self.sent, [])
 
     def test_non_command_is_ignored(self):

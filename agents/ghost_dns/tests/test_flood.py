@@ -34,7 +34,7 @@ class FloodTests(unittest.TestCase):
         })
         self.state = GhostState(self.cfg["state_path"], learning_default=True)
         self.r = Resolver(self.cfg, self.state, Scorer(), Enforcer(NullBackend()),
-                          DeviceMap.from_json([{"name": "dell", "ip": "192.168.1.30"}]),
+                          DeviceMap.from_json([{"name": "workpc", "ip": "192.168.1.30"}]),
                           EventLog(self.cfg["events_path"]))
         self.t = [1000.0]
         self.r.clock = lambda: self.t[0]
@@ -77,7 +77,7 @@ class FloodTests(unittest.TestCase):
         self.assertEqual(min(out.values()), 600.0)  # the newest half survives
         start = time.monotonic()
         for i in range(30000):  # would be quadratic without the cap
-            self.r._is_repeat("dell", f"x{i}.example", "r")
+            self.r._is_repeat("workpc", f"x{i}.example", "r")
         self.assertLess(time.monotonic() - start, 10)
 
 

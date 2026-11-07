@@ -160,7 +160,7 @@ class Base(unittest.TestCase):
         self.cfg = cfg
         self.state = GhostState(cfg["state_path"], learning_default=True)
         self.events = EventLog(cfg["events_path"])
-        dm = DeviceMap.from_json([{"name": "dell", "ip": "127.0.0.1"}])
+        dm = DeviceMap.from_json([{"name": "workpc", "ip": "127.0.0.1"}])
         self.r = Resolver(cfg, self.state, FakeScorer(), Enforcer(NullBackend()), dm, self.events)
         return self.r
 
@@ -303,7 +303,7 @@ class DedupeTests(Base):
 
     def test_different_device_alerts_separately(self):
         self.build(free_port(), free_port())
-        self.r.devices = DeviceMap.from_json([{"name": "dell", "ip": "10.0.0.1"},
+        self.r.devices = DeviceMap.from_json([{"name": "workpc", "ip": "10.0.0.1"},
                                               {"name": "phone", "ip": "10.0.0.2"}])
         self.r.scorer = FakeScorer(0.7)
         self.r.decide("10.0.0.1", "cdn.example", "A")

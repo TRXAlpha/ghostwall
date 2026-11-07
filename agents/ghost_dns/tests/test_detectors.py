@@ -111,26 +111,26 @@ class TunnelTests(unittest.TestCase):
         t = D.TunnelDetector(min_distinct=30)
         hit = None
         for i in range(35):
-            hit = t.observe("dell", f"{'a1b2c3d4e5f6g7h8i9'}{i:03d}.t.tunnel.example", i) or hit
+            hit = t.observe("workpc", f"{'a1b2c3d4e5f6g7h8i9'}{i:03d}.t.tunnel.example", i) or hit
         self.assertEqual(hit.rule, "dns_tunnel")
         self.assertEqual(hit.severity, "high")
 
     def test_normal_subdomain_use_not_flagged(self):
         t = D.TunnelDetector()
         for i in range(200):
-            self.assertIsNone(t.observe("dell", f"www{i % 3}.example.com", i))
+            self.assertIsNone(t.observe("workpc", f"www{i % 3}.example.com", i))
 
     def test_many_short_subdomains_not_flagged(self):
         t = D.TunnelDetector(min_distinct=30, min_avg_label=14)
         for i in range(60):
-            self.assertIsNone(t.observe("dell", f"h{i}.cdn.example.com", i))
+            self.assertIsNone(t.observe("workpc", f"h{i}.cdn.example.com", i))
 
     def test_exfil_long_random_labels(self):
         t = D.TunnelDetector(min_long=12)
         hit = None
         for i in range(14):
             lab = rand_label(i)
-            hit = t.observe("dell", f"{lab}.exfil.example", i) or hit
+            hit = t.observe("workpc", f"{lab}.exfil.example", i) or hit
         self.assertIsNotNone(hit)
 
     def test_a_few_long_random_labels_are_normal_web_traffic(self):
@@ -138,13 +138,13 @@ class TunnelTests(unittest.TestCase):
         t = D.TunnelDetector(min_long=12)
         for i in range(5):
             lab = rand_label(i)
-            self.assertIsNone(t.observe("dell", f"{lab}.online-metrix.example", i))
+            self.assertIsNone(t.observe("workpc", f"{lab}.online-metrix.example", i))
 
     def test_same_long_host_repeated_is_not_distinct(self):
         t = D.TunnelDetector(min_long=3)
         lab = rand_label(99)
         for i in range(20):
-            self.assertIsNone(t.observe("dell", f"{lab}.cdn.example", i))
+            self.assertIsNone(t.observe("workpc", f"{lab}.cdn.example", i))
 
     def test_cooldown_prevents_repeat(self):
         t = D.TunnelDetector(min_distinct=5, min_avg_label=1)
@@ -193,23 +193,23 @@ class BeaconTests(unittest.TestCase):
         b = D.BeaconDetector(min_samples=8, min_interval=30)
         hit = None
         for k in range(10):
-            hit = b.observe("dell", "c2.example", 1000 + 60 * k) or hit
+            hit = b.observe("workpc", "c2.example", 1000 + 60 * k) or hit
         self.assertEqual(hit.rule, "dns_beacon")
 
     def test_jittery_not_flagged(self):
         b = D.BeaconDetector()
         for k, t in enumerate([0, 40, 190, 230, 500, 520, 900, 1500, 1520, 2300]):
-            self.assertIsNone(b.observe("dell", "x.example", t))
+            self.assertIsNone(b.observe("workpc", "x.example", t))
 
     def test_fast_repeats_not_a_beacon(self):
         b = D.BeaconDetector(min_interval=30)
         for k in range(30):
-            self.assertIsNone(b.observe("dell", "chatty.example", k * 10))
+            self.assertIsNone(b.observe("workpc", "chatty.example", k * 10))
 
     def test_retries_collapse(self):
         b = D.BeaconDetector(min_samples=3)
         for t in (0, 1, 2, 3):                 # one lookup retried
-            self.assertIsNone(b.observe("dell", "x.example", t))
+            self.assertIsNone(b.observe("workpc", "x.example", t))
 
     def test_per_device(self):
         b = D.BeaconDetector(min_samples=8)
@@ -222,24 +222,24 @@ class BurstTests(unittest.TestCase):
         d = D.DgaBurst(min_distinct=5)
         hit = None
         for i in range(5):
-            hit = d.observe("dell", f"xk{i}qzvw.biz", 0.9, i * 10) or hit
+            hit = d.observe("workpc", f"xk{i}qzvw.biz", 0.9, i * 10) or hit
         self.assertEqual(hit.rule, "dga_burst")
 
     def test_same_domain_repeated_is_not_a_burst(self):
         d = D.DgaBurst(min_distinct=5)
         for i in range(30):
-            self.assertIsNone(d.observe("dell", "a.xkqzvw.biz", 0.95, i))
+            self.assertIsNone(d.observe("workpc", "a.xkqzvw.biz", 0.95, i))
 
     def test_low_scores_ignored(self):
         d = D.DgaBurst(min_distinct=3)
         for i in range(10):
-            self.assertIsNone(d.observe("dell", f"d{i}.example", 0.5, i))
+            self.assertIsNone(d.observe("workpc", f"d{i}.example", 0.5, i))
 
     def test_window_expires(self):
         d = D.DgaBurst(min_distinct=5, window=600)
         for i in range(4):
-            d.observe("dell", f"x{i}.biz", 0.9, i)
-        self.assertIsNone(d.observe("dell", "x9.biz", 0.9, 5000))   # old ones expired
+            d.observe("workpc", f"x{i}.biz", 0.9, i)
+        self.assertIsNone(d.observe("workpc", "x9.biz", 0.9, 5000))   # old ones expired
 
 
 class FakeScorer:
@@ -264,7 +264,7 @@ class ResolverWiringTests(unittest.TestCase):
         self.state = GhostState(cfg["state_path"], learning_default=cfg.get("learning", True))
         for a in allow:
             self.state.allow(a)
-        dm = DeviceMap.from_json([{"name": "dell", "ip": "192.168.1.30"}])
+        dm = DeviceMap.from_json([{"name": "workpc", "ip": "192.168.1.30"}])
         self.now = 1000.0
         self.r = Resolver(cfg, self.state, FakeScorer(0.0), Enforcer(NullBackend()), dm, EventLog(cfg["events_path"]))
         self.assertTrue(self.r.det.wait_loaded(10))   # inline mode loads lists in the background
