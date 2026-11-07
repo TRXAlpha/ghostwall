@@ -14,15 +14,30 @@ resolve one made-up domain after another (malware hunting for its server). It al
 device skips your DNS filter (DNS-over-HTTPS): not a sign of infection by itself (phones
 and browsers do it when "Private DNS" or "secure DNS" is on), but your filter no longer
 sees that device. Two small on-device models score how random a name looks; the behaviour
-rules do most of the work. Alerts go to a dashboard or Telegram. Ghostwall never sends
+rules do most of the work. Alerts go to a dashboard or Telegram.
+
+**It can also block, if you choose.** Opt-in, each with a dry-run first:
+- **Known-bad domains for every device:** Ghostwall hands its threat lists (about 440k
+  malware, C2 and phishing domains) to AdGuard Home or Pi-hole as a blocklist, with
+  optional ad lists. It still never sits in the DNS path.
+- **IoT default-deny:** cameras, TVs and plugs learn their usual domains for a week, and
+  anything new is flagged or refused.
+- **Gateway mode** (the Pi routes your LAN):
+  - an infected device is cut off automatically;
+  - every device's DNS is forced through your filter;
+  - devices can't reach botnet and criminal networks (Spamhaus DROP, abuse.ch);
+  - ports malware spreads on (Telnet, SMB, SMTP) are closed toward the internet.
+
+Ghostwall never sends
 your DNS traffic anywhere (one exception: in inline mode, while your DNS server is down,
 it answers through a fallback resolver, Quad9 by default; `"upstream_fallbacks": []` turns
-that off). The only things it downloads are the daily threat lists and a list of popular sites (Tranco,
-so popular sites are never flagged as a whole), and the only thing it
+that off). The only things it downloads are the daily threat lists (domains and, for gateway mode,
+botnet IP ranges) and a list of popular sites (Tranco, so popular sites are never flagged
+as a whole), and the only thing it
 sends out is the alerts themselves, if you turn on Telegram (domain names can be left out
 of those too).
 
-> **Status: a detector, with blocking as an experiment.** The recommended *shadow mode*
+> **Status: a detector first; every kind of blocking is opt-in and starts as a dry-run.** The recommended *shadow mode*
 > only reads the query log and alerts, so it is never in the path of your DNS (installing
 > restarts AdGuard once, a few seconds, to make it write its log promptly). It has run on
 > the author's home network (Raspberry Pi 4 + AdGuard Home) since late October 2026, which
@@ -31,7 +46,9 @@ of those too).
 > ([How well it works](#how-well-it-works)). *Inline mode* (Ghostwall answers DNS and
 > blocks) passes an end-to-end test in CI (a systemd container with a stand-in AdGuard:
 > forwarding, sinkholing, SERVFAIL when the upstream dies, and the way back to shadow
-> mode), but is not proven on a real network. See [Limits](#limits).
+> mode), but is not proven on a real network. Blocking through AdGuard or Pi-hole is proven
+> against the real servers in CI (a listed name is refused, a trusted one isn't), not yet on
+> a real network. See [Limits](#limits).
 >
 > **Current release: v0.3.0-beta.2** (`nx_burst` catches malware hunting for its server by
 > its failed lookups, malware and C2 lists beside the phishing list, and a popular-site guard
@@ -60,14 +77,17 @@ Keep them. Ghostwall runs on top and covers what a blocklist can't:
 
 | | AdGuard Home / Pi-hole | + Ghostwall |
 |---|---|---|
-| Known phishing, malware and C2 domains | blocks them (with those lists) | also tells you which device tried, and which list named it |
+| Known phishing, malware and C2 domains | blocks them (with those lists) | keeps the lists filled for you (about 440k domains, popular sites never listed as a whole), tells you which device tried, and which list named it |
 | A camera or TV that starts using Telegram's bot API, a paste site, ngrok, a file drop | no | flagged the first time (each device learns its normal services first) |
 | DNS tunnelling, timer-like beacons | no | yes |
-| A device using its own DNS-over-HTTPS | no | flagged if it looks the server up by name; by IP too in gateway mode |
+| A device using its own DNS-over-HTTPS | no | flagged if it looks the server up by name; in gateway mode blocked by IP too (91 resolver addresses), and Firefox / Private Relay sent back to your filter |
+| A camera that suddenly talks to somewhere new | no | flagged, or refused (opt-in IoT default-deny) |
+| An infected device | no | cut off automatically on a sure finding (opt-in, gateway mode), one-tap Release |
+| Botnet and criminal IP ranges, Telnet/SMB/SMTP toward the internet | no | dropped in gateway mode |
 | Random-looking domains nobody has listed yet (DGA) | no | about 6 in 10 on [public data](agents/dga_eval/results_public.md), plus bursts of them |
 | Malware cycling through generated domains, even word-like ones | no | a burst of failed (NXDOMAIN) lookups: all 25 public DGA families within 10 lookups [in a simulation](agents/dga_eval/results_nx_sim.md) |
 | Per-device "this looks infected" alerts | no | dashboard + Telegram |
-| Can break your DNS | it is your DNS | no (shadow mode only reads the log) |
+| Can break your DNS | it is your DNS | no (shadow mode only reads the log; blocking happens in your DNS server, through its own API) |
 
 ## What it catches
 
