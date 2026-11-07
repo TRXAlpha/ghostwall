@@ -33,9 +33,9 @@ of those too).
 > forwarding, sinkholing, SERVFAIL when the upstream dies, and the way back to shadow
 > mode), but is not proven on a real network. See [Limits](#limits).
 >
-> **Current release: v0.3.0-beta.1** (HTTPS dashboard, a token for the control API, two new
-> detectors, names that follow devices, Telegram alerts that survive outages, Docker
-> without capabilities): [CHANGELOG](CHANGELOG.md). Already installed? `git pull && sudo
+> **Current release: v0.3.0-beta.2** (`nx_burst` catches malware hunting for its server by
+> its failed lookups, malware and C2 lists beside the phishing list, and a popular-site guard
+> that cuts random-name false positives by about 70% on public data): [CHANGELOG](CHANGELOG.md). Already installed? `git pull && sudo
 > ./install.sh` upgrades and keeps your settings, alerts, trusted domains and names.
 
 **Try it** on the box that runs AdGuard Home or Pi-hole:
@@ -326,6 +326,12 @@ on the missing model's empty score.)
   page can also make your browser look up random-looking names, so an alert means
   "check this device", not proof of infection; alerts are capped per device per
   minute so such a page can't flood you.
+- **One DNS client for the whole house hides who did what.** If your router forwards
+  every device's DNS to AdGuard or Pi-hole, they all look like the router: per-device
+  rules then add up the whole household (ten dead domains from different devices can
+  raise one `nx_burst`). Point devices at the box directly (DHCP's DNS server option).
+  Tools that check many domains on purpose (link checkers, mail filters, dnstwist) look
+  like `nx_burst` too: list that device in `nx_burst_ignore_devices`.
 - **Tested on one home network** (Pi 4, AdGuard Home in Docker). The x86_64 install,
   Pi-hole support and the Docker image are new in v0.2 and verified on Ubuntu 24.04
   (x86_64), a Pi 4, the official Pi-hole Docker image and in CI, not yet on many real setups. Expect

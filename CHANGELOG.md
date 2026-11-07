@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## v0.3.0-beta.2 (2026-11-07)
+
+Update as usual: `git pull && sudo ./install.sh` (Docker: `git pull && docker compose up -d --build`).
+Your settings, alerts, allowlist and thresholds are kept. The daily feed update now also
+downloads the Tranco top 1M (about 20 MB, kept as `/var/lib/ghostwall/popular_domains.txt`).
 
 ### New detection
 
@@ -41,6 +45,37 @@
   the old feed.
 - In learning mode, inline queries are scored once the answer is back, so the answer code
   reaches `nx_burst`; the answer itself is not delayed.
+- New setting `nx_burst_ignore_devices`: a box that fails lookups on purpose (a link
+  checker, a mail filter) can be left out of `nx_burst`.
+- Popular sites' names never count toward `dga_burst` (a portal loading several brand
+  domains that look random is not malware), and one lookup storm raises one alert:
+  `dga_burst` or `nx_burst`, not both.
+- The threat feed is held as sorted hashes: 3.3 MiB instead of 23 MiB. In inline mode
+  the feed and the popular list load in the background, so a daily reload never delays
+  an answer; a list that fails to load keeps the previous one.
+
+### Fixed
+
+- `nx_burst` could be blinded: AdGuard's own empty answer to an AAAA query (with IPv6
+  resolving off) marked the domain as registered. Empty answers (NODATA) now prove nothing.
+- `nx_burst` could be dodged by looking up one dead domain over and over (it pushed the
+  others out of the window); the window now keeps each name once.
+- `nx_burst` ignored DGAs on newer TLDs (.science, .bond, .party...): every TLD in the root
+  zone now counts (IANA's list, `agents/ghost_dns/tlds.txt`).
+- A CNAME to a name that no longer exists counted as an unregistered domain.
+- Pi-hole: a reply logged a moment after its query (in the next read) was lost; queries
+  now wait up to 3 s for it. `replay_querylog.py` pairs replies the same way.
+- Feed update: the file is flushed to disk before it replaces the old one (no half-written
+  feed after a power cut), no temporary files are left on a failed write, a typo in a
+  number setting warns instead of stopping every daily run, and a list that shrank stays
+  accepted once its 14-day carry-over has run out.
+
+### Tests
+
+- New CI job: real AdGuard Home and Pi-hole containers with a real upstream log a storm
+  of made-up domains, a normal lookup, a missing name under a real domain and a name the
+  server blocks itself (answered NXDOMAIN); Ghostwall must read every answer code right
+  and raise exactly one `nx_burst` (`tests/realdns_e2e.py`).
 
 ## v0.3.0-beta.1 (2026-11-03)
 

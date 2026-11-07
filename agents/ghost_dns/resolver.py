@@ -83,6 +83,8 @@ class Resolver:
         self.source = None                   # shadow: "adguard" or "pihole", set by app.py
         self.clock = time.monotonic          # overridable, so tests can drive time
         self.det = Detectors(cfg)            # threat feed, DoH, tunnel, beacon, DGA burst
+        # device names or IPs whose failed lookups never count for nx_burst
+        self._nx_ignored = frozenset(str(x) for x in (cfg.get("nx_burst_ignore_devices") or ()))
         self.last_seen: dict[str, str] = {}  # client ip -> ISO time of its latest query
         self.current_ip: dict[str, str] = {} # named device -> the address it last queried from
         self.stats = {"queries": 0, "blocked": 0, "recommended": 0, "suppressed": 0,
@@ -256,6 +258,8 @@ class Resolver:
         inside it): only the one name is missing. What is left counts if nx_countable()
         says the name is the registrable domain itself, on a real TLD."""
         if not rcode or not self.cfg.get("nx_burst_enabled", True):
+            return None
+        if dev.name in self._nx_ignored:      # a link checker, a mail filter: fails lookups on purpose
             return None
         if rcode == "NOERROR":
             self.state.note_resolved(domain)

@@ -77,6 +77,11 @@ class NxBurstReviewTests(Base):
         for name in ("printer.fritz.box", "nas.home", "pc.corp", "x.localdomain", "a.notatld"):
             self.assertFalse(D.nx_countable(name), name)
 
+    def test_ignored_device_never_counts(self):
+        self.build(nx_burst_ignore_devices=["tv-box"])
+        self.nx_storm(INFECTED, dga_names(30))
+        self.assertEqual(self.events(), [])
+
     def test_one_storm_one_alert(self):
         class High:
             def score_one(self, domain):

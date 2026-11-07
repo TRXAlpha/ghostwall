@@ -79,6 +79,7 @@ DEFAULTS = {
     "nx_burst_enabled": True,
     "nx_burst_min_distinct": 10,
     "nx_burst_window": 600,
+    "nx_burst_ignore_devices": [],    # names or IPs of boxes that fail lookups on purpose (link checkers)
     "tunnel_min_distinct": 30,        # distinct subdomains of one apex per 10 min
     "beacon_min_samples": 8,          # regular repeats of one name before alerting
     "service_baseline_days": 3,       # abused_service: learn each device's normal services this long
