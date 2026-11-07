@@ -24,7 +24,8 @@ fail without losing the others: a source that fails, or shrinks to less than hal
 last size, keeps its previous contents for up to MAX_CARRY_DAYS. The file is written
 atomically and is not touched when nothing new was downloaded, the total is below
 --min, or the popularity list is unavailable (no download and no cache). Exit code
-1 means at least one source failed (the others may still have been written). The
+1 means the file was not written; a source that failed while the others updated is a
+warning in the log (exit 0), so one dead URL doesn't mark the daily job failed. The
 resolver notices the changed file by itself (no restart).
 """
 from __future__ import annotations
@@ -320,7 +321,10 @@ def main(argv=None) -> int:
     _write_atomic(args.out, render(sections, total))
     print(f"[feed] wrote {total} domains from {len(sections)} sources to {args.out}; "
           f"{len(dropped_total)} popular names dropped")
-    return 1 if failed else 0
+    if failed:
+        print(f"[feed] WARNING: {failed} source(s) failed (see above); the others were updated",
+              file=sys.stderr)
+    return 0
 
 
 if __name__ == "__main__":

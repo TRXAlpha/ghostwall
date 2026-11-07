@@ -121,7 +121,8 @@ class MainTests(unittest.TestCase):
         self.pages[A] = lines(4, "x")
         self.pages[B] = OSError("HTTP Error 410: Gone")
         rc, log = self.run_main()
-        self.assertEqual(rc, 1)                         # a failure is reported...
+        self.assertEqual(rc, 0)                         # the file was written...
+        self.assertIn("WARNING: 1 source(s) failed", log)  # ...and the failure is reported
         self.assertIn("keeping its 3 domains from", log)
         f = self.feed()                                 # ...but the good source was updated
         self.assertIsNotNone(f.match("x3.example"))
@@ -134,7 +135,7 @@ class MainTests(unittest.TestCase):
         self.run_main()
         self.pages[B] = lines(2, "new")
         rc, log = self.run_main()
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 0)
         self.assertIn("only 2 domains, 10 last time", log)
         self.assertIsNotNone(self.feed().match("b9.example"))
         self.assertIsNone(self.feed().match("new0.example"))
@@ -145,7 +146,7 @@ class MainTests(unittest.TestCase):
             f.write(f"#@source\t{B}\t{old}\tb.example\t\nold.example\n")
         self.pages[A], self.pages[B] = lines(3, "a"), OSError("down")
         rc, log = self.run_main()
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 0)
         self.assertIn("nothing recent to keep", log)
         self.assertIsNone(self.feed().match("old.example"))
         self.assertIsNotNone(self.feed().match("a1.example"))
@@ -153,7 +154,7 @@ class MainTests(unittest.TestCase):
     def test_first_run_with_one_source_down_writes_the_other(self):
         self.pages[A], self.pages[B] = lines(3, "a"), OSError("down")
         rc, _ = self.run_main()
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 0)
         self.assertEqual(len(self.feed()), 3)
 
     def test_everything_down_keeps_the_existing_file(self):
