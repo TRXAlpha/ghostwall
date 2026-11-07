@@ -33,7 +33,7 @@ import sys
 
 import dnsmsg
 import events as events_mod
-from detectors import RARE_TLDS, Detectors, abused_service, is_internal, tld_of
+from detectors import RARE_TLDS, Detectors, abused_service, is_internal, nx_countable, tld_of
 from tokenizer import registrable_part
 
 
@@ -88,15 +88,19 @@ class Resolver:
                       "rate_limited": 0, "blocked_upstream": 0}
 
     # -- policy (pure, no I/O except event log + state + enforcer) --------
-    def decide(self, client_ip: str, domain: str, qtype: str, upstream_blocked: bool = False) -> Decision:
+    def decide(self, client_ip: str, domain: str, qtype: str, upstream_blocked: bool = False,
+               rcode: str | None = None, nx_zone: str | None = None) -> Decision:
         """upstream_blocked: the DNS server (AdGuard) already refused this name, so no
         connection happened: a single random-looking score is then not worth an alert
-        (most of those are ad and tracker junk). Bursts and every other rule still count."""
+        (most of those are ad and tracker junk). Bursts and every other rule still count.
+
+        rcode: the answer's response code ("NOERROR", "NXDOMAIN", ...) when it is known
+        (shadow mode, or inline mode scoring after the answer); None when not. nx_zone:
+        the SOA owner of an NXDOMAIN answer, if it carried one. Both feed nx_burst only."""
         domain = domain.rstrip(".").lower()
         if not domain:
             return Decision("allow", "empty")
-        mac = self.neighbours.mac(client_ip) if self.neighbours is not None else None
-        dev = self.devices.device_for_ip(client_ip, mac)
+        dev = self._device(client_ip)
         now = self.clock()
         if len(self.last_seen) > 10000:      # a LAN has far fewer clients; bound it anyway
             self.last_seen.clear()
@@ -169,11 +173,15 @@ class Resolver:
                 behaviour = Decision("recommend", hit.rule, self._emit_hit(dev, domain, hit))
 
         # Many DIFFERENT random-looking domains from one device is a far stronger
-        # signal than any single score.
+        # signal than any single score. Many different unregistered ones is too, even
+        # when they read like words.
+        nx = None if upstream_blocked else self._nx_burst(dev, domain, rcode, nx_zone, now)
         with self.det.lock:
             burst = self.det.burst.observe(dev.name, domain, dga, now)
         if burst:
             return Decision("recommend", burst.rule, self._emit_hit(dev, domain, burst))
+        if nx:
+            return nx
 
         block_thr = float(self.cfg["block_threshold"])
         rec_thr = float(self.cfg["recommend_threshold"])
@@ -216,6 +224,44 @@ class Resolver:
             return Decision("recommend", "dga_corroborated", evt)
 
         return behaviour or Decision("allow", "clean")
+
+    def _device(self, client_ip: str):
+        mac = self.neighbours.mac(client_ip) if self.neighbours is not None else None
+        return self.devices.device_for_ip(client_ip, mac)
+
+    def _nx_burst(self, dev, domain: str, rcode: str | None, nx_zone: str | None, now: float):
+        """Feed one upstream answer to nx_burst. Callers have already dropped allowlisted,
+        internal and blocklisted names. A NOERROR anywhere in a domain family proves the
+        domain is registered; so does an NXDOMAIN whose SOA names that domain (or a zone
+        inside it): only the one name is missing. What is left counts if nx_countable()
+        says the name is the registrable domain itself, on a real TLD."""
+        if not rcode or not self.cfg.get("nx_burst_enabled", True):
+            return None
+        if rcode == "NOERROR":
+            self.state.note_resolved(domain)
+            return None
+        if rcode != "NXDOMAIN":
+            return None   # SERVFAIL/REFUSED say nothing about registration
+        reg = registrable_part(domain)
+        if nx_zone is not None and (nx_zone == reg or nx_zone.endswith("." + reg)):
+            self.state.note_resolved(domain)
+            return None
+        if not nx_countable(domain) or self.state.has_resolved(domain):
+            return None
+        with self.det.lock:
+            hit = self.det.nx.observe(dev.name, domain, now)
+        if not hit:
+            return None
+        return Decision("recommend", hit.rule, self._emit_hit(dev, domain, hit))
+
+    def note_answer(self, client_ip: str, domain: str, rcode: str | None, nx_zone: str | None = None):
+        """Inline mode, when decide() ran before the answer existed (blocking on, or the
+        score-later queue was full): give nx_burst the answer's rcode. Trusted and
+        blocklisted names are skipped, as in decide(); nx_countable() drops local ones."""
+        domain = domain.rstrip(".").lower()
+        if not rcode or not domain or self.state.is_allowed(domain) or self.state.is_blocked(domain):
+            return None
+        return self._nx_burst(self._device(client_ip), domain, rcode, nx_zone, self.clock())
 
     def _abused_service(self, client_ip: str, dev, domain: str):
         if client_ip in self.det.doh.ignore:          # this box itself (fw_bot uses Telegram)
@@ -317,7 +363,8 @@ class Resolver:
             up = self._forward(packet, tcp)
             return up if up is not None else packet
         self._log_query(client_ip, q)
-        if self._score_after_answer(client_ip, q):
+        later = self._score_after_answer(q)
+        if later:
             decision = Decision("allow", "scored after the answer")
         else:
             try:
@@ -333,6 +380,15 @@ class Resolver:
             return dnsmsg.build_sinkhole(packet, q, self.cfg["sinkhole_ip4"],
                                          self.cfg.get("sinkhole_ip6"))
         up = self._forward(packet, tcp)
+        rcode = dnsmsg.reply_rcode(up) if up is not None else None
+        zone = dnsmsg.negative_zone(up) if rcode == "NXDOMAIN" else None
+        if later:
+            self._queue_later(client_ip, q, rcode, zone)
+        elif rcode:
+            try:
+                self.note_answer(client_ip, q.name, rcode, zone)
+            except Exception as exc:  # noqa: BLE001 - the answer must still go out
+                print(f"[ghost-dns] note_answer() failed for {q.name}: {exc!r}", file=sys.stderr, flush=True)
         if up is None:
             self.stats["errors"] += 1
             return dnsmsg.build_servfail(packet, q.end)
@@ -340,32 +396,37 @@ class Resolver:
         self._record_resolved(client_ip, q.name, up)
         return up
 
-    def _score_after_answer(self, client_ip: str, q) -> bool:
+    def _score_after_answer(self, q) -> bool:
         """Learning mode (alerts only) can block nothing but names on the confirmed
         blocklist, a set lookup. So a new name doesn't wait for the models (milliseconds
-        each, more on a Pi) before its answer: it is queued and scored right after, and
-        alerts come out the same. Returns False (score now) when blocking is on, for a
-        blocklisted name, with score_after_answer off, or when the queue is full."""
+        each, more on a Pi) before its answer: it is queued once the answer is in (so its
+        rcode goes along, for nx_burst) and scored right after, and alerts come out the
+        same. Returns False (score now) when blocking is on, for a blocklisted name, or
+        with score_after_answer off."""
         if self.shadow or not self.cfg.get("score_after_answer", True) or not self.state.learning:
             return False
-        if self.state.is_blocked(q.name.rstrip(".").lower()):
-            return False
+        return not self.state.is_blocked(q.name.rstrip(".").lower())
+
+    def _queue_later(self, client_ip: str, q, rcode: str | None, zone: str | None) -> None:
         if self._later is None:
             with self._later_lock:
                 if self._later is None:
                     self._later = queue.Queue(maxsize=4096)
                     threading.Thread(target=self._score_worker, name="ghost-dns-score", daemon=True).start()
         try:
-            self._later.put_nowait((client_ip, q.name, q.qtype_name))
+            self._later.put_nowait((client_ip, q.name, q.qtype_name, rcode, zone))
         except queue.Full:   # a flood: score in line again, slower answers but no lost alerts
-            return False
-        return True
+            try:
+                self.decide(client_ip, q.name, q.qtype_name, rcode=rcode, nx_zone=zone)
+            except Exception as exc:  # noqa: BLE001 - FAIL OPEN, as in handle_packet
+                self.stats["failopen"] += 1
+                print(f"[ghost-dns] decide() failed for {q.name}: {exc!r}", file=sys.stderr, flush=True)
 
     def _score_worker(self) -> None:
         while True:
-            client_ip, name, qtype = self._later.get()
+            client_ip, name, qtype, rcode, zone = self._later.get()
             try:
-                self.decide(client_ip, name, qtype)
+                self.decide(client_ip, name, qtype, rcode=rcode, nx_zone=zone)
             except Exception as exc:  # noqa: BLE001 (the answer went out; say why no alert)
                 self.stats["failopen"] += 1
                 print(f"[ghost-dns] decide() failed for {name}: {exc!r}", file=sys.stderr, flush=True)

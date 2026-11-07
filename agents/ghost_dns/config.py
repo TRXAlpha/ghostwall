@@ -73,6 +73,12 @@ DEFAULTS = {
     "suspect_only_new": True,         # plain suspect alerts only for names new to this network
     "burst_min_score": 0.80,          # DGA burst: score a domain must reach to count...
     "burst_min_distinct": 5,          # ...and how many different ones from one device
+    # nx_burst: one device failing to resolve (NXDOMAIN) this many different unregistered
+    # domains within nx_burst_window seconds. Catches DGAs by their failed lookups, also the
+    # dictionary-word ones the models miss; agents/dga_eval/nx_sim.py measures it.
+    "nx_burst_enabled": True,
+    "nx_burst_min_distinct": 10,
+    "nx_burst_window": 600,
     "tunnel_min_distinct": 30,        # distinct subdomains of one apex per 10 min
     "beacon_min_samples": 8,          # regular repeats of one name before alerting
     "service_baseline_days": 3,       # abused_service: learn each device's normal services this long

@@ -29,7 +29,7 @@ from enforce import Enforcer, NullBackend
 from events import EventLog
 from resolver import Resolver
 from scoring import Scorer
-from shadow import detect_format, parse_adguard_entry, parse_pihole_line, pihole_blocked_host
+from shadow import detect_format, parse_adguard_entry, parse_pihole_line, pihole_blocked_host, pihole_reply
 from state import GhostState
 
 _FRAC = re.compile(r"(\.\d{6})\d+")
@@ -110,14 +110,15 @@ def main() -> int:
     opener = gzip.open if a.querylog.endswith(".gz") else open
     n = bad = 0
     first = last = None
-    held = None   # Pi-hole: the last query, until we know whether a "blocked" line follows
+    held = None   # Pi-hole: the last query, until we know whether a "blocked" or "reply" line follows
 
     def run(q):
         nonlocal n
-        ip, host, qtype, blocked, ts = q
+        ip, host, qtype, blocked, rcode, zone, ts = q
         clock["t"] = ts
         try:
-            r.decide(ip, host, qtype, upstream_blocked=blocked)
+            r.decide(ip, host, qtype, upstream_blocked=blocked,
+                     rcode=None if blocked else rcode, nx_zone=zone)
         except Exception as exc:  # noqa: BLE001
             print("decide failed:", host, repr(exc), file=sys.stderr)
         n += 1
@@ -132,13 +133,18 @@ def main() -> int:
                     if held and held[1] == bh:
                         held[3] = True
                     continue
+                rep = pihole_reply(line)
+                if rep:
+                    if held and held[1] == rep[0] and held[4] is None:
+                        held[4] = rep[1]
+                    continue
                 parsed = parse_pihole_line(line)
                 ts = parse_syslog_time(line) if parsed else None
                 if not parsed or ts is None:
                     continue
                 if held:
                     run(held)
-                held = list(parsed) + [False, ts]
+                held = list(parsed) + [False, None, None, ts]
             else:
                 parsed = parse_adguard_entry(line)
                 if not parsed:

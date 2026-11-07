@@ -178,6 +178,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const RULES = {
   threat_feed: "on the threat feed (known malware or phishing)", dga_burst: "burst of random-looking domains",
+  nx_burst: "burst of lookups of unregistered domains",
   dga_high: "very random-looking new domain", dga_suspect: "random-looking new domain",
   dga_corroborated: "random name on a risky TLD", doh_bypass: "may be bypassing your DNS filter (DoH)",
   dns_tunnel: "possible data over DNS (tunnel)", dns_beacon: "looked up on a fixed timer",
@@ -186,7 +187,7 @@ const RULES = {
 };
 // No Trust button: a phishing-list hit is trusted with a typed `ghostwall allow` (its alert
 // says so), not one click; a burst is many different names.
-const NO_TRUST = new Set(["threat_feed", "dga_burst"]);
+const NO_TRUST = new Set(["threat_feed", "dga_burst", "nx_burst"]);
 let cur = { learning: null, lockdown: null };
 
 function toast(msg, bad) {
