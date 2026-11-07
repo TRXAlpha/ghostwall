@@ -382,7 +382,13 @@ class ControlHandler(BaseHTTPRequestHandler):
             raise _ApiError(400, "need domain or a known event_id")
         if not DOMAIN_RE.match(domain):
             raise _ApiError(400, "not a domain name")
-        self.state["gstate"].unblock(domain)
+        g = self.state["gstate"]
+        undo = body.get("undo") is True
+        if undo:    # `ghostwall unblock --undo`: let the DNS server block it again
+            g.set_dns_exception(domain, False)
+            return 200, {"ok": True, "domain": domain, "unblocked": False}
+        g.unblock(domain)
+        g.set_dns_exception(domain)    # also an exception in the DNS server's blocklists (dns_block.py)
         return 200, {"ok": True, "event_id": event_id, "domain": domain,
                      "unblocked": True}
 

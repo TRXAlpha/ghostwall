@@ -54,6 +54,18 @@ in Docker, shadow mode) on 2026-11-07: [docs/FIELD_RESULTS.md](docs/FIELD_RESULT
 
 ### New
 
+- **Block with your DNS server (opt-in).** `DNS_BLOCK_FEED` `off` (default) / `dry-run` / `on`
+  hands the threat feed to AdGuard Home or Pi-hole as a blocklist, through their own API
+  (a separate `ghostwall-dnsblock` service holds the login). Trust and the new
+  `ghostwall unblock DOMAIN [--undo]` become exceptions; `ghostwall blocking` shows the state.
+  Optional: HaGeZi ad lists (`DNS_BLOCK_ADS=pro|ultimate`), the DoH/VPN/Tor/Proxy bypass list
+  (`DNS_BLOCK_BYPASS=on`), Firefox's DoH canary and iCloud Private Relay answered NXDOMAIN
+  (`DNS_BLOCK_CANARIES`), and a protective upstream (`DNS_PROTECTIVE_UPSTREAM=quad9|cloudflare`,
+  reversible) whose refusals become `upstream_block` and no longer count for `nx_burst`.
+  `threat_feed` alerts say "blocked by your DNS server" when it was.
+- **Bigger feed once blocking is chosen:** HaGeZi TIF medium on about 2 GB RAM or more, CERT
+  Polska, OpenPhish, ThreatFox with `THREATFOX_URL`; 443,645 names on 2026-11-07, 0 in the
+  Tranco top 100k. `measure_blocklists.py` shows what each list would block on your network.
 - **Automatic isolation (opt-in, gateway mode).** `auto_isolate` `"off"` / `"dry-run"` /
   `"on"` cuts off a device behind an exact malware-list hit (not under a popular site, not on
   phishing lists only) or a DNS tunnel. Exempt list, at most `auto_isolate_max_per_hour` (2)
@@ -72,6 +84,10 @@ in Docker, shadow mode) on 2026-11-07: [docs/FIELD_RESULTS.md](docs/FIELD_RESULT
 
 ### Changed
 
+- **Gateway mode blocks criminal networks and botnet C2 addresses:** Spamhaus DROP /
+  DROPv6 and abuse.ch SSLBL / Feodo Tracker, refreshed daily by the new `update_ipfeed.py`
+  (1,858 networks on 2026-11-07) and loaded by ghost-dns into the firewall's `drop_net4` /
+  `drop_net6` sets in one transaction. Private or over-wide networks are never loaded.
 - **Gateway mode drops ports no home device needs toward the internet:** Telnet (23,
   2323), SMTP (25), Windows RPC / NetBIOS / SMB (135, 137-139, 445) and UPnP (1900). The
   ports botnets spread on, spam bots send on, and worms and ransomware use. Configurable in

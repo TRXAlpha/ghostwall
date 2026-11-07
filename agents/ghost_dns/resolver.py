@@ -112,8 +112,15 @@ class Resolver:
 
         when: the time the query was made, on self.clock()'s scale, when it is known and
         differs from now (shadow mode reads queries in batches, after the fact). The
-        timing rules (tunnel, beacon, nx_burst, dga_burst) use it; None means now."""
+        timing rules (tunnel, beacon, nx_burst, dga_burst) use it; None means now.
+
+        rcode "FILTERED": the upstream resolver (Quad9, Cloudflare security) blocked the
+        name itself. It is treated like a name the DNS server blocked: not an
+        unregistered domain for nx_burst, and one `upstream_block` info event says so."""
         domain = domain.rstrip(".").lower()
+        by_upstream = rcode == "FILTERED" and not upstream_blocked
+        if by_upstream:
+            upstream_blocked = True
         if not domain:
             return Decision("allow", "empty")
         dev = self._device(client_ip)
@@ -136,7 +143,9 @@ class Resolver:
             on = " and ".join(self.det.threat_feed.sources(listed)) or "the threat feed"
             why = [f"{listed} is on {on}" if exact else f"{domain} is under {listed}, which is on {on}",
                    f"a service you know? sudo ghostwall allow {listed}"]
-            if not enforce:
+            if upstream_blocked:    # the DNS server's own filtering did the blocking
+                why.append("blocked by your upstream DNS filter" if by_upstream else "blocked by your DNS server")
+            elif not enforce:
                 why.append("not blocked (" + ("shadow mode" if self.shadow else "learning mode") + ")")
             evt = self._event(dev, domain, rule="threat_feed",
                               action="block" if enforce else "recommend",
@@ -154,6 +163,11 @@ class Resolver:
         if svc:
             return svc
 
+        if by_upstream:
+            self.stats["upstream_filtered"] = self.stats.get("upstream_filtered", 0) + 1
+            self._event(dev, domain, rule="upstream_block", action="allow", severity="info",
+                        reasons=["blocked by your upstream DNS filter (Quad9 or Cloudflare security), "
+                                 "not by Ghostwall; no connection was made"])
         # IoT default-deny (a device marked "profile": "iot"). Before the allowlist on
         # purpose: the allowlist is network-wide (and its starter file trusts whole clouds),
         # an IoT device's set is its own; Trust on its alert adds to that set. A refusal
@@ -401,7 +415,7 @@ class Resolver:
             return evt
         # A device re-querying the same domain family is one finding, not fifty.
         # Blocks are always recorded; only repeat recommendations are suppressed.
-        if action == "recommend" and self._is_repeat(dev.name, domain, rule):
+        if (action == "recommend" or rule == "upstream_block") and self._is_repeat(dev.name, domain, rule):
             self.stats["suppressed"] += 1
             return evt
         self._count_alert(dev.name)

@@ -74,6 +74,11 @@ class NftBackend:
         subprocess.run([self.nft, *args], check=True,
                        capture_output=True, text=True, timeout=5)
 
+    def run_script(self, text: str) -> None:
+        """One nft transaction (`nft -f -`): all of it applies, or none of it."""
+        subprocess.run([self.nft, "-f", "-"], input=text, check=True,
+                       capture_output=True, text=True, timeout=60)
+
     def lockdown_on(self, pi_ip: str) -> None:
         self._run("insert", "rule", "inet", "ghostwall", "forward", "position", "0",
                   "iifname", "!=", "tailscale0",
@@ -92,6 +97,27 @@ class NftBackend:
                 self._run("delete", "rule", "inet", "ghostwall", "forward",
                           "handle", handle)
                 return
+
+
+SET_DROP_NET4, SET_DROP_NET6 = "drop_net4", "drop_net6"
+
+
+def drop_nets_script(v4, v6) -> str:
+    """The nft transaction that replaces the IP reputation sets' contents. Every entry is
+    parsed again here: this text goes to nft as root."""
+    lines = []
+    for name, nets, version in ((SET_DROP_NET4, v4, 4), (SET_DROP_NET6, v6, 6)):
+        clean = []
+        for n in nets:
+            net = ipaddress.ip_network(n, strict=False)
+            if net.version != version:
+                raise ValueError(f"{n} is not IPv{version}")
+            clean.append(net)
+        lines.append(f"flush set {TABLE} {name}")
+        merged = [str(x) for x in ipaddress.collapse_addresses(clean)]
+        for i in range(0, len(merged), 500):
+            lines.append(f"add element {TABLE} {name} {{ {', '.join(merged[i:i + 500])} }}")
+    return "\n".join(lines) + "\n"
 
 
 class Enforcer:
@@ -138,6 +164,17 @@ class Enforcer:
                               "{", ip, "}")
 
     # -- LAN lockdown -----------------------------------------------------
+    def load_drop_nets(self, v4, v6) -> bool:
+        """Replace the gateway's IP reputation sets (drop_net4 / drop_net6) in one nft
+        transaction. False when there is no nft backend (nothing to do)."""
+        run = getattr(self.backend, "run_script", None)
+        if run is None:
+            return False
+        script = drop_nets_script(v4, v6)
+        with self._lock:
+            run(script)
+        return True
+
     def set_lockdown(self, on: bool, pi_ip: str) -> bool:
         """Toggle the forward-chain lockdown rule; pi_ip (this box) stays reachable.
         Returns the new state."""

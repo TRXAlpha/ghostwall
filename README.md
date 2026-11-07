@@ -85,6 +85,13 @@ Keep them. Ghostwall runs on top and covers what a blocklist can't:
 | `iot_new_domain` | a device you marked IoT (camera, TV, plug) looked up a domain it never used in its learning week. Optional default-deny: alert, dry-run or refuse (`iot_enforce`) | warn |
 | `doh_ip`, `raw_ip`, `beacon` | gateway mode only (`ghost-flow`): a connection straight to a DNS-over-HTTPS server's IP, to an IP nobody looked up, or on a fixed timer | warn / high |
 
+**Opt-in blocking for every device.** `DNS_BLOCK_FEED=on` hands the threat feed (443k names
+on 2026-11-07, none of them a top-100k site) to AdGuard Home or Pi-hole as a blocklist, with
+optional ad lists (HaGeZi Pro or Ultimate) and a malware-blocking upstream (Quad9 or
+Cloudflare). Ghostwall still never sits in the DNS path; try `dry-run` first. DNS blocking
+can't stop ads served from the same domain as the content (YouTube, in-app ads): a browser
+extension is still needed for those. See [docs/OPERATIONS.md](docs/OPERATIONS.md).
+
 **Opt-in containment.** In gateway mode, `auto_isolate` cuts a device off the moment it hits an
 exact malware-list entry or tunnels data over DNS (at most 2 an hour, one-tap Release in
 Telegram); IoT devices can be locked to the domains they learned (`iot_enforce`). Both are off
