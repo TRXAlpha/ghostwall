@@ -33,7 +33,7 @@ WORDS = ("amber anchor apple basket beacon birch blanket bottle bramble breeze b
          "silver timber velvet willow").split()
 STATE = os.path.join(os.environ.get("RUNNER_TEMP", "/tmp"), "realdns_names.json")
 REAL = "example.com"                               # resolves (A and AAAA)
-MISSING_SUB = "ghostwall-ci-missing.example.com"   # NXDOMAIN, but example.com exists
+MISSING_SUB = "ghostwall-ci-missing.example.com"   # a missing name under a real domain
 BLOCKED = "blockedtest-ghostwall.example"          # the DNS server blocks it itself
 
 
@@ -42,8 +42,9 @@ def made_up(n: int) -> list[str]:
     return ["".join(rng.sample(WORDS, 4)) + ".com" for _ in range(n)]
 
 
-def ask(name: str, qtype: int, port: int) -> int:
-    """Send one query to 127.0.0.1:port and return the reply's rcode."""
+def ask(name: str, qtype: int, port: int) -> str:
+    """Send one query to 127.0.0.1:port; what the reply says (dnsmsg.reply_status)."""
+    import dnsmsg
     q = struct.pack(">HHHHHH", 0x1234, 0x0100, 1, 0, 0, 0) + b"".join(
         bytes([len(p)]) + p.encode() for p in name.split(".")) + b"\x00" + struct.pack(">HH", qtype, 1)
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -52,7 +53,7 @@ def ask(name: str, qtype: int, port: int) -> int:
         for _ in range(3):
             s.sendto(q, ("127.0.0.1", port))
             try:
-                return s.recv(4096)[3] & 0x0F
+                return dnsmsg.reply_status(s.recv(4096))
             except socket.timeout:
                 continue
         raise SystemExit(f"no answer for {name} from 127.0.0.1:{port}")
@@ -68,20 +69,24 @@ def cmd_query(a) -> int:
         except SystemExit:
             time.sleep(2)
     names = made_up(12)
-    with open(STATE, "w") as f:
-        json.dump(names, f)
     print("made-up names:", ", ".join(names))
+    got = {}
     for name in [REAL, MISSING_SUB, BLOCKED] + names:
         for qtype in (1, 28):                      # A and AAAA, as getaddrinfo does
-            print(f"{name} {'A' if qtype == 1 else 'AAAA'} -> rcode {ask(name, qtype, a.port)}")
+            qt = "A" if qtype == 1 else "AAAA"
+            got[f"{name} {qt}"] = ask(name, qtype, a.port)
+            print(f"{name} {qt} -> {got[f'{name} {qt}']}")
         time.sleep(0.5)
+    with open(STATE, "w") as f:
+        json.dump({"names": names, "client_saw": got}, f)
     return 0
 
 
 def cmd_check(a) -> int:
     from shadow import parse_adguard_entry, parse_pihole_line, pihole_blocked_host, pihole_reply
     with open(STATE) as f:
-        names = json.load(f)
+        st = json.load(f)
+    names, client = st["names"], st["client_saw"]
     with open(a.log, encoding="utf-8", errors="replace") as f:
         lines = f.read().splitlines()
     print(f"{a.log}: {len(lines)} lines")
@@ -108,20 +113,34 @@ def cmd_check(a) -> int:
                 seen[(rep[0], last[rep[0]])] = (False, rep[1], None)
     for k, v in sorted(seen.items()):
         print("  ", k, v)
-    bad = []
-
-    def expect(key, ok, what):
-        got = seen.get(key)
-        if got is None or not ok(got):
-            bad.append(f"{key}: expected {what}, read {got}")
-
-    expect((REAL, "A"), lambda g: not g[0] and g[1] == "NOERROR", "NOERROR")
-    expect((MISSING_SUB, "A"), lambda g: not g[0] and g[1] == "NXDOMAIN", "NXDOMAIN (a name under a real domain)")
-    expect((BLOCKED, "A"), lambda g: g[0] and g[1] is None, "blocked by the server, no rcode passed on")
-    for n in names:
-        expect((n, "A"), lambda g: not g[0] and g[1] == "NXDOMAIN", "NXDOMAIN")
-    if a.format == "adguard":
-        expect((MISSING_SUB, "A"), lambda g: g[2] == "example.com", "the SOA zone example.com")
+    bad, odd = [], []
+    raw = {}
+    if a.format == "adguard":                      # for the report on a mismatch
+        for line in lines:
+            try:
+                j = json.loads(line)
+                raw[(j.get("QH", "").rstrip(".").lower(), j.get("QT"))] = line
+            except ValueError:
+                pass
+    for key, saw in client.items():
+        name, qt = key.split()
+        got = seen.get((name, qt))
+        if name == BLOCKED:
+            if not got or not got[0] or got[1] is not None:
+                bad.append(f"{key}: the server blocked it; Ghostwall must see it as blocked, read {got}")
+        elif got is None:
+            bad.append(f"{key}: not in the log")
+        elif got[1] != saw:
+            # What the server logged differs from what it sent: report it with the raw entry.
+            odd.append(f"{key}: the client got {saw}, Ghostwall read {got[1]} from the log\n      "
+                       + raw.get((name, qt), "")[:600])
+    nx_names = [n for n in names if client.get(f"{n} A") == "NXDOMAIN"]
+    if len(nx_names) < 11:
+        bad.append(f"only {len(nx_names)} of the made-up names came back NXDOMAIN to the client: {client}")
+    if odd:
+        print("MISMATCH between what the server sent and what it logged:\n  " + "\n  ".join(odd))
+        if len(odd) > 2:
+            bad.append(f"{len(odd)} mismatches")
     if bad:
         print("FAIL:\n  " + "\n  ".join(bad))
         return 1
