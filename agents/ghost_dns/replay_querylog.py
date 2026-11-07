@@ -114,7 +114,7 @@ def main() -> int:
     opener = gzip.open if a.querylog.endswith(".gz") else open
     n = bad = 0
     first = last = None
-    held = None   # Pi-hole: the last query, until we know whether a "blocked" or "reply" line follows
+    held: list = []   # Pi-hole: queries waiting for their "blocked" or "reply" line (oldest first)
 
     def run(q):
         nonlocal n
@@ -132,23 +132,29 @@ def main() -> int:
             if a.max_lines and n >= a.max_lines:
                 break
             if fmt == "pihole":
+                # As the live follower does: several queries can wait for their
+                # "blocked" or "reply" line at once (other clients' lines come between).
                 bh = pihole_blocked_host(line)
                 if bh:
-                    if held and held[1] == bh:
-                        held[3] = True
+                    for q in held:
+                        if q[1] == bh:
+                            q[3] = True
                     continue
                 rep = pihole_reply(line)
                 if rep:
-                    if held and held[1] == rep[0] and held[4] is None:
-                        held[4] = rep[1]
+                    for q in held:
+                        if q[1] == rep[0] and q[4] is None:
+                            q[4] = rep[1]
+                            break
                     continue
                 parsed = parse_pihole_line(line)
                 ts = parse_syslog_time(line) if parsed else None
                 if not parsed or ts is None:
                     continue
-                if held:
-                    run(held)
-                held = list(parsed) + [False, None, None, ts]
+                while held and (len(held) >= 64 or ts - held[0][6] > 3
+                                or held[0][3] or held[0][4] is not None):
+                    run(held.pop(0))
+                held.append(list(parsed) + [False, None, None, ts])
             else:
                 parsed = parse_adguard_entry(line)
                 if not parsed:
@@ -160,8 +166,8 @@ def main() -> int:
                 run(list(parsed) + [ts])
             first = first or ts
             last = ts
-    if held:
-        run(held)
+    for q in held:
+        run(q)
 
     evs = []
     with open(cfg["events_path"], encoding="utf-8") as f:

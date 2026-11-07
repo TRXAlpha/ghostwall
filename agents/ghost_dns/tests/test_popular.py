@@ -225,15 +225,20 @@ class ResolverGuardTests(unittest.TestCase):
         self.assertEqual(r.decide(DEV, "bad.qq.test", "A").reason, "threat_feed")
         self.assertEqual(r.decide(DEV, "fine.qq.test", "A").reason, "popular")
 
-    def test_popular_names_still_count_for_a_burst(self):
+    def test_popular_names_never_feed_a_burst(self):
+        # A portal loading several popular random-looking brand domains is not a DGA.
         popular = "".join(f"qx{i}zk.test\n" for i in range(5))
         r = self.build(0.97, popular=popular)
         reasons = []
         for i in range(5):
             self.now += 5
             reasons.append(r.decide(DEV, f"qx{i}zk.test", "A").reason)
-        self.assertEqual(reasons, ["popular"] * 4 + ["dga_burst"])
-        self.assertEqual(self.rules(), ["dga_burst"])
+        self.assertEqual(reasons, ["popular"] * 5)
+        self.assertEqual(self.rules(), [])
+        for i in range(5):                              # unlisted names still make a burst
+            self.now += 5
+            r.decide(DEV, f"zq{i}kx.test", "A")
+        self.assertEqual(self.rules()[-1], "dga_burst")      # (after their own dga_suspect alerts)
 
     def test_no_list_is_todays_behaviour(self):
         r = self.build(0.97, popular_path=os.path.join(tempfile.mkdtemp(), "missing.txt"))

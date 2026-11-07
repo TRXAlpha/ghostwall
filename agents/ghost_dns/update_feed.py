@@ -151,6 +151,19 @@ def parse_tranco(text: str, top: int) -> set[str]:
     return out
 
 
+def _env_int(name: str, default: int) -> int:
+    """An integer setting from ghostwall.env; a typo ("100k") warns and uses the default
+    instead of crashing every daily run."""
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return max(0, int(raw.replace("_", "")))
+    except ValueError:
+        print(f"[feed] {name}={raw!r} is not a number; using {default}", file=sys.stderr)
+        return default
+
+
 def _tranco_names(lines):
     """Domains of a Tranco CSV or of the cache, in file (rank) order."""
     for line in lines:
@@ -185,6 +198,8 @@ def fetch_popular(top: int, cache_top: int, cache: str, list_id: str | None = No
                 if count < top:
                     names.add(name)
                 count += 1
+            f.flush()
+            os.fsync(f.fileno())
         del text
         if count < n * 0.9:
             raise ValueError(f"Tranco list {list_id}: only {count} of {n} domains")
@@ -271,11 +286,21 @@ def _age_days(fetched: str) -> int:
 
 
 def _write_atomic(path: str, text: str) -> None:
+    """Write, flush to disk, then rename: a power cut on a Pi's SD card leaves the old
+    file or the new one, never half of one, and a failed write (disk full) leaves no
+    temporary file behind."""
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)), prefix=".feed-")
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(text)
-    os.chmod(tmp, 0o644)  # mkstemp creates 0600; the feed is public data
-    os.replace(tmp, path)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o644)  # mkstemp creates 0600; the feed is public data
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
 
 
 def render(sections: list[tuple[Source, str, set[str]]], total: int | None = None) -> str:
@@ -297,10 +322,10 @@ def main(argv=None) -> int:
     ap.add_argument("--feed", action="append", help="feed URL (repeatable)")
     ap.add_argument("--min", type=int, default=1000, help="refuse to write fewer domains than this")
     ap.add_argument("--popular-top", type=int,
-                    default=int(os.environ.get("GHOSTWALL_FEED_POPULAR_TOP") or DEFAULT_POPULAR_TOP),
+                    default=_env_int("GHOSTWALL_FEED_POPULAR_TOP", DEFAULT_POPULAR_TOP),
                     help="drop entries among the N most popular domains (Tranco); 0 = only NEVER_LIST")
     ap.add_argument("--cache-top", type=int,
-                    default=int(os.environ.get("GHOSTWALL_POPULAR_TOP") or DEFAULT_CACHE_TOP),
+                    default=_env_int("GHOSTWALL_POPULAR_TOP", DEFAULT_CACHE_TOP),
                     help="how many popular domains to cache for ghost-dns's DGA guard (0 = only --popular-top)")
     ap.add_argument("--tranco-id", default=os.environ.get("GHOSTWALL_TRANCO_ID") or None,
                     help="pin a Tranco list id instead of the latest")
@@ -314,14 +339,17 @@ def main(argv=None) -> int:
             return 1
 
     popular: set[str] = set()
-    if args.popular_top > 0:
-        cache = os.path.join(os.path.dirname(os.path.abspath(args.out)), "popular_domains.txt")
+    cache = os.path.join(os.path.dirname(os.path.abspath(args.out)), "popular_domains.txt")
+    if args.popular_top > 0 or args.cache_top > 0:
         got = load_popular(args.popular_top, cache, args.tranco_id, args.cache_top)
-        if got is None:
+        if got is None and args.popular_top > 0:
             print("[feed] no popularity list (no download, no cache); keeping existing feed. "
                   "--popular-top 0 skips this guard", file=sys.stderr)
             return 1
-        popular = got
+        popular = got or set()
+    elif os.path.exists(cache):          # both off: don't leave an old list in use
+        os.remove(cache)
+        print(f"[feed] popularity lists turned off; removed {cache}")
 
     previous = read_sections(args.out)
     sections: list[tuple[Source, str, set[str]]] = []
@@ -334,7 +362,9 @@ def main(argv=None) -> int:
             got = parse_domains(fetch(url))
             if not got:
                 raise ValueError("no domains in it")
-            if prev and len(got) < SHRINK_RATIO * prev[1]:
+            # A sudden shrink looks like a broken download, but only while the old copy
+            # is still worth keeping: after MAX_CARRY_DAYS the smaller list is the list.
+            if prev and len(got) < SHRINK_RATIO * prev[1] and _age_days(prev[0]) <= MAX_CARRY_DAYS:
                 raise ValueError(f"only {len(got)} domains, {prev[1]} last time")
             fetched = _today()
             fresh += 1

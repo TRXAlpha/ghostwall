@@ -169,7 +169,7 @@ class RcodeParsingTests(unittest.TestCase):
             "Nov  5 10:00:01 dnsmasq[812]: reply www.example.com is 192.0.2.7": ("www.example.com", "NOERROR"),
             "Nov  5 10:00:01 dnsmasq[812]: reply www.example.com is 2001:db8::7": ("www.example.com", "NOERROR"),
             "Nov  5 10:00:01 dnsmasq[812]: reply www.example.com is <CNAME>": ("www.example.com", "NOERROR"),
-            "Nov  5 10:00:01 dnsmasq[812]: reply www.example.com is NODATA-IPv6": ("www.example.com", "NOERROR"),
+            "Nov  5 10:00:01 dnsmasq[812]: reply www.example.com is NODATA-IPv6": ("www.example.com", "NODATA"),
         }
         for line, want in cases.items():
             self.assertEqual(pihole_reply(line), want, line)
@@ -536,9 +536,36 @@ class ShadowEndToEndTests(Base):
                      "Nov  5 10:00:01 dnsmasq[812]: reply candleriver.com is NXDOMAIN\n"
                      f"Nov  5 10:00:02 dnsmasq[812]: query[A] example.com from {INFECTED}\n")
         f.poll_once()
+        # example.com has no reply line yet: it waits (up to f.hold seconds) for one
         self.assertEqual(rec.calls, [("stoneriver.com", True, {}),
-                                     ("candleriver.com", False, {"rcode": "NXDOMAIN", "nx_zone": None}),
-                                     ("example.com", False, {})])
+                                     ("candleriver.com", False, {"rcode": "NXDOMAIN", "nx_zone": None})])
+        f.hold = 0
+        f.poll_once()
+        self.assertEqual(rec.calls[-1], ("example.com", False, {}))
+
+    def test_reply_in_the_next_poll_still_counts(self):
+        class Rec:
+            stats = {"queries": 0}
+
+            def __init__(self):
+                self.calls = []
+
+            def decide(self, ip, host, qtype, upstream_blocked=False, **kw):
+                self.calls.append((host, kw.get("rcode")))
+
+        d = tempfile.mkdtemp()
+        log = os.path.join(d, "pihole.log")
+        open(log, "w").close()
+        rec = Rec()
+        f = QueryLogFollower(rec, log, fmt="pihole")
+        with open(log, "a") as fh:
+            fh.write(f"Nov  5 10:00:00 dnsmasq[812]: query[A] stoneriver.com from {INFECTED}\n"
+                     "Nov  5 10:00:00 dnsmasq[812]: forwarded stoneriver.com to 127.0.0.1\n")
+        self.assertEqual(f.poll_once(), 0)
+        with open(log, "a") as fh:
+            fh.write("Nov  5 10:00:02 dnsmasq[812]: reply stoneriver.com is NXDOMAIN\n")
+        self.assertEqual(f.poll_once(), 1)
+        self.assertEqual(rec.calls, [("stoneriver.com", "NXDOMAIN")])
 
 
 if __name__ == "__main__":

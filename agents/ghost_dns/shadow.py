@@ -51,7 +51,7 @@ def adguard_rcode(j: dict, host: str, blocked: bool) -> tuple[str | None, str | 
     except (ValueError, binascii.Error):
         return None, None
     q = dnsmsg.parse_question(msg)
-    rcode = dnsmsg.reply_rcode(msg)
+    rcode = dnsmsg.reply_status(msg)
     if q is None or rcode is None or q.name != host:
         return None, None
     return rcode, (dnsmsg.negative_zone(msg) if rcode == "NXDOMAIN" else None)
@@ -122,8 +122,8 @@ _ADDRESS = re.compile(r"^(?:[0-9.]+|[0-9A-Fa-f:]*:[0-9A-Fa-f:.]*)$")
 
 
 def pihole_reply(line: str) -> tuple[str, str] | None:
-    """Pi-hole reply line -> (host, rcode) or None. An address, `<CNAME>` and the like,
-    or NODATA are all NOERROR: the name exists."""
+    """Pi-hole reply line -> (host, rcode) or None. An address or `<CNAME>` is NOERROR
+    (the name exists); NODATA is "NODATA", which proves nothing either way."""
     m = _PIHOLE_REPLY.search(line)
     if not m:
         return None
@@ -132,7 +132,9 @@ def pihole_reply(line: str) -> tuple[str, str] | None:
         rcode = "NXDOMAIN"
     elif what in ("SERVFAIL", "REFUSED"):
         rcode = what
-    elif what.startswith(("NODATA", "<")) or _ADDRESS.match(what):
+    elif what.startswith("NODATA"):
+        rcode = "NODATA"
+    elif what.startswith("<") or _ADDRESS.match(what):
         rcode = "NOERROR"
     else:
         return None
@@ -172,6 +174,10 @@ class QueryLogFollower:
             raise ValueError(f"querylog_format must be adguard, pihole or auto, not {fmt!r}")
         self.parse = ENTRY_PARSERS[self.fmt]
         self.poll = poll_seconds
+        # Pi-hole: queries waiting for their "blocked" or "reply" line, kept across polls
+        # (the reply can land in the next one) for at most `hold` seconds.
+        self._pending: list[list] = []
+        self.hold = 3.0
         self.offset = os.path.getsize(path) if os.path.exists(path) else 0
         self._head = self._read_head()
         self._stop = threading.Event()
@@ -237,7 +243,7 @@ class QueryLogFollower:
     def _read_from(self, path: str, main: bool = False) -> int:
         """Score the complete lines of `path` after self.offset (advancing it)."""
         done = 0
-        pending: list[list] = []   # Pi-hole: queries waiting for their "blocked" or "reply" line
+        pending = self._pending
         try:
             f = open(path, "rb")
         except OSError as exc:
@@ -274,15 +280,22 @@ class QueryLogFollower:
                 parsed = self.parse(line)
                 if not parsed:
                     continue
-                pending.append(list(parsed))
+                pending.append(list(parsed) + [time.monotonic()])
                 if self.fmt != "pihole" or len(pending) > 64:
                     done += self._decide(pending.pop(0))
-        for q in pending:   # Pi-hole writes the query and its block in one go
-            done += self._decide(q)
+        # Pi-hole writes a query and its block in one go, and its reply right after:
+        # decide what has its answer, or has waited long enough for one.
+        now, keep = time.monotonic(), []
+        for q in pending:
+            if q[3] or q[4] is not None or now - q[6] >= self.hold:
+                done += self._decide(q)
+            else:
+                keep.append(q)
+        pending[:] = keep
         return done
 
     def _decide(self, q) -> int:
-        ip, host, qtype, blocked, rcode, zone = q
+        ip, host, qtype, blocked, rcode, zone = q[:6]
         if not self.said_anonymized and self.fmt == "adguard" and str(ip).endswith(".0") and str(ip).count(".") == 3:
             # AdGuard's "Anonymize client IP" zeroes the last part of every address:
             # each /24 of devices then looks like one device here.

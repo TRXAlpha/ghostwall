@@ -26,7 +26,7 @@ import threading
 import time
 from array import array
 from bisect import bisect_left
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from dataclasses import dataclass, field
 
 from tokenizer import PUBLIC_SUFFIXES, registrable_part
@@ -515,7 +515,7 @@ class DgaBurst:
         if len(self._q) > 5000:
             for k in [k for k, v in self._q.items() if not v or now - v[-1][0] > self.window][:2500]:
                 self._q.pop(k, None)
-        if now - self._flagged.get(device, -1e18) < self.cooldown:
+        if self.recently_flagged(device, now):
             return None
         apexes = {a for _, a, _ in q}
         if len(apexes) < self.min_distinct:
@@ -527,6 +527,11 @@ class DgaBurst:
                     "e.g. " + ", ".join(top)],
                    {"dga": max(s for _, _, s in q), "burst": min(1.0, len(apexes) / (self.min_distinct * 2))})
 
+    def recently_flagged(self, device: str, now: float) -> bool:
+        """This device raised dga_burst within the cooldown (nx_burst then stays quiet:
+        it is the same storm seen a second way)."""
+        return now - self._flagged.get(device, -1e18) < self.cooldown
+
 
 # --------------------------------------------------------------------------
 # Suffixes that are never internet domains but that routers and OSes hand out as search
@@ -536,18 +541,27 @@ PRIVATE_TLDS = frozenset("""
 home lan local localdomain internal intranet corp private priv router gateway box modem
 domain workgroup test example invalid localhost onion alt arpa ip station
 """.split())
-# Real top-level domains outside tokenizer.PUBLIC_SUFFIXES and RARE_TLDS that DGAs use.
-# Two-letter TLDs (country codes) are accepted as a whole.
-EXTRA_TLDS = frozenset("""
-website space wtf rent live life world today email cloud digital network systems services
-solutions company group news blog page fun host press center global
-""".split())
+def _load_tlds() -> frozenset:
+    """Every TLD in the root zone (tlds.txt, IANA's list, refreshed with the code). A DGA
+    can use any of them, cheap new gTLDs above all (.science, .party, .bond...)."""
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "tlds.txt"), encoding="ascii") as f:
+            return frozenset(ln.strip() for ln in f if ln.strip() and not ln.startswith("#"))
+    except OSError:
+        return frozenset()
+
+
+ROOT_TLDS = _load_tlds()
 
 
 def real_tld(tld: str) -> bool:
+    """A TLD that exists on the internet and is not used as a home or office suffix
+    (fritz.box, .home, .corp...): only there can an NXDOMAIN mean "not registered"."""
     if tld in PRIVATE_TLDS:
         return False
-    return (tld in PUBLIC_SUFFIXES or tld in RARE_TLDS or tld in EXTRA_TLDS or tld.startswith("xn--")
+    if ROOT_TLDS:
+        return tld in ROOT_TLDS
+    return (tld in PUBLIC_SUFFIXES or tld in RARE_TLDS or tld.startswith("xn--")      # no list: fall back
             or (len(tld) == 2 and tld.isascii() and tld.isalpha()))
 
 
@@ -581,7 +595,9 @@ class NxBurst:
     def __init__(self, min_distinct=10, window=600.0, cooldown=1800.0, max_per_device=512):
         self.min_distinct, self.window, self.cooldown = min_distinct, window, cooldown
         self.max_per_device = max_per_device
-        self._q: dict[str, deque] = defaultdict(deque)        # device -> (t, registrable)
+        # device -> {registrable: last failed}, oldest first. Keyed by name, so a device
+        # hammering one dead domain can't push the others out of the window.
+        self._q: dict[str, OrderedDict] = defaultdict(OrderedDict)
         self._reported: dict[str, set] = defaultdict(set)     # device -> names already alerted on
         self._flagged: dict[str, float] = {}
 
@@ -590,20 +606,25 @@ class NxBurst:
         if reg in self._reported.get(device, ()):
             return None
         q = self._q[device]
-        q.append((now, reg))
-        while q and (now - q[0][0] > self.window or len(q) > self.max_per_device):
-            q.popleft()
+        q[reg] = now
+        q.move_to_end(reg)
+        while q:
+            oldest, t = next(iter(q.items()))
+            if now - t <= self.window and len(q) <= self.max_per_device:
+                break
+            del q[oldest]
         if len(self._q) > 5000:   # bound memory: a LAN has far fewer devices
-            for k in [k for k, v in self._q.items() if not v or now - v[-1][0] > self.window][:2500]:
+            for k in [k for k, v in self._q.items() if not v or now - next(reversed(v.values())) > self.window][:2500]:
                 self._q.pop(k, None)
                 self._reported.pop(k, None)
+                self._flagged.pop(k, None)
         if now - self._flagged.get(device, -1e18) < self.cooldown:
             return None
-        regs = list(dict.fromkeys(r for _, r in q))     # distinct, oldest first
-        if len(regs) < self.min_distinct:
+        if len(q) < self.min_distinct:
             return None
+        regs = list(q)                                   # distinct, oldest first
         self._flagged[device] = now
-        span = now - q[0][0]
+        span = now - min(q.values())
         seen = self._reported[device]
         if len(seen) > 4096:
             seen.clear()
