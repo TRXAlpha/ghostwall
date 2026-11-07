@@ -263,8 +263,8 @@ resolver does, treating every name as new: 0.315% would raise a DGA alert (Majes
 0.300%, a Tranco sample 0.503%), so the thresholds stay as shipped. Skipping names whose
 registrable domain is a Tranco top-100k site brings that to 0.245%, without hiding a
 single name from the 25 DGA families; a top-1M list (`GHOSTWALL_FEED_POPULAR_TOP=1000000`
-in `ghostwall.env`) brings it to 0.098%, at about 80 MB more memory while loading and
-650 instead of 105 feed entries dropped as popular. On a real network fewer names are
+in `ghostwall.env`) brings it to 0.098%, at a memory peak of about 80 MB instead of
+10 MB while the list loads, and 650 instead of 105 feed entries dropped as popular. On a real network fewer names are
 new, so fewer alert.
 
 **Failed lookups (`nx_burst`).** [results_nx_sim.md](agents/dga_eval/results_nx_sim.md)
