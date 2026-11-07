@@ -68,6 +68,7 @@ Thumbs.db
 
 # generated threat feed (built by update_feed.py)
 agents/ghost_dns/threat_feed.txt
+agents/ghost_dns/popular_domains.txt
 
 # Owner-specific add-ons kept out of the public repo: a personal service hub page and
 # patchers for a separate personal Telegram bot.

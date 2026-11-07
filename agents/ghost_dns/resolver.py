@@ -112,8 +112,8 @@ class Resolver:
         if feed and not self.state.trusts(feed[0]) and (feed[1] or not self.state.is_allowed(domain)):
             listed, exact = feed
             enforce = (not self.state.learning) and not self.shadow
-            why = [f"{listed} is on the threat feed"
-                   + ("" if exact else f" (parent of {domain})"),
+            on = " and ".join(self.det.threat_feed.sources(listed)) or "the threat feed"
+            why = [f"{listed} is on {on}" if exact else f"{domain} is under {listed}, which is on {on}",
                    f"a service you know? sudo ghostwall allow {listed}"]
             if not enforce:
                 why.append("not blocked (" + ("shadow mode" if self.shadow else "learning mode") + ")")

@@ -177,7 +177,7 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const RULES = {
-  threat_feed: "on the threat feed (known phishing)", dga_burst: "burst of random-looking domains",
+  threat_feed: "on the threat feed (known malware or phishing)", dga_burst: "burst of random-looking domains",
   dga_high: "very random-looking new domain", dga_suspect: "random-looking new domain",
   dga_corroborated: "random name on a risky TLD", doh_bypass: "may be bypassing your DNS filter (DoH)",
   dns_tunnel: "possible data over DNS (tunnel)", dns_beacon: "looked up on a fixed timer",

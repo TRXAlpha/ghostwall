@@ -176,7 +176,7 @@ def _domain(d: str) -> str:
 def cmd_allow(a) -> int:
     r = control("/allow", {"domain": _domain(a.domain)})
     print(f"Trusted {r.get('domain')}: no more alerts for it or its subdomains (a subdomain that is "
-          "itself on the phishing list still alerts).")
+          "itself on the threat feed still alerts).")
     return 0
 
 
