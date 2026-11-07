@@ -52,6 +52,23 @@ class FormatTests(unittest.TestCase):
         actions = [parse_callback(b["callback_data"], SECRET)[0] for b in row]
         self.assertEqual(actions, ["unblock", "keep", "isolate", "details"])
 
+    def test_auto_isolated_alert_offers_release(self):
+        evt = dict(EVENT, rule="threat_feed", action="block", auto_isolated=True,
+                   reasons=["evil.example is on URLhaus (malware)",
+                            "isolated automatically: threat_feed; undo: Telegram Release button or "
+                            "sudo ghostwall release tv-box"])
+        text = format_alert(evt)
+        self.assertEqual(text.split("\n")[0], "ISOLATED · laptop")
+        self.assertIn("sudo ghostwall release tv-box", text)
+        kb = inline_keyboard(evt, SECRET)[0]
+        self.assertEqual([b["text"] for b in kb], ["Release device", "Details"])
+        self.assertEqual([parse_callback(b["callback_data"], SECRET)[0] for b in kb], ["release", "details"])
+
+    def test_would_isolate_alert_is_still_an_alert(self):
+        evt = dict(EVENT, action="recommend", would_isolate=True)
+        self.assertEqual(format_alert(evt).split("\n")[0], "ALERT · laptop")
+        self.assertNotIn("Release device", [b["text"] for b in inline_keyboard(evt, SECRET)[0]])
+
     def test_keyboard_forgery_rejected(self):
         kb = inline_keyboard(EVENT, SECRET)
         bad = kb[0][0]["callback_data"][:-1] + ("9" if kb[0][0]["callback_data"][-1] != "9" else "8")

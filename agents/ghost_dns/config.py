@@ -102,6 +102,26 @@ DEFAULTS = {
     "novelty_days": 7,         # a domain is "new" until seen for this long
     "auto_promote_after": 3,   # confirmations before a recommend becomes a block
 
+    # --- auto-isolate (opt-in; docs/OPERATIONS.md) ---
+    # "off", "dry-run" (events say "would_isolate", nothing changes) or "on". Needs gateway
+    # mode ("enforce": "nft"); with the null backend "on" behaves as dry-run. While
+    # `learning` is on it also behaves as dry-run: learning means "alerts only".
+    "auto_isolate": "off",
+    # Only rules whose false positives are rare AND whose finding is about the device itself:
+    #   threat_feed  exact matches only (a parent-domain match never isolates): the device
+    #                asked for a host a malware/phishing list names. One unclear case in
+    #                19.5 days of field data (docs/FIELD_RESULTS.md).
+    #   dns_tunnel   dozens of distinct random subdomains of one apex; the one field false
+    #                positive (a game launcher) is fixed and tested.
+    # Left out on purpose: nx_burst (no field false positive, but link checkers and mail
+    # filters fail lookups legitimately; add it once nx_burst_ignore_devices fits your
+    # network), raw_ip/beacon/doh_ip (ghost-flow cannot reach the isolate path yet, and there
+    # is no IoT marker in devices.json to limit raw_ip to), and every score-only rule (dga_*),
+    # doh_bypass, abused_service and dns_beacon, which fire on normal software.
+    "auto_isolate_rules": ["threat_feed", "dns_tunnel"],
+    "auto_isolate_exempt": [],       # device names never isolated: your own computers
+    "auto_isolate_max_per_hour": 2,  # past this it only alerts and says why (0 = never isolate)
+
     # --- paths ---
     # Development defaults (next to the code). An installed system keeps state and
     # events in /var/lib/ghostwall and config in /etc/ghostwall; go_shadow.sh writes
@@ -123,6 +143,8 @@ DEFAULTS = {
     "freeze_severity": "high",  # minimum severity that triggers a pcap freeze
 }
 
+
+AUTO_ISOLATE_MODES = ("off", "dry-run", "on")
 
 V3_PUBLIC = {
     "onnx_model": None,
@@ -159,4 +181,6 @@ def load_config(path: str | None = None, overrides: dict | None = None) -> dict:
                 cfg[k] = float(v)
     elif cfg.get("models") not in (None, "default"):
         raise ValueError(f'models must be "default" or "v3-public", not {cfg.get("models")!r}')
+    if cfg.get("auto_isolate") not in AUTO_ISOLATE_MODES:
+        raise ValueError(f'auto_isolate must be "off", "dry-run" or "on", not {cfg.get("auto_isolate")!r}')
     return cfg

@@ -27,6 +27,11 @@ class ValidatorTests(unittest.TestCase):
                                         "action", "event_id")}
         self.assertEqual(validate_event(minimal), [])
 
+    def test_auto_isolate_flags_are_booleans(self):
+        self.assertEqual(validate_event(dict(GOOD, auto_isolated=True, would_isolate=False)), [])
+        self.assertTrue(validate_event(dict(GOOD, auto_isolated="yes")))
+        self.assertTrue(validate_event(dict(GOOD, would_isolate=1)))
+
     def test_missing_required(self):
         for f in ("time", "device", "domain", "rule", "action", "event_id"):
             evt = {k: v for k, v in GOOD.items() if k != f}

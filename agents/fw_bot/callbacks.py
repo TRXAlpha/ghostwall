@@ -68,6 +68,9 @@ class CallbackHandler:
             elif action == "isolate":
                 self.client.isolate(device)
                 text = f"{device} isolated."
+            elif action == "release":
+                self.client.release(device)
+                text = f"{device} released."
             elif action == "details":
                 text = self._details(event_id, event)
             else:

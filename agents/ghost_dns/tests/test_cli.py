@@ -111,6 +111,15 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("not a domain", err)
 
+    def test_release_and_its_alias_call_the_api(self):
+        for word in ("release", "unisolate"):
+            code, out, _ = self.run_cli(word, "tv-box")
+            self.assertEqual(code, 0)
+            self.assertEqual(SEEN[-1], ("/release", "Bearer tok-example", {"name": "tv-box"}))
+            self.assertIn("Released", out)
+        code, _, err = self.run_cli("release", "tv box; rm")
+        self.assertEqual(code, 1)
+
     def test_learning(self):
         self.assertEqual(self.run_cli("learning", "off")[0], 0)
         self.assertEqual(SEEN[-1][2], {"enabled": False})

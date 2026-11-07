@@ -8,6 +8,7 @@
     ghostwall allow DOMAIN           trust a domain network-wide (no more alerts for it)
     ghostwall trusted                what you have trusted;  ghostwall untrust DOMAIN  undoes one
     ghostwall unblock DOMAIN         take a domain off the blocklist (inline mode)
+    ghostwall release DEVICE         let an isolated device back on the network (alias: unisolate)
     ghostwall learning on|off        alerts only (on) or allow blocking (off, inline mode)
     ghostwall password               the dashboard password
     ghostwall version                what is installed
@@ -277,6 +278,14 @@ def cmd_untrust(a) -> int:
 def cmd_unblock(a) -> int:
     r = control("/unblock", {"domain": _domain(a.domain)})
     print(f"Unblocked {r.get('domain')}.")
+    return 0
+
+
+def cmd_release(a) -> int:
+    if not NAME_RE.fullmatch(a.device):
+        raise CliError("a device name is letters, digits, '-' and '_' (see: sudo ghostwall devices)")
+    r = control("/release", {"name": a.device})
+    print(f"Released {r.get('name')}.")
     return 0
 
 
@@ -556,6 +565,9 @@ def main(argv=None) -> int:
     p = sub.add_parser("unblock", help="take a domain off the blocklist")
     p.add_argument("domain")
     p.set_defaults(fn=cmd_unblock)
+    p = sub.add_parser("release", aliases=["unisolate"], help="let an isolated device back on the network")
+    p.add_argument("device")
+    p.set_defaults(fn=cmd_release)
     p = sub.add_parser("learning", help="alerts only (on) or allow blocking (off)")
     p.add_argument("state", choices=["on", "off"])
     p.set_defaults(fn=cmd_learning)

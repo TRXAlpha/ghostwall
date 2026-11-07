@@ -55,6 +55,9 @@ def validate_event(evt: object) -> list[str]:
     if not isinstance(evt.get("rule"), str) or not evt.get("rule"):
         if "rule" in evt or not errs:
             errs.append("rule must be a non-empty string")
+    for flag in ("auto_isolated", "would_isolate"):
+        if flag in evt and not isinstance(evt[flag], bool):
+            errs.append(f"{flag} must be true or false")
     eid = evt.get("event_id")
     if not isinstance(eid, str) or not EVENT_ID_RE.match(eid):
         errs.append("event_id must match ^[A-Za-z0-9_-]{1,64}$")

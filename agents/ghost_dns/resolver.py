@@ -21,7 +21,9 @@ docs/ARCHITECTURE.md):
 """
 from __future__ import annotations
 
+import collections
 import concurrent.futures
+import ipaddress
 import json
 import os
 import queue
@@ -90,7 +92,10 @@ class Resolver:
         self.current_ip: dict[str, str] = {} # named device -> the address it last queried from
         self.stats = {"queries": 0, "blocked": 0, "recommended": 0, "suppressed": 0,
                       "forwarded": 0, "errors": 0, "fallbacks": 0, "failopen": 0,
-                      "rate_limited": 0, "blocked_upstream": 0, "popular": 0}
+                      "rate_limited": 0, "blocked_upstream": 0, "popular": 0,
+                      "auto_isolated": 0}
+        self._iso_lock = threading.Lock()
+        self._iso_times: collections.deque = collections.deque()   # clock() of each auto-isolation
 
     # -- policy (pure, no I/O except event log + state + enforcer) --------
     def decide(self, client_ip: str, domain: str, qtype: str, upstream_blocked: bool = False,
@@ -134,7 +139,8 @@ class Resolver:
                 why.append("not blocked (" + ("shadow mode" if self.shadow else "learning mode") + ")")
             evt = self._event(dev, domain, rule="threat_feed",
                               action="block" if enforce else "recommend",
-                              severity="high", scores={"feed": 1.0}, reasons=why)
+                              severity="high", scores={"feed": 1.0}, reasons=why,
+                              auto_ok=exact)   # a parent-domain match never isolates
             return Decision("block" if enforce else "recommend", "threat_feed", evt)
         hit = self.det.doh.check(client_ip, domain)
         if hit and domain not in self.state.allowlist:   # trusted by exact name: a DoH you chose
@@ -325,7 +331,7 @@ class Resolver:
         return None
 
     def _event(self, dev, domain, *, rule, action, severity, scores=None,
-               reasons=None, trust=None) -> dict:
+               reasons=None, trust=None, auto_ok=True) -> dict:
         evt = events_mod.make_event(
             device=dev.name, ip=dev.ip, mac=dev.mac, domain=domain,
             rule=rule, action=action, severity=severity, scores=scores,
@@ -342,6 +348,8 @@ class Resolver:
             self.stats["suppressed"] += 1
             return evt
         self._count_alert(dev.name)
+        if auto_ok:
+            self._auto_isolate(dev, evt)   # before the write: the alert says what happened
         self.events.write(evt)
         self.state.record_event(evt)
         if action == "block":
@@ -350,6 +358,75 @@ class Resolver:
             self.stats["recommended"] += 1
         self._maybe_freeze(dev, evt)
         return evt
+
+    def _auto_isolate(self, dev, evt) -> None:
+        """Opt-in (auto_isolate): cut off the device behind a high-confidence alert, the same
+        way POST /isolate does, and say so in the event. "dry-run" (also while learning, or
+        with the null backend) only says "would_isolate". Never raises: a failure here must
+        not cost the alert. Exempt, this box and already-isolated devices are left alone."""
+        mode = self.cfg.get("auto_isolate", "off")
+        rule = evt["rule"]
+        if mode not in ("dry-run", "on") or rule not in (self.cfg.get("auto_isolate_rules") or ()):
+            return
+        name = dev.name
+        reasons = evt.setdefault("reasons", [])
+        if self.devices.device_for_name(name) is None:
+            # /isolate and /release work on names; an unnamed address could not be released
+            reasons.append(f"not isolated: {name} has no name yet (sudo ghostwall name {name} NAME)")
+            return
+        if name in (self.cfg.get("auto_isolate_exempt") or ()) or self._is_this_box(dev.ip):
+            return
+        if self.state.is_isolated(name):
+            return
+        undo = f"undo: Telegram Release button or sudo ghostwall release {name}"
+        live = (mode == "on" and not self.state.learning and self.enforcer.backend.name != "null")
+        cap = int(self.cfg.get("auto_isolate_max_per_hour", 2))
+        try:
+            with self._iso_lock:
+                now = self.clock()
+                while self._iso_times and now - self._iso_times[0] >= 3600.0:
+                    self._iso_times.popleft()
+                if not live:
+                    why = ("auto_isolate is dry-run" if mode == "dry-run" else
+                           "learning mode is on" if self.state.learning else
+                           "enforcement is off (needs gateway mode)")
+                    evt["would_isolate"] = True
+                    reasons.append(f"would isolate automatically: {rule}; not isolated: {why}")
+                elif len(self._iso_times) >= cap:
+                    evt["would_isolate"] = True
+                    reasons.append(f"not isolated: the cap of {cap} automatic isolation(s) per hour "
+                                   f"(auto_isolate_max_per_hour) is used up; isolate by hand if you agree: "
+                                   f"/fw isolate {name}")
+                elif self._released_for(name, evt):
+                    return   # you released it for this finding: not again until the dedupe window ends
+                else:
+                    self.enforcer.isolate(dev.ip)
+                    self.state.isolate(name)
+                    self._iso_times.append(now)
+                    self.stats["auto_isolated"] += 1
+                    evt["auto_isolated"] = True
+                    reasons.append(f"isolated automatically: {rule}; {undo}")
+        except Exception as e:  # noqa: BLE001 (nft failed, bad address...)
+            evt.pop("auto_isolated", None)
+            evt["would_isolate"] = True
+            reasons.append(f"automatic isolation failed ({e}); isolate by hand: /fw isolate {name}")
+
+    def _released_for(self, name: str, evt: dict) -> bool:
+        """True if this device was already auto-isolated for this rule and domain family within
+        event_dedupe_seconds. A block alert is never deduped, so without this a device you
+        released would be cut off again by its very next lookup of the same name."""
+        window = float(self.cfg.get("event_dedupe_seconds", 86400))
+        key = f"{name}|{registrable_part(evt['domain'])}|{evt['rule']}|isolated"
+        return window > 0 and self.state.seen_alert(key, window)
+
+    def _is_this_box(self, ip: str) -> bool:
+        """The Pi itself and loopback are never isolated, whatever the exempt list says."""
+        if ip == self.cfg.get("pi_ip"):
+            return True
+        try:
+            return ipaddress.ip_address(ip).is_loopback
+        except ValueError:
+            return True   # not an address we could put in an nft set
 
     def _over_rate(self, device: str) -> bool:
         limit = int(self.cfg.get("alert_rate_per_device", 30))
