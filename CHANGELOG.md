@@ -9,8 +9,8 @@
   cycling through generated domain names (DGA) looks like, including word-based ones such
   as suppobox and matsnu that the models miss. Works from AdGuard's and Pi-hole's logs and
   inline. Typos, probes under real domains, local and search-domain names, Chrome's random
-  probes and anything your DNS server blocked never count; a domain that ever resolved on
-  your network never counts either (kept hashed in `state.json`). New settings
+  probes and anything your DNS server blocked never count; nor does a domain that has
+  resolved on your network before (kept hashed in `state.json`). New settings
   `nx_burst_enabled`, `nx_burst_min_distinct`, `nx_burst_window`. In a simulation on the
   public Netlab 360 DGA list it fired for all 25 families within 10 lookups
   ([results_nx_sim.md](agents/dga_eval/results_nx_sim.md)); a simulation, not a field result.
@@ -21,6 +21,14 @@
   top-100k domain or a shared platform (`github.io`, `drive.google.com`) is dropped at
   download time (104 that day); hosts under them (`evil.github.io`) stay
   ([results_feeds.md](agents/dga_eval/results_feeds.md)).
+- **Popular sites no longer raise DGA alerts on their score alone.** A name whose
+  registrable domain is on the cached Tranco top list (`popular_domains.txt`, top 100k)
+  skips `dga_high`, `dga_suspect` and `dga_corroborated`; the feed, tunnel, beacon,
+  `dga_burst` and `nx_burst` rules still apply. On Cisco Umbrella's top 1M (not used to set
+  the thresholds) DGA alerts drop from 0.315% to 0.245% of names, with no DGA family's
+  names hidden; `GHOSTWALL_FEED_POPULAR_TOP=1000000` takes it to 0.098%
+  ([results_fp_independent.md](agents/dga_eval/results_fp_independent.md)). New key
+  `popular_path`; no list means the old behaviour. `ghostwall status` shows the list's size.
 
 ### Changed
 

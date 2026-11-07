@@ -110,6 +110,7 @@ overrides any of them. The most useful keys:
 | `control_host`, `control_port` | `127.0.0.1`, `5380` | control API; must be loopback |
 | `control_token_path` | `null` | `null`: `control_token` next to `state_path`; `""` turns the token off (not recommended) |
 | `threat_feed_path` | installer: `/var/lib/ghostwall/threat_feed.txt` | written by `update_feed.py` |
+| `popular_path` | `popular_domains.txt` next to `threat_feed_path`; `""` turns it off | popular-domain guard for the DGA rules. A name whose registrable domain is on this list (the Tranco top list `update_feed.py` caches for its feed guard, `GHOSTWALL_FEED_POPULAR_TOP`, 100k by default) never raises `dga_high`, `dga_suspect` or `dga_corroborated` on its score alone and is never blocked on score. It still counts for `threat_feed`, `dns_tunnel`, `dns_beacon`, `dga_burst` and `nx_burst`. Reloaded when the file changes; with no file the rules behave as before. `ghostwall status` shows its size; `/status` returns `"popular": {"domains", "updated"}` |
 | `allowlist_path` | `agents/ghost_dns/allowlist.txt` | starter allowlist |
 | `devices_json` | installer: `/etc/ghostwall/devices.json` | device names; unknown clients are named by IP. An entry with a `mac` is known by it: its name follows it to a new IPv4 address, and its old address loses the name once another device has it |
 | `neighbours_path` | `/proc/net/arp` | which MAC is at an address: this default means the kernel's neighbour table (IPv4 and IPv6, read over netlink like `ip neigh`; `/proc/net/arp`, IPv4 only, if netlink isn't available); another path is read as a file in `/proc/net/arp`'s format. Only devices on this box's own network are in it (Docker's bridge network: none, so names stay on addresses). `""` turns it off |
@@ -133,6 +134,9 @@ overrides any of them. The most useful keys:
 | `web_ui/make_demo.py` | regenerate the demo data by running the real detector over a scripted day |
 | `ghost_dns/eval_detection.py` | before/after simulation on labelled data |
 | `ghost_dns/bench_latency.py [-n 200]` | inline-mode answer time for never-seen names, scoring before vs after the answer |
+| `dga_eval/fp_independent.py --data DIR [--download] [--jobs N]` | DGA false positives on Cisco Umbrella and Majestic (lists the thresholds were not set on), scored as the resolver does, with and without the popular-domain guard → `results_fp_independent.md` |
+| `dga_eval/feed_overlap.py [--tranco FILE] [--date D]` | each threat feed's overlap with the Tranco top 1k/10k/100k/1M and what the guard drops → `results_feeds.md` |
+| `dga_eval/nx_sim.py --data DIR` | simulated time to an `nx_burst` alert per public DGA family → `results_nx_sim.md` |
 | `dga_eval/baselines.py --data DIR` | the shipped models against simple "looks random" rules (entropy, ...) on the same public names → `results_baselines.md` |
 | `dga_eval/fair_lstm.py --data DIR` | 1-5-gram model vs an early-stopped LSTM, 3 seeds × 5 unseen-family folds → `results_lstm_fair.md` |
 | `dga_eval/train_public.py --data DIR` | retrain the opt-in `v3-public` model and its thresholds → `results_v3_public.md` |
