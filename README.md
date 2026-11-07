@@ -83,8 +83,12 @@ Keep them. Ghostwall runs on top and covers what a blocklist can't:
 | `dns_tunnel` | many long random subdomains of one domain (data smuggled over DNS) | high |
 | `dns_beacon` | an odd-looking name queried on a fixed timer (never under a popular site: a polled weather or course page is not a call-home) | warn |
 | `iot_new_domain` | a device you marked IoT (camera, TV, plug) looked up a domain it never used in its learning week. Optional default-deny: alert, dry-run or refuse (`iot_enforce`) | warn |
-| (opt-in) automatic isolation | gateway mode: an exact malware-list hit or a DNS tunnel cuts the device off at once, at most 2 an hour, one-tap Release in Telegram (`auto_isolate`) | |
 | `doh_ip`, `raw_ip`, `beacon` | gateway mode only (`ghost-flow`): a connection straight to a DNS-over-HTTPS server's IP, to an IP nobody looked up, or on a fixed timer | warn / high |
+
+**Opt-in containment.** In gateway mode, `auto_isolate` cuts a device off the moment it hits an
+exact malware-list entry or tunnels data over DNS (at most 2 an hour, one-tap Release in
+Telegram); IoT devices can be locked to the domains they learned (`iot_enforce`). Both start
+as dry-run: see [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 An alert, as written to `events.jsonl` and sent to Telegram:
 
