@@ -42,17 +42,18 @@ of those too).
 > restarts AdGuard once, a few seconds, to make it write its log promptly). It has run on
 > the author's home network (Raspberry Pi 4 + AdGuard Home) since late October 2026, which
 > is not long, and **it has not caught a real infection yet**: there was none to catch, so
-> the numbers from the field are false-alarm counts. Detection rates come from public data
-> ([How well it works](#how-well-it-works)). *Inline mode* (Ghostwall answers DNS and
+> the numbers from the field are false-alarm counts. Detection rates come from public data,
+> including the DNS of 83 real infections replayed through it: behaviour rules alone flagged
+> 53% of them, 75% of the last year's ([How well it works](#how-well-it-works)). *Inline mode* (Ghostwall answers DNS and
 > blocks) passes an end-to-end test in CI (a systemd container with a stand-in AdGuard:
 > forwarding, sinkholing, SERVFAIL when the upstream dies, and the way back to shadow
 > mode), but is not proven on a real network. Blocking through AdGuard or Pi-hole is proven
 > against the real servers in CI (a listed name is refused, a trusted one isn't), not yet on
 > a real network. See [Limits](#limits).
 >
-> **Current release: v0.3.0-beta.2** (`nx_burst` catches malware hunting for its server by
-> its failed lookups, malware and C2 lists beside the phishing list, and a popular-site guard
-> that cuts random-name false positives by about 70% on public data): [CHANGELOG](CHANGELOG.md). Already installed? `git pull && sudo
+> **Current release: v0.3.0-beta.3** (blocking, all opt-in: known-bad domains through AdGuard
+> or Pi-hole, IoT default-deny, newly registered domains, automatic isolation, and gateway
+> egress rules; plus the first catch rate on real infections): [CHANGELOG](CHANGELOG.md). Already installed? `git pull && sudo
 > ./install.sh` upgrades and keeps your settings, alerts, trusted domains and names.
 
 **Try it** on the box that runs AdGuard Home or Pi-hole:
@@ -258,6 +259,18 @@ Everything else (going inline, enforcement, the Pi-as-gateway setup, troubleshoo
 rollback): [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
 ## How well it works
+
+**On real infections.** [results_real_malware.md](agents/dga_eval/results_real_malware.md)
+(`agents/dga_eval/real_malware.py`) replays the DNS of 83 public packet captures of real
+malware infections (Stratosphere Lab 2010-2018, malware-traffic-analysis.net November 2025 to
+November 2026, pinned by sha256) through the real pipeline with every default. Behaviour
+rules alone, with no threat list at all, flagged the infected machine in **44 of 83 (53%)**,
+and in **38 of the 51 (75%)** recent ones, usually within 1 to 2 minutes; mostly a device
+suddenly using a service malware favours, random-looking names, or its own DoH. Adding
+today's lists raises that to 58% and 80%, an optimistic number: those lists were written
+after these infections were analysed. 17 captures of normal traffic gave 5 false alarms in
+3.5 device-days. Lab machines, not homes: it says what the rules see in real malware
+DNS, not how quiet they are on your network.
 
 **How well, on data anyone can check.** [results_public.md](agents/dga_eval/results_public.md)
 uses only public data (25 DGA families from Netlab 360, the Tranco top 1M) and reproduces
