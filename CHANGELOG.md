@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased
+## v0.3.0-beta.3 (2026-11-08)
+
+Update as usual: `git pull && sudo ./install.sh` (Docker: `git pull && docker compose up -d --build`;
+the bundled `compose.yaml` now pins a small network, 172.30.53.0/24). Your settings, alerts,
+allowlist and thresholds are kept. Every new kind of blocking is **off** until you turn it on,
+and each has a dry-run: see docs/OPERATIONS.md.
+
+**Measured on real infections** for the first time: the DNS of 83 public malware captures,
+replayed with every default. Behaviour rules alone flagged the infected machine in 53% of them
+(75% of the last year's), usually within 1 to 2 minutes; 17 normal-traffic captures gave 5
+false alarms in 3.5 device-days ([results_real_malware.md](agents/dga_eval/results_real_malware.md)).
 
 Found by a field test of v0.3.0-beta.2 on one home network (Raspberry Pi 4, AdGuard Home
 in Docker, shadow mode) on 2026-11-07: [docs/FIELD_RESULTS.md](docs/FIELD_RESULTS.md).
