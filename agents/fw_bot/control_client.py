@@ -107,8 +107,11 @@ class ControlClient:
     def release(self, name: str) -> dict:
         return self._call("/release", {"name": name})
 
-    def allow(self, domain: str) -> dict:
-        return self._call("/allow", {"domain": domain})
+    def allow(self, domain: str, device: str | None = None) -> dict:
+        body = {"domain": domain}
+        if device:
+            body["device"] = device   # an IoT device's own set, not the allowlist
+        return self._call("/allow", body)
 
     def lockdown(self) -> dict:
         return self._call("/lockdown", {})

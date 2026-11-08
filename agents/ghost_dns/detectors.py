@@ -87,6 +87,19 @@ def is_internal(host: str) -> bool:
     return any(label.startswith("_") for label in host.split("."))
 
 
+# Names an IoT device may always look up (iot_new_domain). Clock sync only: a device with
+# no time fails every TLS handshake, many firmwares rotate between these providers, and a
+# time query carries no data. Matched as the name or a subdomain of it, so time.google.com
+# is allowed while google.com as a whole is not. Connectivity checks are left out: a
+# device that makes them does so every time, so it learns them.
+IOT_BUILTIN_ALLOW = ("pool.ntp.org", "time.nist.gov", "time.google.com", "time.cloudflare.com",
+                     "time.windows.com", "time.apple.com", "time.android.com")
+
+
+def iot_builtin_allowed(host: str) -> bool:
+    return any(host == h or host.endswith("." + h) for h in IOT_BUILTIN_ALLOW)
+
+
 def tld_of(host: str) -> str:
     return host.rsplit(".", 1)[-1] if "." in host else ""
 

@@ -107,6 +107,71 @@ class TestNftSetTypes(unittest.TestCase):
         for tok in re.findall(r"[A-Za-z0-9:.]+(?:/\d+)?", elems):
             ipaddress.IPv6Network(tok, strict=False)  # raises on IPv4/garbage
 
+    def test_doh_sets_come_from_the_shared_list(self):
+        import gen
+        v4, v6 = gen.doh_ips()
+        _, e4 = self._elements("doh_ip4")
+        _, e6 = self._elements("doh_ip6")
+        for ip in ("1.1.1.2", "45.90.28.0", "194.242.2.2"):     # security, NextDNS, Mullvad
+            self.assertIn(ip, v4)
+            self.assertIn(ip, e4)
+        self.assertIn("2a07:a8c0::", e6)
+        self.assertEqual(len(v4), len(set(v4)))
+
+    def test_doh_list_refuses_private_or_garbage(self):
+        import tempfile
+        import gen
+        d = Path(tempfile.mkdtemp())
+        for bad in ("192.168.1.1\n2606:4700:4700::1111\n", "1.1.1.1; drop\n2606:4700:4700::1111\n",
+                    "1.1.1.1\n"):
+            (d / "l.txt").write_text(bad)
+            with self.assertRaises(gen.GenError):
+                gen.doh_ips(d / "l.txt")
+
+    def _render(self, cfg_over=None, iot=False):
+        import json
+        d = Path(tempfile.mkdtemp())
+        dev = json.loads((HERE / "devices.example.json").read_text())
+        if iot:
+            dev["devices"][0]["profile"] = "iot"
+        (d / "dev.json").write_text(json.dumps(dev))
+        cfg = json.loads((HERE / "config.json").read_text())
+        cfg.update(cfg_over or {})
+        (d / "cfg.json").write_text(json.dumps(cfg))
+        r = subprocess.run([sys.executable, str(HERE / "gen.py"), "--devices", str(d / "dev.json"),
+                            "--config", str(d / "cfg.json"), "--out", str(d / "out")],
+                           capture_output=True, text=True, cwd=str(HERE))
+        return r, (d / "out" / "ghostwall.nft").read_text() if r.returncode == 0 else ""
+
+    def test_egress_ports_dropped_toward_the_internet_only(self):
+        t = (OUT / "ghostwall.nft").read_text()
+        self.assertIn('ip daddr != 192.168.1.0/24 tcp dport { 23, 25, 135, 139, 445, 2323 } counter drop', t)
+        self.assertIn('udp dport { 137, 138, 1900 } counter drop', t)
+        self.assertNotIn("@iot_dev ip daddr", t)          # IoT lock off by default
+        r, t = self._render({"egress_block": False})
+        self.assertNotIn("dport { 23,", t)
+        r, t = self._render({"egress_block_tcp": [25]})
+        self.assertIn("tcp dport { 25 } counter drop", t)
+
+    def test_iot_egress_lock_modes(self):
+        r, t = self._render({"iot_egress_lock": "on"}, iot=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("elements = { 192.168.1.50 }", t)
+        self.assertIn("ip saddr @iot_dev ip daddr != 192.168.1.20 ip daddr != 100.64.0.0/10 meta l4proto tcp "
+                      "tcp dport != { 80, 443, 8883 } counter drop", t)
+        r, t = self._render({"iot_egress_lock": "log"}, iot=True)
+        self.assertIn('log prefix "ghostwall iot-egress: "', t)
+        self.assertNotIn("8883 } counter drop", t)
+        r, t = self._render({"iot_egress_lock": "on"})        # no IoT device: no rule, empty set
+        self.assertNotIn("@iot_dev ip daddr", t)
+        self.assertNotIn("elements = { }", t)
+
+    def test_egress_config_is_checked(self):
+        for bad in ({"iot_egress_lock": "yes"}, {"egress_block_tcp": [25, "445; drop"]},
+                    {"iot_allowed_tcp": [70000]}):
+            r, _ = self._render(bad, iot=True)
+            self.assertNotEqual(r.returncode, 0, bad)
+
     def test_matching_rules_cover_both_families(self):
         t = (OUT / "ghostwall.nft").read_text()
         for line in [

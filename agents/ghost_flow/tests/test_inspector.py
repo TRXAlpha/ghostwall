@@ -108,5 +108,16 @@ class InspectorTests(unittest.TestCase):
             self.assertEqual(V.validate_event(e), [])
 
 
+
+class DohListTests(unittest.TestCase):
+    def test_shared_list_loaded_and_fallback_when_missing(self):
+        import inspector
+        self.assertIn("1.1.1.2", inspector.DOH_IPS)            # from agents/netconf/doh_ips.txt
+        self.assertIn("2a07:a8c0::", inspector.DOH_IPS)
+        fallback = inspector.load_doh_ips("/nonexistent/doh_ips.txt")
+        self.assertIn("1.1.1.1", fallback)
+        self.assertNotIn("1.1.1.2", fallback)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -35,7 +35,12 @@ class Fake(BaseHTTPRequestHandler):
                   "feed": {"domains": 150000, "updated": None}, "popular": {"domains": 99000, "updated": None},
                   "named_devices": 1, "unnamed_clients": 0}
             if self.headers.get("Authorization") == "Bearer tok-example":
-                st["devices"] = [{"name": "laptop", "ip": "192.168.1.10", "last_seen": None}]
+                st["devices"] = [{"name": "laptop", "ip": "192.168.1.10", "last_seen": None},
+                                 {"name": "cam-1", "ip": "192.168.1.40", "last_seen": None, "profile": "iot",
+                                  "iot_domains": 3, "iot_learning_until": "2099-01-01T00:00:00Z"},
+                                 {"name": "tv-box", "ip": "192.168.1.41", "last_seen": None, "profile": "iot",
+                                  "iot_domains": 5, "iot_learning_until": "2026-01-01T00:00:00Z"}]
+                st["iot_enforce"] = "dry-run"
             else:   # as ghost-dns answers without the token
                 st["devices_hidden"] = True
             self._reply(st)
@@ -102,6 +107,9 @@ class CliTests(unittest.TestCase):
         self.assertIn("1,234 queries", out)
         self.assertIn("laptop", out)
         self.assertIn("99,000 top sites never alert on their score alone", out)
+        self.assertIn("2 IoT device(s), iot_enforce dry-run", out)
+        self.assertIn("IoT: learning until", out)        # cam-1
+        self.assertIn("IoT: 5 domains", out)              # tv-box, done learning
 
     def test_allow_sends_token_and_validates(self):
         code, out, _ = self.run_cli("allow", "Example.COM.")
@@ -110,6 +118,47 @@ class CliTests(unittest.TestCase):
         code, _, err = self.run_cli("allow", "not a domain")
         self.assertEqual(code, 1)
         self.assertIn("not a domain", err)
+
+    def test_allow_for_one_device(self):
+        code, out, _ = self.run_cli("allow", "Example.COM", "--device", "cam-1")
+        self.assertEqual(code, 0)
+        self.assertEqual(SEEN[-1][2], {"domain": "example.com", "device": "cam-1"})
+        self.assertIn("for", out)
+
+    def test_untrust_and_relearn_one_device(self):
+        code, out, _ = self.run_cli("untrust", "partner.example", "--device", "cam-1")
+        self.assertEqual(code, 0)
+        self.assertEqual(SEEN[-1][0:3:2], ("/untrust", {"domain": "partner.example", "device": "cam-1"}))
+        code, out, _ = self.run_cli("relearn", "cam-1")
+        self.assertEqual(code, 0)
+        self.assertEqual(SEEN[-1][0:3:2], ("/relearn", {"name": "cam-1"}))
+        self.assertIn("learns again", out)
+
+    def test_profile_marks_a_device(self):
+        path = os.path.join(self.etc, "devices.json")
+        with open(path, "w") as f:
+            json.dump({"devices": [{"name": "cam-1", "ip": "192.168.1.40", "mac": "aa:bb:cc:dd:ee:40",
+                                    "profile": "normal"}], "_pending": []}, f)
+        code, out, _ = self.run_cli("profile", "cam-1", "iot")
+        self.assertEqual(code, 0)
+        self.assertIn("iot_learn_days", out)
+        with open(path) as f:
+            self.assertEqual(json.load(f)["devices"][0]["profile"], "iot")
+        self.assertEqual(self.run_cli("profile", "cam-1", "normal")[0], 0)
+        with open(path) as f:
+            self.assertEqual(json.load(f)["devices"][0]["profile"], "normal")
+        code, _, err = self.run_cli("profile", "nobody", "iot")
+        self.assertEqual(code, 1)
+        self.assertIn("no device named nobody", err)
+
+    def test_release_and_its_alias_call_the_api(self):
+        for word in ("release", "unisolate"):
+            code, out, _ = self.run_cli(word, "tv-box")
+            self.assertEqual(code, 0)
+            self.assertEqual(SEEN[-1], ("/release", "Bearer tok-example", {"name": "tv-box"}))
+            self.assertIn("Released", out)
+        code, _, err = self.run_cli("release", "tv box; rm")
+        self.assertEqual(code, 1)
 
     def test_learning(self):
         self.assertEqual(self.run_cli("learning", "off")[0], 0)

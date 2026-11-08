@@ -135,7 +135,7 @@ class EndToEndTests(unittest.TestCase):
         cb_data = kb[0]["callback_data"]
         upd = {"callback_query": {"message": {"chat": {"id": 4242},
                                               "message_id": self.bot.grouper.groups[
-                                                  ("laptop", "dga_high", "high")].message_id},
+                                                  ("laptop", "dga_high", "high", False)].message_id},
                                   "from": {"id": 4242}, "data": cb_data}}
         r = self.bot.process_update(upd)
         self.assertIn("Unblocked", r)
@@ -152,7 +152,7 @@ class EndToEndTests(unittest.TestCase):
         bad = kb[0]["callback_data"][:-1] + ("9" if kb[0]["callback_data"][-1] != "9" else "8")
         upd = {"callback_query": {"message": {"chat": {"id": 4242},
                                               "message_id": self.bot.grouper.groups[
-                                                  ("laptop", "dga_high", "high")].message_id},
+                                                  ("laptop", "dga_high", "high", False)].message_id},
                                   "from": {"id": 4242}, "data": bad}}
         r = self.bot.process_update(upd)
         self.assertIn("ignored", r)

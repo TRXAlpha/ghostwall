@@ -17,11 +17,15 @@ docs/ARCHITECTURE.md):
   (a name whose registrable domain is on the popular list, Tranco top N, gets neither:
    its score alone raises nothing, nor does a timer on it (dns_beacon); the feed, tunnel
    and nx_burst rules still apply)
+  * a device marked "profile": "iot", after iot_learn_days, looking up a registrable
+    domain outside what it learned -> RECOMMEND, event rule=iot_new_domain (BLOCK with
+    iot_enforce "on", inline mode, learning off); only when no other rule alerted
   * everything else                -> ALLOW, no event
 """
 from __future__ import annotations
 
 import concurrent.futures
+import ipaddress
 import json
 import os
 import queue
@@ -36,7 +40,7 @@ import sys
 
 import dnsmsg
 import events as events_mod
-from detectors import RARE_TLDS, Detectors, abused_service, is_internal, nx_countable, tld_of
+from detectors import RARE_TLDS, Detectors, abused_service, is_internal, iot_builtin_allowed, nx_countable, tld_of
 from tokenizer import registrable_part
 
 
@@ -90,7 +94,9 @@ class Resolver:
         self.current_ip: dict[str, str] = {} # named device -> the address it last queried from
         self.stats = {"queries": 0, "blocked": 0, "recommended": 0, "suppressed": 0,
                       "forwarded": 0, "errors": 0, "fallbacks": 0, "failopen": 0,
-                      "rate_limited": 0, "blocked_upstream": 0, "popular": 0}
+                      "rate_limited": 0, "blocked_upstream": 0, "popular": 0,
+                      "auto_isolated": 0}
+        self._iso_lock = threading.Lock()   # auto_isolate: check the cap and isolate as one step
 
     # -- policy (pure, no I/O except event log + state + enforcer) --------
     def decide(self, client_ip: str, domain: str, qtype: str, upstream_blocked: bool = False,
@@ -106,8 +112,15 @@ class Resolver:
 
         when: the time the query was made, on self.clock()'s scale, when it is known and
         differs from now (shadow mode reads queries in batches, after the fact). The
-        timing rules (tunnel, beacon, nx_burst, dga_burst) use it; None means now."""
+        timing rules (tunnel, beacon, nx_burst, dga_burst) use it; None means now.
+
+        rcode "FILTERED": the upstream resolver (Quad9, Cloudflare security) blocked the
+        name itself. It is treated like a name the DNS server blocked: not an
+        unregistered domain for nx_burst, and one `upstream_block` info event says so."""
         domain = domain.rstrip(".").lower()
+        by_upstream = rcode == "FILTERED" and not upstream_blocked
+        if by_upstream:
+            upstream_blocked = True
         if not domain:
             return Decision("allow", "empty")
         dev = self._device(client_ip)
@@ -130,11 +143,14 @@ class Resolver:
             on = " and ".join(self.det.threat_feed.sources(listed)) or "the threat feed"
             why = [f"{listed} is on {on}" if exact else f"{domain} is under {listed}, which is on {on}",
                    f"a service you know? sudo ghostwall allow {listed}"]
-            if not enforce:
+            if upstream_blocked:    # the DNS server's own filtering did the blocking
+                why.append("blocked by your upstream DNS filter" if by_upstream else "blocked by your DNS server")
+            elif not enforce:
                 why.append("not blocked (" + ("shadow mode" if self.shadow else "learning mode") + ")")
             evt = self._event(dev, domain, rule="threat_feed",
                               action="block" if enforce else "recommend",
-                              severity="high", scores={"feed": 1.0}, reasons=why)
+                              severity="high", scores={"feed": 1.0}, reasons=why,
+                              isolate_hold=self._feed_hold(domain, listed, exact, now))
             return Decision("block" if enforce else "recommend", "threat_feed", evt)
         hit = self.det.doh.check(client_ip, domain)
         if hit and domain not in self.state.allowlist:   # trusted by exact name: a DoH you chose
@@ -147,8 +163,22 @@ class Resolver:
         if svc:
             return svc
 
+        if by_upstream:
+            self.stats["upstream_filtered"] = self.stats.get("upstream_filtered", 0) + 1
+            self._event(dev, domain, rule="upstream_block", action="allow", severity="info",
+                        reasons=["blocked by your upstream DNS filter (Quad9 or Cloudflare security), "
+                                 "not by Ghostwall; no connection was made"])
+        # IoT default-deny (a device marked "profile": "iot"). Before the allowlist on
+        # purpose: the allowlist is network-wide (and its starter file trusts whole clouds),
+        # an IoT device's set is its own; Trust on its alert adds to that set. A refusal
+        # is final here. Otherwise the alert is raised only if no other rule below
+        # alerts on the same lookup: one lookup, one alert.
+        iot = self._iot_check(client_ip, dev, domain, rcode, upstream_blocked)
+        if iot is not None and iot["block"]:
+            return self._iot_alert(dev, domain, iot)
+
         if self.state.is_allowed(domain):
-            return Decision("allow", "allowlist")
+            return self._iot_alert(dev, domain, iot) or Decision("allow", "allowlist")
 
         if is_internal(domain):          # homepi, *.ts.net, *.local, _svc._tcp... not internet names
             return Decision("allow", "internal")
@@ -215,7 +245,7 @@ class Resolver:
         # nx_burst rules.
         if dga >= min(rec_thr, corr_thr) and self.det.popular.match(domain, now):
             self.stats["popular"] += 1
-            return behaviour or Decision("allow", "popular")
+            return behaviour or self._iot_alert(dev, domain, iot) or Decision("allow", "popular")
 
         if dga >= block_thr:
             can_block = (not self.state.learning) and is_new and not self.shadow
@@ -250,7 +280,7 @@ class Resolver:
                               reasons=reasons + [f"rarely-legitimate TLD .{tld_of(domain)}"])
             return Decision("recommend", "dga_corroborated", evt)
 
-        return behaviour or Decision("allow", "clean")
+        return behaviour or self._iot_alert(dev, domain, iot) or Decision("allow", "clean")
 
     def _device(self, client_ip: str):
         mac = self.neighbours.mac(client_ip) if self.neighbours is not None else None
@@ -312,6 +342,51 @@ class Resolver:
                                    "trust it if you know why this device started"])
         return Decision("recommend", "abused_service", evt)
 
+    def _iot_check(self, client_ip: str, dev, domain: str, rcode: str | None,
+                   upstream_blocked: bool) -> dict | None:
+        """iot_new_domain, the finding without its alert. A device marked "profile": "iot"
+        talks to a small, stable set of domains. During iot_learn_days from its first
+        lookup they are learned (hashed, in state.json); after that a registrable domain
+        outside the set is a finding, and with iot_enforce "on" a refusal (inline mode,
+        learning off; shadow mode answers nothing, so never). Callers have already let the
+        threat feed, DoH and abused-service rules speak: those names are never learned."""
+        if str(dev.profile).lower() != "iot" or client_ip == self.cfg.get("pi_ip"):
+            return None
+        if upstream_blocked or rcode == "NXDOMAIN":
+            return None    # no connection followed (your DNS server refused it, or no such name)
+        if is_internal(domain) or iot_builtin_allowed(domain) or abused_service(domain):
+            return None    # LAN names; clock sync; abused services keep their own rule
+        if self.state.is_blocked(domain):
+            return None    # the blocklist rule refuses it anyway; never learned either
+        days = float(self.cfg.get("iot_learn_days", 7))
+        if self.state.iot_observe(dev.name, domain, days) != "new":
+            return None
+        mode = str(self.cfg.get("iot_enforce", "off")).strip().lower()
+        block = mode == "on" and not self.shadow and not self.state.learning
+        reg = registrable_part(domain)
+        why = [f"{dev.name} normally talks to {self.state.iot_count(dev.name)} domains; {reg} is not one of them",
+               f"allow it for this device only: Trust, or sudo ghostwall allow {reg} --device {dev.name}"]
+        if mode == "on" and not block:
+            why.append("not blocked (" + ("shadow mode" if self.shadow else "learning mode") + ")")
+        elif mode == "dry-run":
+            why.append('iot_enforce is "dry-run": it would be refused')
+        return {"block": block, "would_block": mode in ("on", "dry-run") and not block,
+                "reasons": why, "trust": reg}
+
+    def _iot_alert(self, dev, domain: str, iot: dict | None):
+        """The Decision for an _iot_check() finding, alert included (None without one).
+        One alert per device and domain family (rule_dedupe_seconds); a refused name
+        is refused on every retry, its alert is not repeated."""
+        if iot is None:
+            return None
+        if iot["block"] and self._is_repeat(dev.name, domain, "iot_new_domain"):
+            self.stats["blocked"] += 1
+            return Decision("block", "iot_new_domain")
+        action = "block" if iot["block"] else "recommend"
+        evt = self._event(dev, domain, rule="iot_new_domain", action=action, severity="warn",
+                          reasons=iot["reasons"], trust=iot["trust"], would_block=iot["would_block"])
+        return Decision(action, "iot_new_domain", evt)
+
     def _emit_hit(self, dev, domain, hit) -> dict:
         # A tunnel uses a new subdomain for every query: trusting the one name in the
         # alert would never match the next, so Trust means the zone it goes to.
@@ -325,11 +400,13 @@ class Resolver:
         return None
 
     def _event(self, dev, domain, *, rule, action, severity, scores=None,
-               reasons=None, trust=None) -> dict:
+               reasons=None, trust=None, would_block=False, isolate_hold=None) -> dict:
+        """isolate_hold: why this finding, though its rule is in auto_isolate_rules, must
+        not isolate the device (said in the event when auto_isolate is on or dry-run)."""
         evt = events_mod.make_event(
             device=dev.name, ip=dev.ip, mac=dev.mac, domain=domain,
             rule=rule, action=action, severity=severity, scores=scores,
-            reasons=reasons, trust=trust)
+            reasons=reasons, trust=trust, would_block=would_block)
         # Any web page can make a browser look up thousands of made-up names, so one
         # device's alerts are capped per minute (a block still happens; only its alert
         # is dropped). The flood itself still shows up as a dga_burst alert.
@@ -338,10 +415,11 @@ class Resolver:
             return evt
         # A device re-querying the same domain family is one finding, not fifty.
         # Blocks are always recorded; only repeat recommendations are suppressed.
-        if action == "recommend" and self._is_repeat(dev.name, domain, rule):
+        if (action == "recommend" or rule == "upstream_block") and self._is_repeat(dev.name, domain, rule):
             self.stats["suppressed"] += 1
             return evt
         self._count_alert(dev.name)
+        self._auto_isolate(dev, evt, isolate_hold)   # before the write: the alert says what happened
         self.events.write(evt)
         self.state.record_event(evt)
         if action == "block":
@@ -350,6 +428,152 @@ class Resolver:
             self.stats["recommended"] += 1
         self._maybe_freeze(dev, evt)
         return evt
+
+    def _feed_hold(self, domain: str, listed: str, exact: bool, now: float) -> str | None:
+        """Why a threat_feed hit is not proof enough to cut a device off, or None. Checked
+        only for auto_isolate; the alert and the block are unchanged."""
+        if not exact:
+            return f"{domain} only matched {listed}, a parent domain on the list"
+        if self.det.popular.match(domain, now):
+            return f"{registrable_part(domain)} is a popular site (a shared platform or CDN)"
+        if abused_service(domain):
+            return "it is on a shared service malware abuses, not proof about this device"
+        labels = self.det.threat_feed.sources(listed)
+        if labels and all(lab.endswith("(phishing)") for lab in labels):
+            return "only phishing lists name it (someone opened a link; the device is not infected)"
+        return None
+
+    def _auto_isolate(self, dev, evt, hold: str | None = None) -> None:
+        """Opt-in (auto_isolate): cut off the device behind a high-confidence alert, the way
+        POST /isolate does, record it in state.json, and say so in the event. Dry-run, and
+        "on" while learning, in shadow mode, without nft or without pi_ip, only say
+        "would_isolate". Never raises: a failure here must not cost the alert, and says so
+        in the event ("auto_isolate_failed"). The Pi, loopback, exempt and unnamed devices
+        are never isolated; nor is one past the hourly cap (kept across restarts), nor one
+        you released from an isolation for the same finding."""
+        mode = self.cfg.get("auto_isolate", "off")
+        rule = evt["rule"]
+        if mode not in ("dry-run", "on") or rule not in (self.cfg.get("auto_isolate_rules") or ()):
+            return
+        reasons = evt.setdefault("reasons", [])
+        name = dev.name
+        try:
+            skip = hold or self._iso_skip(dev)
+            ip = None if skip else self._iso_address(dev)
+            if not skip and ip is None:
+                skip = f"{name} has no IPv4 LAN address to isolate (the isolated set holds IPv4 only)"
+            if skip:
+                reasons.append(f"not isolated automatically: {skip}")
+                return
+            with self._iso_lock:   # decide() runs on many threads: one check-and-isolate at a time
+                if self.state.is_isolated(name):
+                    reasons.append(f"{name} is already isolated")
+                    return
+                dry = self._iso_dry(mode)
+                if dry:
+                    evt["would_isolate"] = True
+                    reasons.append(f"would isolate {name} automatically ({rule}); not isolated: {dry}")
+                    return
+                window = float(self.cfg.get("event_dedupe_seconds", 86400))
+                key = f"{name}|{registrable_part(evt['domain'])}|{rule}|isolated"
+                if window > 0 and self.state.recently(key, window):
+                    reasons.append(f"not isolated again: {name} was isolated for this finding and "
+                                   "then released (until event_dedupe_seconds passes)")
+                    return
+                cap = int(self.cfg.get("auto_isolate_max_per_hour", 2))
+                if self.state.auto_isolations_within(3600) >= cap:
+                    evt["would_isolate"] = True
+                    reasons.append(f"not isolated: {cap} automatic isolation(s) in the last hour is the "
+                                   f"cap (auto_isolate_max_per_hour); isolate by hand if you agree: "
+                                   f"/fw isolate {name}")
+                    return
+                try:
+                    self.enforcer.isolate(ip)
+                except Exception as exc:  # noqa: BLE001 (nft failed, table missing...)
+                    self._iso_failed(evt, name, exc)
+                    return
+                try:
+                    self.state.isolate(name, ip)
+                except Exception as exc:  # noqa: BLE001 (state.json unwritable): undo the kernel side
+                    try:
+                        self.enforcer.release(ip)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self._iso_failed(evt, name, exc)
+                    return
+                if window > 0:
+                    self.state.seen_alert(key, window)   # records it: a release sticks
+                self.state.note_auto_isolation()
+                self.stats["auto_isolated"] += 1
+                evt["auto_isolated"] = True
+                reasons.append(f"isolated {name} ({ip}) automatically: {rule}; undo: the Release button, "
+                               f"the dashboard or sudo ghostwall release {name}")
+            print(f"[ghost-dns] auto-isolated {name} at {ip} ({rule}, event {evt['event_id']})",
+                  file=sys.stderr, flush=True)
+        except Exception as exc:  # noqa: BLE001 (a bug here must never cost the alert)
+            self._iso_failed(evt, name, exc)
+
+    def _iso_failed(self, evt, name, exc) -> None:
+        evt.pop("auto_isolated", None)
+        evt["would_isolate"] = True
+        evt["auto_isolate_failed"] = True
+        evt.setdefault("reasons", []).append(
+            f"automatic isolation FAILED ({str(exc).strip()[:200] or type(exc).__name__}); "
+            f"isolate by hand: /fw isolate {name}")
+        print(f"[ghost-dns] auto-isolate of {name} failed: {exc!r}", file=sys.stderr, flush=True)
+
+    def _iso_dry(self, mode: str) -> str | None:
+        """Why "on" can only be a dry run right now, or None (it may isolate)."""
+        if mode == "dry-run":
+            return "auto_isolate is dry-run"
+        if self.shadow:
+            return "shadow mode only watches"
+        if self.state.learning:
+            return "learning mode is on"
+        if self.enforcer.backend.name != "nft":
+            return 'enforcement is off (needs gateway mode and "enforce": "nft")'
+        if not self.cfg.get("pi_ip"):
+            return 'set "pi_ip" first, so this box can never isolate itself'
+        return None
+
+    def _iso_skip(self, dev) -> str | None:
+        """Devices that are never isolated, whatever the mode: unnamed (/release works on
+        names, so it could not be undone), exempt, and this box itself."""
+        name = dev.name
+        named = self.devices.device_for_name(name)
+        if named is None:
+            return f"{name} has no name yet (sudo ghostwall name {name} NAME)"
+        exempt = set(self.cfg.get("auto_isolate_exempt") or ())
+        if name in exempt or dev.ip in exempt or named.ip in exempt:
+            return f"{name} is exempt (auto_isolate_exempt)"
+        if self._is_this_box(dev.ip) or self._is_this_box(named.ip):
+            return f"{name} is this box"
+        return None
+
+    def _iso_address(self, dev) -> str | None:
+        """The address to put in the isolated set: where it queried from, or (queried over
+        IPv6) its address in devices.json. Only a private IPv4 address, never the Pi's."""
+        named = self.devices.device_for_name(dev.name)
+        for ip in (dev.ip, named.ip if named is not None else None):
+            try:
+                a = ipaddress.ip_address(str(ip))
+            except ValueError:
+                continue
+            if (a.version == 4 and a.is_private and not (a.is_loopback or a.is_link_local
+                                                         or a.is_unspecified or a.is_multicast)
+                    and not self._is_this_box(str(a))):
+                return str(a)
+        return None
+
+    def _is_this_box(self, ip: str) -> bool:
+        """The Pi itself (pi_ip) and loopback are never isolated, whatever the exempt list
+        says."""
+        if ip == self.cfg.get("pi_ip"):
+            return True
+        try:
+            return ipaddress.ip_address(ip).is_loopback
+        except ValueError:
+            return True   # not an address we could put in an nft set
 
     def _over_rate(self, device: str) -> bool:
         limit = int(self.cfg.get("alert_rate_per_device", 30))

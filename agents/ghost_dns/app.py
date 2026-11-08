@@ -50,6 +50,62 @@ def build(cfg: dict):
     return devices, gstate, scorer, enforcer, event_log, capture, resolver
 
 
+class IpBlocklistLoader:
+    """Gateway mode: keeps the firewall's drop_net4 / drop_net6 sets in line with
+    ip_blocklist.txt (update_ipfeed.py rewrites it daily). Checked once a minute; a load
+    that fails keeps the sets as they were and is reported once until it works again."""
+
+    def __init__(self, path, enforcer, log=print):
+        self.path, self.enforcer, self.log = path, enforcer, log
+        self.mtime, self.failing = None, False
+
+    def check(self) -> bool:
+        if not self.path or getattr(self.enforcer.backend, "name", "") != "nft":
+            return False
+        try:
+            m = os.path.getmtime(self.path)
+        except OSError:
+            return False
+        if m == self.mtime:
+            return False
+        from update_ipfeed import read_networks
+        v4, v6 = read_networks(self.path)
+        try:
+            self.enforcer.load_drop_nets(v4, v6)
+        except Exception as exc:  # noqa: BLE001 - never take ghost-dns down for this
+            if not self.failing:
+                self.log(f"[ghost-dns] could not load {self.path} into the firewall: {exc}", flush=True)
+            self.failing = True
+            return False
+        self.mtime, self.failing = m, False
+        self.log(f"[ghost-dns] firewall: {len(v4)} IPv4 and {len(v6)} IPv6 reputation networks blocked", flush=True)
+        return True
+
+
+def restore_isolations(gstate, enforcer, devices, log=print) -> int:
+    """Put every device state.json says is isolated back into the nft set. A reboot (or a
+    reload of ghostwall.nft) empties the set while state.json keeps the names, so without
+    this the dashboard would say "isolated" about a device that is online again, and
+    auto_isolate would skip it as already isolated. Only with the nft backend. A failure is
+    logged and skipped, never fatal: `ghostwall release NAME` clears a stale entry.
+    Returns how many addresses went back in."""
+    if enforcer.backend.name != "nft":
+        return 0
+    n = 0
+    for name in sorted(gstate.isolated):
+        d = devices.device_for_name(name)
+        ips = gstate.isolated_addresses(name) or ([d.ip] if d is not None else [])
+        for ip in ips:
+            try:
+                enforcer.isolate(ip)
+                n += 1
+                log(f"[ghost-dns] {name} is isolated (state.json): {ip} back in the isolated set; "
+                    f"undo: sudo ghostwall release {name}", flush=True)
+            except Exception as exc:  # noqa: BLE001
+                log(f"[ghost-dns] WARNING could not re-isolate {name} at {ip}: {exc}", flush=True)
+    return n
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="ghost-dns resolver + control API")
     ap.add_argument("--config")
@@ -94,6 +150,7 @@ def main(argv=None):
     if args.once:
         print("[ghost-dns] --once: built OK, exiting", flush=True)
         return 0
+    restore_isolations(gstate, enforcer, devices)
 
     # Shadow mode: pin the follower's starting point (the log's current end) before the
     # control API answers, so every query written after /status responds gets scored.
@@ -112,6 +169,9 @@ def main(argv=None):
     t = threading.Thread(target=control.serve_forever, daemon=True)
     t.start()
 
+    ipblock = IpBlocklistLoader(cfg.get("ip_blocklist_path"), enforcer)
+    ipblock.check()
+
     def flusher():  # throttled state changes reach the disk within a minute, even when idle
         while True:
             time.sleep(60)
@@ -119,6 +179,7 @@ def main(argv=None):
                 gstate.flush()
             except OSError as exc:
                 print(f"[ghost-dns] state flush failed: {exc}", file=sys.stderr, flush=True)
+            ipblock.check()
     threading.Thread(target=flusher, daemon=True).start()
     try:
         if follower:

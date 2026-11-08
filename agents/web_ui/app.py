@@ -43,7 +43,7 @@ DOMAIN_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a
 ACTIONS = {
     "isolate": ("/isolate", {"name"}),
     "release": ("/release", {"name"}),
-    "allow": ("/allow", {"domain"}),
+    "allow": ("/allow", {"domain", "device"}),   # device: an IoT device's own set
     "untrust": ("/untrust", {"domain"}),
     "trusted": ("/trusted", set()),
     "lockdown": ("/lockdown", set()),
@@ -151,6 +151,8 @@ def validate_action(payload: dict) -> tuple[str, dict]:
         if not DOMAIN_RE.match(domain):
             raise ValueError("valid domain required")
         body["domain"] = domain
+        if "device" in body and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", str(body["device"])):
+            raise ValueError("device must be a device name")
     if name == "learning" and not isinstance(body.get("enabled"), bool):
         raise ValueError("enabled must be true or false")
     return path, body

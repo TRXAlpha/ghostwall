@@ -184,6 +184,7 @@ const RULES = {
   dns_tunnel: "possible data over DNS (tunnel)", dns_beacon: "looked up on a fixed timer",
   abused_service: "started using a service malware favours", doh_ip: "connected to a DNS-over-HTTPS server directly",
   blocklist: "on your blocklist", raw_ip: "connected to a raw IP", beacon: "connects on a fixed timer",
+  iot_new_domain: "IoT device looked up a domain it never used",
 };
 // No Trust button: a phishing-list hit is trusted with a typed `ghostwall allow` (its alert
 // says so), not one click; a burst is many different names.
@@ -218,6 +219,13 @@ function ago(iso) {
 const fmt = (n) => n == null ? "—" : Number(n).toLocaleString("en-US");
 
 const SOURCES = { adguard: "AdGuard Home's", pihole: "Pi-hole's" };
+
+// A device marked "profile": "iot": still learning what it talks to, or how many domains it has.
+function iotNote(d) {
+  if (d.profile !== "iot") return "";
+  const until = Date.parse(d.iot_learning_until || "");
+  return isFinite(until) && until > Date.now() ? " · IoT, learning" : ` · IoT, ${Number(d.iot_domains) || 0} domains`;
+}
 
 function renderStatus(st) {
   cur = { learning: st.learning, lockdown: st.lockdown };
@@ -258,7 +266,7 @@ function renderStatus(st) {
     <div class="dev${d.isolated ? " iso" : ""}">
       <div class="n">${esc(d.name)}</div>
       <div class="c">${btn}</div>
-      <div class="a">${esc(d.ip)}${d.last_seen ? " · " + esc(ago(d.last_seen)) : ""}</div>
+      <div class="a">${esc(d.ip)}${d.last_seen ? " · " + esc(ago(d.last_seen)) : ""}${iotNote(d)}</div>
     </div>`;
   }).join("") || '<div class="empty">No names yet, so alerts show IP addresses. Name devices in devices.json.</div>';
 }
@@ -286,7 +294,7 @@ function renderEvents(evs) {
   // collapse repeats of the same device + domain + rule into one row (newest first)
   const groups = new Map();
   for (const e of alerts.filter(e => !covered(e))) {
-    const k = e.device + "|" + e.domain + "|" + e.rule;
+    const k = e.device + "|" + e.domain + "|" + e.rule + (e.auto_isolated ? "|isolated" : "");
     if (groups.has(k)) groups.get(k).n++; else groups.set(k, { ...e, n: 1 });
   }
   const rows = [...groups.values()];
@@ -294,14 +302,22 @@ function renderEvents(evs) {
   $("feed").innerHTML = rows.map(e => {
     const score = e.scores && e.scores.dga != null ? ` · score ${e.scores.dga.toFixed(2)}` : "";
     const why = (e.reasons || []).slice(0, 3).join(" · ");
+    // auto_isolate: its sentence is the last reason, often past the three shown above
+    const isoReason = (e.reasons || []).filter(r => /isolat/i.test(r)).slice(-1)[0] || "";
+    const isoWhy = esc(isoReason);
+    const iso = e.auto_isolated ? `<span class="tag block" title="${isoWhy}">isolated</span>`
+      : e.auto_isolate_failed ? `<span class="tag block" title="${isoWhy}">isolation failed</span>`
+      : e.would_isolate ? `<span class="tag" title="${isoWhy}">would isolate</span>` : "";
     return `<li class="alert ${esc(e.severity || "warn")}">
       <span class="sev"></span>
       <div class="dom">${esc(e.domain)}</div>
       <div class="side"><span class="when" title="${esc(e.time)}">${ago(e.time)}</span>
-        <span class="tag ${e.action === "block" ? "block" : ""}">${e.action === "block" ? "blocked" : "flagged"}</span>
-        ${NO_TRUST.has(e.rule) ? "" : `<button data-act="allow" data-domain="${esc(e.trust || e.domain)}"${e.trust ? ` title="trusts ${esc(e.trust)} and everything under it"` : ""}>Trust</button>`}</div>
+        <span class="tag ${e.action === "block" ? "block" : ""}">${e.action === "block" ? "blocked" : e.would_block ? "would block" : "flagged"}</span>${iso}
+        ${NO_TRUST.has(e.rule) ? "" : e.rule === "iot_new_domain" ? `<button data-act="allow" data-domain="${esc(e.trust || e.domain)}" data-device="${esc(e.device)}" title="adds ${esc(e.trust || e.domain)} to what ${esc(e.device)} normally talks to; other devices are not affected">Allow for ${esc(e.device)}</button>`
+          : `<button data-act="allow" data-domain="${esc(e.trust || e.domain)}"${e.trust ? ` title="trusts ${esc(e.trust)} and everything under it"` : ""}>Trust</button>`}</div>
       <div class="meta"><b>${esc(e.device)}</b>: ${esc(RULES[e.rule] || e.rule)}${score}${e.n > 1 ? ` · ×${e.n}` : ""}</div>
       ${why ? `<div class="why">${esc(why)}</div>` : ""}
+      ${isoReason && !(e.reasons || []).slice(0, 3).includes(isoReason) ? `<div class="why">${isoWhy}</div>` : ""}
     </li>`;
   }).join("") || '<li class="empty">No alerts. Every query scored so far looked normal.</li>';
 }
@@ -312,6 +328,7 @@ document.addEventListener("click", (ev) => {
   if (a === "learning") act("learning", { enabled: !cur.learning }, cur.learning ? "Blocking on" : "Blocking off");
   else if (a === "lockdown") act("lockdown", {}, cur.lockdown ? "Lockdown released" : "Lockdown on");
   else if (a === "isolate" || a === "release") act(a, { name: b.dataset.name }, `${b.dataset.name}: ${a}d`);
+  else if (a === "allow" && b.dataset.device) act("allow", { domain: b.dataset.domain, device: b.dataset.device }, `Allowed ${b.dataset.domain} for ${b.dataset.device}`);
   else if (a === "allow") act("allow", { domain: b.dataset.domain }, "Trusted " + b.dataset.domain);
   else if (a === "untrust") act("untrust", { domain: b.dataset.domain }, "No longer trusted: " + b.dataset.domain);
 });

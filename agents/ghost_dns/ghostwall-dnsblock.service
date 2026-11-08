@@ -1,0 +1,45 @@
+[Unit]
+Description=Ghostwall DNS-server blocklists (AdGuard Home / Pi-hole), idle unless DNS_BLOCK_FEED or DNS_BLOCK_ADS is set
+# docker.service: with AdGuard / Pi-hole in Docker the list is served on the container's gateway address
+After=network-online.target AdGuardHome.service ghostwall-dns.service docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ghostwall
+Group=ghostwall
+WorkingDirectory=/opt/ghostwall/agents/ghost_dns
+# DNS_BLOCK_*, ADGUARD_URL/USER/PASSWORD, PIHOLE_URL/PASSWORD: the credentials are used for the
+# DNS server's API only and are never logged. Only this unit needs them (nothing else reads them).
+EnvironmentFile=-/etc/ghostwall/ghostwall.env
+ExecStart=/opt/ghostwall/.venv/bin/python dns_block.py run --config /etc/ghostwall/ghost_dns.json
+StateDirectory=ghostwall
+StateDirectoryMode=0750
+Restart=always
+RestartSec=10
+# It serves one text file and calls one local API: no capabilities, no devices, no new files
+# outside its state folder.
+NoNewPrivileges=true
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

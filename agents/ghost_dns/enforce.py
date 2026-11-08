@@ -27,6 +27,14 @@ SET_BLOCKED_IP = "blocked_ip"
 LOCKDOWN_TAG = "ghostwall_lockdown"
 
 
+def _not_there(exc: Exception) -> bool:
+    """True if nft refused because the element (or the whole ghostwall table) is not
+    there: `delete element` of something absent fails with ENOENT. Absent means not
+    isolated, which is what a release wants."""
+    return isinstance(exc, subprocess.CalledProcessError) and \
+        "No such file or directory" in str(exc.stderr or "")
+
+
 def _valid_ip(ip: str) -> str:
     """Return the normalised address or raise ValueError. Guards the nft CLI."""
     return str(ipaddress.ip_address(ip))
@@ -66,6 +74,11 @@ class NftBackend:
         subprocess.run([self.nft, *args], check=True,
                        capture_output=True, text=True, timeout=5)
 
+    def run_script(self, text: str) -> None:
+        """One nft transaction (`nft -f -`): all of it applies, or none of it."""
+        subprocess.run([self.nft, "-f", "-"], input=text, check=True,
+                       capture_output=True, text=True, timeout=60)
+
     def lockdown_on(self, pi_ip: str) -> None:
         self._run("insert", "rule", "inet", "ghostwall", "forward", "position", "0",
                   "iifname", "!=", "tailscale0",
@@ -86,6 +99,27 @@ class NftBackend:
                 return
 
 
+SET_DROP_NET4, SET_DROP_NET6 = "drop_net4", "drop_net6"
+
+
+def drop_nets_script(v4, v6) -> str:
+    """The nft transaction that replaces the IP reputation sets' contents. Every entry is
+    parsed again here: this text goes to nft as root."""
+    lines = []
+    for name, nets, version in ((SET_DROP_NET4, v4, 4), (SET_DROP_NET6, v6, 6)):
+        clean = []
+        for n in nets:
+            net = ipaddress.ip_network(n, strict=False)
+            if net.version != version:
+                raise ValueError(f"{n} is not IPv{version}")
+            clean.append(net)
+        lines.append(f"flush set {TABLE} {name}")
+        merged = [str(x) for x in ipaddress.collapse_addresses(clean)]
+        for i in range(0, len(merged), 500):
+            lines.append(f"add element {TABLE} {name} {{ {', '.join(merged[i:i + 500])} }}")
+    return "\n".join(lines) + "\n"
+
+
 class Enforcer:
     """Thread-safe facade over a backend. The resolver/control-API call these."""
 
@@ -101,11 +135,19 @@ class Enforcer:
             self.backend._run("add", "element", *TABLE.split(), SET_ISOLATED,
                               "{", ip, "}")
 
-    def release(self, ip: str) -> None:
+    def release(self, ip: str) -> bool:
+        """Take ip out of the isolated set. Idempotent: False (no error) if it was not
+        in it, e.g. after a reboot emptied the set or for a second Release press."""
         ip = _valid_ip(ip)
         with self._lock:
-            self.backend._run("delete", "element", *TABLE.split(), SET_ISOLATED,
-                              "{", ip, "}")
+            try:
+                self.backend._run("delete", "element", *TABLE.split(), SET_ISOLATED,
+                                  "{", ip, "}")
+            except Exception as exc:  # noqa: BLE001
+                if _not_there(exc):
+                    return False
+                raise
+            return True
 
     # -- destination blackhole -------------------------------------------
     def block_ip(self, ip: str, timeout: str | None = "24h") -> None:
@@ -122,6 +164,17 @@ class Enforcer:
                               "{", ip, "}")
 
     # -- LAN lockdown -----------------------------------------------------
+    def load_drop_nets(self, v4, v6) -> bool:
+        """Replace the gateway's IP reputation sets (drop_net4 / drop_net6) in one nft
+        transaction. False when there is no nft backend (nothing to do)."""
+        run = getattr(self.backend, "run_script", None)
+        if run is None:
+            return False
+        script = drop_nets_script(v4, v6)
+        with self._lock:
+            run(script)
+        return True
+
     def set_lockdown(self, on: bool, pi_ip: str) -> bool:
         """Toggle the forward-chain lockdown rule; pi_ip (this box) stays reachable.
         Returns the new state."""

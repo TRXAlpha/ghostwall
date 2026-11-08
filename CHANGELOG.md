@@ -52,8 +52,54 @@ in Docker, shadow mode) on 2026-11-07: [docs/FIELD_RESULTS.md](docs/FIELD_RESULT
 - The control API no longer prints a `BrokenPipeError` traceback into ghost-dns's journal
   when a client hangs up before the answer (a status poll that timed out).
 
+### New
+
+- **Block with your DNS server (opt-in).** `DNS_BLOCK_FEED` `off` (default) / `dry-run` / `on`
+  hands the threat feed to AdGuard Home or Pi-hole as a blocklist, through their own API
+  (a separate `ghostwall-dnsblock` service holds the login). Trust and the new
+  `ghostwall unblock DOMAIN [--undo]` become exceptions; `ghostwall blocking` shows the state.
+  Optional: HaGeZi ad lists (`DNS_BLOCK_ADS=pro|ultimate`), the DoH/VPN/Tor/Proxy bypass list
+  (`DNS_BLOCK_BYPASS=on`), Firefox's DoH canary and iCloud Private Relay answered NXDOMAIN
+  (`DNS_BLOCK_CANARIES`), and a protective upstream (`DNS_PROTECTIVE_UPSTREAM=quad9|cloudflare`,
+  reversible) whose refusals become `upstream_block` and no longer count for `nx_burst`.
+  `threat_feed` alerts say "blocked by your DNS server" when it was.
+- **Bigger feed once blocking is chosen:** HaGeZi TIF medium on about 2 GB RAM or more, CERT
+  Polska, OpenPhish, ThreatFox with `THREATFOX_URL`; 443,645 names on 2026-11-07, 0 in the
+  Tranco top 100k. `measure_blocklists.py` shows what each list would block on your network.
+- **Automatic isolation (opt-in, gateway mode).** `auto_isolate` `"off"` / `"dry-run"` /
+  `"on"` cuts off a device behind an exact malware-list hit (not under a popular site, not on
+  phishing lists only) or a DNS tunnel. Exempt list, at most `auto_isolate_max_per_hour` (2)
+  an hour kept across restarts, and a Release device button in Telegram (also the dashboard
+  and `sudo ghostwall release NAME`). `/release` is idempotent and finds a device that moved;
+  isolations come back after a reboot. The dashboard tags alerts isolated / would isolate /
+  isolation failed.
+- **Default-deny for IoT devices (opt-in).** Mark a device `"profile": "iot"`
+  (`sudo ghostwall profile NAME iot`): Ghostwall learns the domains it uses for
+  `iot_learn_days` (7; hashed in `state.json`), then raises `iot_new_domain` for any other.
+  `iot_enforce` `"off"` / `"dry-run"` / `"on"`: "on" refuses those names in inline mode with
+  learning off; events carry `would_block` when they would have been. Trust on such an alert
+  (Telegram, dashboard, `ghostwall allow DOMAIN --device NAME`) allows it for that device
+  only; `ghostwall untrust DOMAIN --device NAME` and `ghostwall relearn NAME` undo.
+  `ghostwall status` and the dashboard show IoT devices and their learning state.
+
 ### Changed
 
+- **Gateway mode blocks criminal networks and botnet C2 addresses:** Spamhaus DROP /
+  DROPv6 and abuse.ch SSLBL / Feodo Tracker, refreshed daily by the new `update_ipfeed.py`
+  (1,858 networks on 2026-11-07) and loaded by ghost-dns into the firewall's `drop_net4` /
+  `drop_net6` sets in one transaction. Private or over-wide networks are never loaded.
+- **Gateway mode drops ports no home device needs toward the internet:** Telnet (23,
+  2323), SMTP (25), Windows RPC / NetBIOS / SMB (135, 137-139, 445) and UPnP (1900). The
+  ports botnets spread on, spam bots send on, and worms and ransomware use. Configurable in
+  `agents/netconf/config.json`. Re-run `gen.py` to apply.
+- **IoT egress lock (opt-in, gateway mode):** `iot_egress_lock` `"log"` / `"on"` limits devices
+  marked `"profile": "iot"` to web, MQTT over TLS and time toward the internet.
+- **Gateway mode blocks DoH to about 90 public resolver addresses** (91, was 19): one list,
+  `agents/netconf/doh_ips.txt`, for the firewall's `doh_ip4` / `doh_ip6` sets and
+  ghost-flow's `doh_ip` alert, which had drifted apart. Adds Cloudflare's security and
+  family resolvers, NextDNS, Mullvad, Control D, CIRA, dns0.eu, DNS.SB and more; only
+  addresses dedicated to DNS. Re-run `gen.py` to apply.
+- Privacy mode: the Trust reply no longer names a tunnel's or IoT alert's parent domain.
 - **`dns_beacon` skips popular sites.** All 3 `dns_beacon` alerts in the field test were
   false: a script polling a weather site every 15 min (2) and a course website polled
   every 10 min, all on the popular list. Now that shadow mode times queries correctly

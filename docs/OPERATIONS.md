@@ -161,6 +161,100 @@ a generated password (`GHOSTWALL_WEB_PASSWORD`, user `ghostwall`); both are in
 - Fine on a home LAN or tailnet; never expose it to the internet. Actions are accepted
   only as JSON from the dashboard's own origin.
 
+## Block with your DNS server (opt-in)
+
+Ghostwall can hand its threat feed to AdGuard Home or Pi-hole as a blocklist, so known
+malware and phishing domains are refused for every device. Ghostwall still never sits in
+the DNS path: it builds the list, serves it on 127.0.0.1:5382, and registers it through the
+DNS server's own API (a small separate service, `ghostwall-dnsblock`, holds the login).
+
+1. In `/etc/ghostwall/ghostwall.env` set the DNS server's login: `ADGUARD_URL`,
+   `ADGUARD_USER`, `ADGUARD_PASSWORD`, or `PIHOLE_URL` and `PIHOLE_PASSWORD` (an app
+   password if two-factor login is on). They are used for the API only and never logged.
+2. Dry-run first: `DNS_BLOCK_FEED=dry-run`, then `sudo bash /opt/ghostwall/agents/ghost_dns/go_shadow.sh`.
+   Nothing is registered. `sudo ghostwall blocking` shows the list, its sources, and how
+   many names your devices asked for in the last 7 days are on it.
+3. Measure what each list would block on your own network:
+   `sudo -u ghostwall /opt/ghostwall/.venv/bin/python /opt/ghostwall/agents/ghost_dns/measure_blocklists.py --querylog <your query log> --feed /var/lib/ghostwall/threat_feed.txt --tranco /var/lib/ghostwall/popular_domains.txt --download /tmp/lists`.
+4. On: `DNS_BLOCK_FEED=on`, re-run `go_shadow.sh`, check `sudo ghostwall blocking`. Docker: set
+   `DNS_BLOCK_FEED` and the AdGuard login in `compose.yaml` and recreate the container.
+5. Something broke? `sudo ghostwall allow example.com` (trust it) or
+   `sudo ghostwall unblock example.com`: both become an exception in the DNS server within a
+   minute or two. `sudo ghostwall unblock --undo example.com` blocks it again.
+6. Undo everything: `DNS_BLOCK_FEED=off`, `DNS_BLOCK_ADS=off`, `DNS_BLOCK_BYPASS=off`, re-run
+   `go_shadow.sh`. Ghostwall removes only its own lists and exception block; `uninstall.sh`
+   does the same.
+
+With blocking on or in dry-run the feed also grows: HaGeZi TIF medium instead of mini on
+machines with about 2 GB of RAM or more, CERT Polska and OpenPhish (ThreatFox too if you set
+`THREATFOX_URL`, which needs an abuse.ch key), all behind the popular-site guard. On
+2026-11-07 that was 443,645 names, 0 of them in the Tranco top 100k.
+
+- **Ads:** `DNS_BLOCK_ADS=pro` (HaGeZi Multi Pro) is the low-breakage choice; `ultimate`
+  blocks more and breaks more (Meta and Microsoft features: it hit 593 of the Tranco top 10k
+  on 2026-11-07, Pro 362). No DNS blocker can stop ads served from the same domain as the
+  content (YouTube, Twitch, most in-app ads): use uBlock Origin in the browser for those.
+- **Bypass and canaries:** with the feed on, `use-application-dns.net` (Firefox then turns its
+  own DoH off) and iCloud Private Relay's names answer NXDOMAIN, so those devices use your
+  DNS server; Private Relay stops working on this network, which is the point
+  (`DNS_BLOCK_CANARIES=no-relay` keeps it). `DNS_BLOCK_BYPASS=on` adds HaGeZi's
+  DoH/VPN/Tor/Proxy bypass list: it breaks VPN apps on purpose.
+- **Protective upstream:** `DNS_PROTECTIVE_UPSTREAM=quad9` or `cloudflare` sets the DNS server's
+  upstream to a resolver that blocks malware itself (once, reversible: `off` restores the
+  previous one). Ghostwall reads its refusals as `upstream_block` (info) and doesn't count them
+  for `nx_burst`. Trade-off: every uncached query goes to that provider. Quad9 is weaker on
+  phishing; with Pi-hole prefer Cloudflare (Quad9's refusal can't be told apart there).
+- **AdGuard or Pi-hole in Docker:** the DNS server fetches the list over HTTP and resolves
+  the URL with its own DNS, so the URL must hold an address it can reach. `go_shadow.sh`
+  finds the container's gateway (often 172.17.0.1), serves the list there and registers
+  that URL; with host networking it stays on 127.0.0.1. The bundled `compose.yaml` gives
+  Ghostwall a fixed address (172.30.53.3) for the same reason. Your own setup: set
+  `DNS_BLOCK_BIND` and `DNS_BLOCK_URL` in ghostwall.env.
+- **Limits:** Pi-hole blocks exact names only (no subdomains). A failing DNS-server API never
+  stops Ghostwall: it logs once, retries, and the lists already registered stay in force.
+
+## Automatic isolation (opt-in)
+
+Cuts a device off the moment it does something only infected devices do: an exact hit on a
+malware list, or a DNS tunnel. Needs gateway mode (`"enforce": "nft"`) and `pi_ip` in
+`/etc/ghostwall/ghost_dns.json`.
+
+1. Start with `"auto_isolate": "dry-run"` for at least a week. Alerts that would have isolated
+   are tagged "would isolate" on the dashboard.
+2. Add your own computers and the router to `"auto_isolate_exempt"`.
+3. Set `"auto_isolate": "on"` and turn learning off (`sudo ghostwall learning off`).
+
+An isolated device can still reach the Pi's DNS and the tailnet, nothing else. Undo with the
+Release device button in Telegram, the dashboard, or `sudo ghostwall release NAME`. The same
+finding doesn't isolate it again for a day; a new one does. At most
+`auto_isolate_max_per_hour` (2) isolations an hour, so a bad list can't take the house offline.
+Isolations survive a reboot: release a device rather than flushing the nft set.
+
+## Default-deny for IoT devices
+
+Cameras, TVs and plugs talk to a small, stable set of services, and they can't run antivirus.
+After a learning week, anything new is worth a look, and it can be refused.
+
+1. Name the device and mark it: `sudo ghostwall name 192.168.1.40 cam-1`, then
+   `sudo ghostwall profile cam-1 iot` (this restarts ghost-dns). Mark devices while you believe
+   they are clean: what they do during the learning week becomes normal.
+2. Let it learn for a week (`iot_learn_days`, default 7). `sudo ghostwall status` shows
+   `IoT: learning until ...`, then `IoT: N domains`. Nothing alerts while it learns.
+3. Afterwards each new domain family raises one `iot_new_domain` alert. If you know why (a
+   firmware update, a new feature), tap Allow for this device, or run
+   `sudo ghostwall allow api.vendor.example --device cam-1`: that allows it for cam-1 only.
+   `sudo ghostwall untrust vendor.example --device cam-1` undoes it, `sudo ghostwall relearn cam-1`
+   starts learning again.
+4. Dry-run: set `"iot_enforce": "dry-run"` in `/etc/ghostwall/ghost_dns.json` and restart.
+   Alerts say "would block". Watch a few days and allow what is legitimate.
+5. On: `"iot_enforce": "on"`. In inline mode with learning off (`sudo ghostwall learning off`)
+   names outside the set are refused like any block. Shadow mode can only alert. This is
+   DNS-level only: a device that connects to a hard-coded IP or uses its own DoH is not refused
+   (gateway mode alerts on those as `raw_ip` / `doh_ip`).
+
+The network-wide allowlist does not exempt IoT devices (it trusts whole clouds, which would
+make default-deny meaningless). The threat feed still wins over a learned name.
+
 ## Going inline (Ghostwall answers DNS)
 
 Only after a week or more of clean shadow results. Inline mode lets Ghostwall block, and
@@ -234,6 +328,37 @@ whole network; read it fully first, and keep the router's admin page open.
 4. On the router: disable its DHCP server and IPv6 router advertisements. Renew a
    client's lease and check it gets an address in your DHCP range with the Pi as
    gateway and DNS.
+
+   From then on every device's DNS goes through your filter: plain DNS (port 53) to any
+   server is answered by the Pi, DNS-over-TLS and DNS-over-QUIC (853) are dropped, and
+   DNS-over-HTTPS to the public resolvers in `agents/netconf/doh_ips.txt` (Cloudflare,
+   Google, Quad9, NextDNS, Mullvad, Control D, AdGuard and about a dozen more) is dropped,
+   so browsers and apps with DoH built in fall back to it. The list holds only addresses
+   dedicated to DNS: a resolver on a shared CDN address isn't in it, because blocking that
+   would break websites; DoH by name is stopped at DNS instead (the bypass list). The Pi
+   doesn't forward IPv6, so IPv6 can't get around it while the router's advertisements are
+   off. Re-run `gen.py` after updating the code to pick up a longer list.
+
+   It also drops ports no home device needs toward the internet: Telnet (23, 2323: how
+   Mirai-style botnets spread), SMTP (25: spam bots; mail apps use 587/465), Windows RPC,
+   NetBIOS and SMB (135, 137-139, 445), UPnP (1900). Only traffic leaving the LAN; devices
+   still reach each other. Running a mail server at home? Set `"egress_block_tcp"` in
+   `agents/netconf/config.json` to the list you want (or `"egress_block": false`).
+
+   **IP reputation:** LAN devices can't reach networks on Spamhaus DROP / DROPv6 (run by
+   criminals, hijacked, or leased to botnet operators) or abuse.ch's botnet C2 lists (SSLBL,
+   Feodo Tracker). `update_ipfeed.py` refreshes `/var/lib/ghostwall/ip_blocklist.txt` with
+   the daily feed update (1,858 networks on 2026-11-07), and ghost-dns loads it into the
+   firewall's `drop_net4` / `drop_net6` sets within a minute, in one transaction. Nothing
+   private and nothing wider than a /8 (IPv6: /19) is ever loaded. Check with
+   `sudo nft list set inet ghostwall drop_net4 | head`.
+
+   **IoT egress lock (opt-in):** with `"iot_egress_lock": "log"` in `config.json`, devices
+   marked `"profile": "iot"` in devices.json are logged (`journalctl -k | grep iot-egress`)
+   whenever they reach the internet on anything but web (80, 443), MQTT over TLS (8883) and
+   time (123); `"on"` drops it. Run `"log"` for a week first: some cameras stream to their
+   cloud on other ports. `"iot_allowed_tcp"` / `"iot_allowed_udp"` widen it. Re-run `gen.py`
+   and reload the firewall after a change.
 5. **ghost-flow:** `sudo apt install libnetfilter-queue-dev build-essential python3-dev`,
    `sudo /opt/ghostwall/.venv/bin/pip install --require-hashes -r /opt/ghostwall/requirements-gateway.lock`,
    `sudo install -m 640 -g ghostwall /opt/ghostwall/agents/ghost_flow/ghost_flow.example.json /etc/ghostwall/ghost_flow.json`,

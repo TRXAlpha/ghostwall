@@ -55,6 +55,15 @@ def validate_event(evt: object) -> list[str]:
     if not isinstance(evt.get("rule"), str) or not evt.get("rule"):
         if "rule" in evt or not errs:
             errs.append("rule must be a non-empty string")
+    if "would_block" in evt and not isinstance(evt["would_block"], bool):
+        errs.append("would_block must be true or false")   # iot_new_domain, iot_enforce dry-run
+    if "trust" in evt and not DOMAIN_OK(evt["trust"]):
+        errs.append("trust must be a lowercase hostname without trailing dot")
+    for flag in ("auto_isolated", "would_isolate", "auto_isolate_failed"):
+        if flag in evt and not isinstance(evt[flag], bool):
+            errs.append(f"{flag} must be true or false")
+    if evt.get("auto_isolated") is True and (evt.get("would_isolate") or evt.get("auto_isolate_failed")):
+        errs.append("auto_isolated cannot be true together with would_isolate or auto_isolate_failed")
     eid = evt.get("event_id")
     if not isinstance(eid, str) or not EVENT_ID_RE.match(eid):
         errs.append("event_id must match ^[A-Za-z0-9_-]{1,64}$")

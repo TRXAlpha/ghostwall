@@ -5,8 +5,10 @@ resolver thread and the control-API thread, so a `/allow` from the Telegram bot
 is visible to the resolver on the very next query. All mutating methods take an
 internal lock and persist atomically (temp file + os.replace).
 
-Persisted keys: allowlist, blocklist, isolated devices, lockdown, learning,
+Persisted keys: allowlist, blocklist, isolated devices (and the addresses isolated),
+automatic isolation times (auto_isolate's hourly cap), lockdown, learning,
 per-domain first-seen (novelty), which domain families have resolved (nx_burst),
+each IoT device's learned domain families (hashed, iot_new_domain),
 block confirmations (auto-promote), and a bounded map of recent events (so an
 alert's Unblock button can find its domain).
 """
@@ -28,6 +30,9 @@ _MAX_EVENTS = 5000
 _MAX_FIRST_SEEN = 200000
 _MAX_RECENT_ALERTS = 20000
 _MAX_RESOLVED = 50000
+_MAX_IOT_LEARNED = 512     # domains learned per IoT device ...
+_MAX_IOT_TOTAL = 1024      # ... and with the ones you allowed by hand
+_MAX_IOT_DEVICES = 1000
 
 
 def _now() -> str:
@@ -48,7 +53,10 @@ class GhostState:
         self.allowlist: set[str] = set()
         self.static_allow: set[str] = set()   # from allowlist.txt: reloaded at start, not "yours"
         self.blocklist: set[str] = set()
+        self.dns_exceptions: set[str] = set()   # `ghostwall unblock`: names the DNS server must not block
         self.isolated: set[str] = set()
+        self.isolated_ips: dict[str, list[str]] = {}    # device -> the addresses put in the nft set
+        self.auto_isolations: list[float] = []          # epoch of each automatic isolation (the cap)
         self.lockdown: bool = False
         self.learning: bool = learning_default
         self.first_seen: dict[str, str] = {}
@@ -58,6 +66,8 @@ class GhostState:
         self.device_services: dict[str, list] = {}      # device -> abused services it has used
         self.recent_alerts: dict[str, float] = {}       # "device|domain family|rule" -> epoch of last alert
         self.resolved: dict[str, str] = {}              # domain family (hashed) -> last day it resolved
+        # IoT default-deny: device -> {"since": ISO, "domains": [hashed domain families]}
+        self.iot: dict[str, dict] = {}
         # note_seen() fires on every brand-new domain; persisting each one would
         # be a disk write per query, so it is throttled: mark dirty, flush at
         # most every _flush_interval seconds (and on explicit flush()/shutdown).
@@ -129,7 +139,12 @@ class GhostState:
             return
         self.allowlist = set(d.get("allowlist", []))
         self.blocklist = set(d.get("blocklist", []))
+        self.dns_exceptions = set(d.get("dns_exceptions", []))
         self.isolated = set(d.get("isolated", []))
+        self.isolated_ips = {str(k): [str(i) for i in v] for k, v in dict(d.get("isolated_ips", {})).items()
+                             if k in self.isolated and isinstance(v, list)}
+        self.auto_isolations = [float(t) for t in d.get("auto_isolations", [])
+                                if isinstance(t, (int, float))][-100:]
         self.lockdown = bool(d.get("lockdown", False))
         self.learning = bool(d.get("learning", self.learning))
         self.first_seen = {}
@@ -145,6 +160,8 @@ class GhostState:
         self.device_services = {k: list(v) for k, v in dict(d.get("device_services", {})).items()}
         self.recent_alerts = {k: float(v) for k, v in dict(d.get("recent_alerts", {})).items()}
         self.resolved = {str(k): str(v) for k, v in dict(d.get("resolved", {})).items()}
+        self.iot = {str(k): {"since": str(v.get("since", "")), "domains": [str(x) for x in v.get("domains", [])]}
+                    for k, v in dict(d.get("iot", {})).items() if isinstance(v, dict)}
 
     def _save_locked(self) -> None:
         # Keep the persisted file bounded.
@@ -161,7 +178,10 @@ class GhostState:
         data = {
             "allowlist": sorted(self.allowlist),
             "blocklist": sorted(self.blocklist),
+            "dns_exceptions": sorted(self.dns_exceptions),
             "isolated": sorted(self.isolated),
+            "isolated_ips": self.isolated_ips,
+            "auto_isolations": self.auto_isolations[-100:],
             "lockdown": self.lockdown,
             "learning": self.learning,
             "first_seen": self.first_seen,
@@ -171,6 +191,7 @@ class GhostState:
             "device_services": self.device_services,
             "recent_alerts": self.recent_alerts,
             "resolved": self.resolved,
+            "iot": self.iot,
         }
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -180,6 +201,26 @@ class GhostState:
         os.replace(tmp, self.path)
         self._dirty = False
         self._last_flush = time.monotonic()
+        self._write_dns_view()
+
+    def _write_dns_view(self) -> None:
+        """dns_view.json next to state.json: the small part of the state dns_block.py needs
+        (what you trusted, unblocked, and Ghostwall's own blocklist), so it never parses the
+        big file. Written only when it changed; a failure here never costs the state."""
+        view = json.dumps({"trusted": sorted(self.allowlist - self.static_allow),
+                           "exceptions": sorted(self.dns_exceptions),
+                           "blocked": sorted(self.blocklist),
+                           "starter": sorted(self.static_allow)}, sort_keys=True)
+        if view == getattr(self, "_last_view", None):
+            return
+        path = os.path.join(os.path.dirname(os.path.abspath(self.path)), "dns_view.json")
+        try:
+            with open(path + ".tmp", "w", encoding="utf-8") as f:
+                f.write(view)
+            os.replace(path + ".tmp", path)
+            self._last_view = view
+        except OSError:
+            pass
 
     def save(self) -> None:
         with self._lock:
@@ -292,6 +333,69 @@ class GhostState:
                 age = baseline_days
             return True if age >= baseline_days else None
 
+    def iot_observe(self, device: str, domain: str, learn_days: float) -> str:
+        """An IoT device looked up `domain`. "learned": still in its learning window, the
+        domain's family is now (or was already) in the device's set. "known": after the
+        window, in the set. "new": after the window, not in the set. Domains are kept as
+        keyed hashes, like first_seen."""
+        key = self._nkey(registrable_part(domain))
+        with self._lock:
+            rec = self.iot.get(device)
+            if rec is None:
+                if len(self.iot) >= _MAX_IOT_DEVICES:
+                    return "known"
+                rec = self.iot[device] = {"since": self._stamp(), "domains": []}
+                self._touch_locked()
+            try:
+                age = (self.clock() - _parse_iso(rec["since"])).total_seconds() / 86400
+            except ValueError:
+                age = learn_days
+            if key in rec["domains"]:
+                return "learned" if age < learn_days else "known"
+            if age < learn_days:
+                if len(rec["domains"]) < _MAX_IOT_LEARNED:
+                    rec["domains"].append(key)
+                    self._touch_locked()
+                return "learned"
+            return "new"
+
+    def iot_allow(self, device: str, domain: str) -> None:
+        """Add a domain family to one IoT device's set (Trust on an iot_new_domain alert)."""
+        key = self._nkey(registrable_part(domain))
+        with self._lock:
+            rec = self.iot.setdefault(device, {"since": self._stamp(), "domains": []})
+            if key not in rec["domains"] and len(rec["domains"]) < _MAX_IOT_TOTAL:
+                rec["domains"].append(key)
+            self._save_locked()
+
+    def iot_forget(self, device: str, domain: str) -> bool:
+        """Undo iot_allow (or a learned domain). False if it is not in the device's set."""
+        key = self._nkey(registrable_part(domain))
+        with self._lock:
+            rec = self.iot.get(device)
+            if rec is None or key not in rec["domains"]:
+                return False
+            rec["domains"].remove(key)
+            self._save_locked()
+            return True
+
+    def iot_relearn(self, device: str) -> bool:
+        """Forget a device's set: its learning window starts again with its next lookup."""
+        with self._lock:
+            if self.iot.pop(device, None) is None:
+                return False
+            self._save_locked()
+            return True
+
+    def iot_count(self, device: str) -> int:
+        with self._lock:
+            return len(self.iot.get(device, {}).get("domains", ()))
+
+    def iot_since(self, device: str) -> str | None:
+        """When the device's learning window started (ISO), None before its first lookup."""
+        with self._lock:
+            return (self.iot.get(device) or {}).get("since") or None
+
     def note_device(self, device: str) -> None:
         """Start a device's baseline on its first query."""
         with self._lock:
@@ -363,6 +467,16 @@ class GhostState:
             self.confirmations.pop(domain, None)
             self._save_locked()
 
+    def set_dns_exception(self, domain: str, on: bool = True) -> bool:
+        """Add (or, with on=False, remove) a name the DNS server's blocklists must let
+        through. True if that changed anything."""
+        with self._lock:
+            if (domain in self.dns_exceptions) == on:
+                return False
+            (self.dns_exceptions.add if on else self.dns_exceptions.discard)(domain)
+            self._save_locked()
+            return True
+
     def set_learning(self, enabled: bool) -> None:
         with self._lock:
             self.learning = bool(enabled)
@@ -373,15 +487,50 @@ class GhostState:
             self.lockdown = bool(on)
             self._save_locked()
 
-    def isolate(self, name: str) -> None:
+    def isolate(self, name: str, ip: str | None = None) -> None:
+        """ip: the address that went into the nft set, so release and a restart know it
+        even after the device's address changed."""
         with self._lock:
             self.isolated.add(name)
+            if ip:
+                ips = self.isolated_ips.setdefault(name, [])
+                if ip not in ips:
+                    ips.append(ip)
             self._save_locked()
 
-    def release(self, name: str) -> None:
+    def release(self, name: str) -> list[str]:
+        """Returns the addresses recorded for it (to take out of the nft set)."""
         with self._lock:
             self.isolated.discard(name)
+            ips = self.isolated_ips.pop(name, [])
             self._save_locked()
+            return ips
+
+    def isolated_addresses(self, name: str) -> list[str]:
+        with self._lock:
+            return list(self.isolated_ips.get(name, []))
+
+    def auto_isolations_within(self, seconds: float) -> int:
+        """How many automatic isolations happened in the last `seconds` (wall clock, kept
+        in state.json: a restart, or a crash loop, does not reset auto_isolate_max_per_hour).
+        A time in the future counts too (a Pi has no clock battery and can boot with an old
+        time): the cap errs towards isolating less. More than a day ahead is ignored."""
+        now = self.clock().timestamp()
+        with self._lock:
+            return sum(1 for t in self.auto_isolations if -86400 < now - t < seconds)
+
+    def note_auto_isolation(self) -> None:
+        now = self.clock().timestamp()
+        with self._lock:
+            self.auto_isolations = [t for t in self.auto_isolations if -86400 < now - t < 86400][-99:] + [now]
+            self._save_locked()
+
+    def recently(self, key: str, window: float) -> bool:
+        """Like seen_alert(), but only looks: records nothing."""
+        now = self.clock().timestamp()
+        with self._lock:
+            last = self.recent_alerts.get(key)
+            return last is not None and now - last < window
 
     def is_isolated(self, name: str) -> bool:
         with self._lock:

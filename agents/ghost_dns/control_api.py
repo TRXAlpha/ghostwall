@@ -26,8 +26,10 @@ import os
 import re
 import secrets
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from tokenizer import registrable_part
 
 # A hostname: dot-separated labels of letters, digits, '-' and '_' (some real names
 # have it), 253 characters at most. Anything else can't be a name worth trusting.
@@ -158,6 +160,7 @@ class ControlHandler(BaseHTTPRequestHandler):
             "/lockdown": self._lockdown,
             "/learning": lambda: self._learning(body),
             "/unblock": lambda: self._unblock(body),
+            "/relearn": lambda: self._relearn(body),
         }
         fn = routes.get(self.path)
         if fn is None:
@@ -199,6 +202,7 @@ class ControlHandler(BaseHTTPRequestHandler):
                 "isolated": g.is_isolated(d.name),
                 "last_seen": seen.get(ip),
                 "blocked_domains": blocked,
+                **self._iot_status(d),
             })
         named = {self._current_ip(d) for d in dmap.all()}
         # clients seen but not named yet (for `ghostwall devices` / `ghostwall name`)
@@ -210,6 +214,7 @@ class ControlHandler(BaseHTTPRequestHandler):
                "enforce": self.state["enforcer"].backend.name,
                # counters since start; "queries" rising proves queries are being scored
                "stats": dict(getattr(res, "stats", None) or {})}
+        out["iot_enforce"] = self.state["cfg"].get("iot_enforce", "off")
         scorer = getattr(res, "scorer", None)
         if scorer is not None:
             out["models"] = getattr(scorer, "backend", None)
@@ -228,6 +233,22 @@ class ControlHandler(BaseHTTPRequestHandler):
             out["clients"] = [{"ip": ip, "last_seen": t} for t, ip in clients]
         else:
             out["devices_hidden"] = True   # "send the token to see them", not "no devices"
+        return out
+
+    def _iot_status(self, d) -> dict:
+        """An IoT device's profile, how many domain families it has, and until when it learns."""
+        if str(d.profile).lower() != "iot":
+            return {}
+        g = self.state["gstate"]
+        out = {"profile": "iot", "iot_domains": g.iot_count(d.name), "iot_learning_until": None}
+        since = g.iot_since(d.name)
+        if since:
+            try:
+                start = datetime.strptime(since, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                days = float(self.state["cfg"].get("iot_learn_days", 7))
+                out["iot_learning_until"] = (start + timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            except ValueError:
+                pass
         return out
 
     def _device(self, body):
@@ -253,23 +274,34 @@ class ControlHandler(BaseHTTPRequestHandler):
         d = self._require_device(body)
         self._require_enforcement()
         ip = self._current_ip(d)   # where it is now: its old address may be another device's
+        if not _ipv4(ip) and _ipv4(d.ip):
+            ip = d.ip              # it queried over IPv6; the isolated_dev set holds IPv4 only
         self.state["enforcer"].isolate(ip)
-        self.state["gstate"].isolate(d.name)
+        self.state["gstate"].isolate(d.name, ip)
         return 200, {"ok": True, "name": d.name, "ip": ip, "isolated": True}
 
     def _release(self, body):
         # Allowed without enforcement too, so state left by an older version can be cleared.
+        # Idempotent: an address that is not in the set any more (a second press, a reboot
+        # emptied it) counts as released. Every address it may have been isolated at is
+        # tried: the ones recorded when it was isolated, where it is now, devices.json.
         d = self._require_device(body)
-        ips = [self._current_ip(d)] + ([d.ip] if d.ip != self._current_ip(d) else [])
-        released = False
-        for ip in ips:   # wherever it was isolated: now, or at its address in devices.json
+        g = self.state["gstate"]
+        ips = []
+        for ip in g.isolated_addresses(d.name) + [self._current_ip(d), d.ip]:
+            if ip and ip not in ips and _ipv4(ip):
+                ips.append(ip)
+        failed = None
+        for ip in ips:
             try:
                 self.state["enforcer"].release(ip)
-                released = True
-            except Exception:  # noqa: BLE001 (that address was not in the set)
-                if ip == ips[-1] and not released:
-                    raise
-        self.state["gstate"].release(d.name)
+            except Exception as exc:  # noqa: BLE001 (nft missing, no permission...)
+                failed = failed or exc
+        if failed is not None:
+            # Still in the set somewhere: saying "released" would be a lie. State stays
+            # isolated, so the dashboard keeps offering Release.
+            raise _ApiError(500, f"could not release {d.name}: {failed}")
+        g.release(d.name)
         return 200, {"ok": True, "name": d.name, "isolated": False}
 
     def _allow(self, body):
@@ -278,8 +310,29 @@ class ControlHandler(BaseHTTPRequestHandler):
             raise _ApiError(400, "need domain")
         if not DOMAIN_RE.match(domain):
             raise _ApiError(400, "not a domain name")
+        if str(body.get("device", "")).strip():
+            # Trust on an iot_new_domain alert: that device's set only, not the allowlist
+            d = self._iot_device(body)
+            reg = registrable_part(domain)
+            self.state["gstate"].iot_allow(d.name, reg)
+            return 200, {"ok": True, "domain": reg, "device": d.name, "allowed": True}
         self.state["gstate"].allow(domain)
         return 200, {"ok": True, "domain": domain, "allowed": True}
+
+    def _iot_device(self, body):
+        name = str(body.get("device", "")).strip()
+        d = self.state["devices"].device_for_name(name)
+        if d is None:
+            raise _ApiError(404, "unknown device")
+        if str(d.profile).lower() != "iot":
+            raise _ApiError(409, f'{d.name} is not marked "profile": "iot" in devices.json')
+        return d
+
+    def _relearn(self, body):
+        """Forget what an IoT device normally talks to: it learns again from its next lookup."""
+        d = self._iot_device({"device": body.get("name", "")})
+        self.state["gstate"].iot_relearn(d.name)
+        return 200, {"ok": True, "name": d.name, "relearning": True}
 
     def _trusted(self):
         return 200, {"ok": True, "domains": self.state["gstate"].trusted()}
@@ -289,6 +342,11 @@ class ControlHandler(BaseHTTPRequestHandler):
         if not DOMAIN_RE.match(domain):
             raise _ApiError(400, "not a domain name")
         g = self.state["gstate"]
+        if str(body.get("device", "")).strip():   # undo an "allow for this device"
+            d = self._iot_device(body)
+            if not g.iot_forget(d.name, domain):
+                raise _ApiError(404, f"{registrable_part(domain)} is not in what {d.name} normally talks to")
+            return 200, {"ok": True, "domain": registrable_part(domain), "device": d.name, "allowed": False}
         if domain in g.static_allow:
             raise _ApiError(409, f"{domain} is in the starter allowlist file (allowlist_path); remove it there")
         if not g.untrust(domain):
@@ -324,7 +382,13 @@ class ControlHandler(BaseHTTPRequestHandler):
             raise _ApiError(400, "need domain or a known event_id")
         if not DOMAIN_RE.match(domain):
             raise _ApiError(400, "not a domain name")
-        self.state["gstate"].unblock(domain)
+        g = self.state["gstate"]
+        undo = body.get("undo") is True
+        if undo:    # `ghostwall unblock --undo`: let the DNS server block it again
+            g.set_dns_exception(domain, False)
+            return 200, {"ok": True, "domain": domain, "unblocked": False}
+        g.unblock(domain)
+        g.set_dns_exception(domain)    # also an exception in the DNS server's blocklists (dns_block.py)
         return 200, {"ok": True, "event_id": event_id, "domain": domain,
                      "unblocked": True}
 
@@ -340,6 +404,13 @@ class ControlHandler(BaseHTTPRequestHandler):
         if d is None:
             raise _ApiError(404, "unknown device")
         return d
+
+
+def _ipv4(ip) -> bool:
+    try:
+        return ipaddress.ip_address(str(ip)).version == 4
+    except ValueError:
+        return False
 
 
 class _ApiError(Exception):

@@ -110,11 +110,15 @@ e.release("192.168.1.77")
 assert "192.168.1.77" not in nft("list", "set", "inet", "ghostwall", "isolated_dev"), "release"
 e.block_ip("203.0.113.66")
 assert "203.0.113.66" in nft("list", "set", "inet", "ghostwall", "blocked_ip"), "block_ip"
+e.load_drop_nets(["93.184.215.0/25", "93.184.215.128/25", "45.33.10.20/32"], ["2a03:2880::/32"])
+assert "93.184.215.0/24" in nft("list", "set", "inet", "ghostwall", "drop_net4"), "drop_net4 (merged)"
+e.load_drop_nets(["45.33.10.20/32"], [])                       # a reload replaces, never adds up
+assert "93.184.215.0" not in nft("list", "set", "inet", "ghostwall", "drop_net4"), "drop_net4 reload"
 e.set_lockdown(True, "192.168.1.20")
 assert "ghostwall_lockdown" in nft("-a", "list", "chain", "inet", "ghostwall", "forward"), "lockdown on"
 e.set_lockdown(False, "192.168.1.20")
 assert "ghostwall_lockdown" not in nft("-a", "list", "chain", "inet", "ghostwall", "forward"), "lockdown off"
-print("   enforcement: isolate, release, block_ip, lockdown on/off all work on nft")
+print("   enforcement: isolate, release, block_ip, IP reputation sets, lockdown on/off all work on nft")
 PY
 bash /tmp/netconf/breakglass.sh >/dev/null 2>&1
 ! nft list tables | grep -q "inet ghostwall"' || fail "generated ruleset or ghost-dns enforcement failed on real nftables"

@@ -66,9 +66,11 @@ def load_ctx(dev_path=None, cfg_path=None):
     pi_ip = cfg["pi_ip"]
     seen_macs, seen_ips = set(), set()
 
-    static_lines = []
+    static_lines, iot_ips = [], []
     for d in dev.get("devices", []):
         validate_device(d, seen_macs, seen_ips, pi_ip)
+        if d.get("profile") == "iot":
+            iot_ips.append(d["ip"])
         mac = d["mac"].lower().replace("-", ":")
         static_lines.append(
             f"dhcp-host={mac},{d['ip']},{d['name']},{d.get('lease_time', cfg['default_lease_time'])}"
@@ -80,7 +82,7 @@ def load_ctx(dev_path=None, cfg_path=None):
         static_lines.append(
             f"# TODO: fill in MAC - dhcp-host=<MAC>,{d['ip']},{d['name']}  ({d.get('profile')} profile)"
         )
-    return cfg, "\n".join(static_lines) + ("\n" if static_lines else "")
+    return cfg, "\n".join(static_lines) + ("\n" if static_lines else ""), iot_ips
 
 TEMPLATES = [
     ("dnsmasq.conf.j2", "dnsmasq.conf"),
@@ -89,6 +91,76 @@ TEMPLATES = [
     ("breakglass.sh.j2", "breakglass.sh"),
     ("health.sh.j2", "health.sh"),
 ]
+
+def doh_ips(path=HERE / "doh_ips.txt"):
+    """(IPv4, IPv6) resolver addresses from doh_ips.txt, de-duplicated, in file order.
+    Anything that doesn't parse as a single public address is refused: it would end up
+    inside a firewall rule."""
+    v4, v6 = [], []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        for tok in line.split("#", 1)[0].split():
+            try:
+                ip = ipaddress.ip_address(tok)
+            except ValueError as e:
+                raise GenError(f"doh_ips.txt: {tok!r} is not an IP address") from e
+            if not ip.is_global:
+                raise GenError(f"doh_ips.txt: {tok} is not a public address")
+            out = v4 if ip.version == 4 else v6
+            if str(ip) not in out:
+                out.append(str(ip))
+    if not v4 or not v6:
+        raise GenError("doh_ips.txt needs IPv4 and IPv6 resolver addresses")
+    return v4, v6
+
+
+# Ports no home device needs toward the internet: Telnet (Mirai and friends spread over
+# it), SMTP (spam bots; mail apps use 587/465), Windows RPC, NetBIOS and SMB (worms,
+# ransomware, leaking file shares), UPnP. Dropped for LAN devices going out, never between
+# LAN devices. "egress_block_tcp" / "egress_block_udp" in config.json replace these.
+EGRESS_TCP = [23, 25, 135, 139, 445, 2323]
+EGRESS_UDP = [137, 138, 1900]
+# An IoT device (devices.json "profile": "iot") with iot_egress_lock may only reach the
+# internet on these: web, MQTT over TLS (most device clouds), DNS-over-QUIC/HTTP/3, time.
+IOT_TCP = [80, 443, 8883]
+IOT_UDP = [123, 443]
+
+
+def _ports(cfg, key, default):
+    ports = cfg.get(key, default)
+    if not isinstance(ports, list) or not all(isinstance(p, int) and not isinstance(p, bool)
+                                              and 1 <= p <= 65535 for p in ports):
+        raise GenError(f"{key} must be a list of port numbers (1-65535), not {ports!r}")
+    return sorted(set(ports))
+
+
+def egress_rules(cfg, lan_iface, lan_cidr, pi_ip, iot_ips):
+    """The forward-chain lines for the egress policy (see EGRESS_TCP and IOT_TCP)."""
+    pad, out = "        ", []
+    to_net = f'iifname "{lan_iface}" ip daddr != {lan_cidr}'
+    for key, default in (("egress_block_tcp", EGRESS_TCP), ("egress_block_udp", EGRESS_UDP),
+                         ("iot_allowed_tcp", IOT_TCP), ("iot_allowed_udp", IOT_UDP)):
+        _ports(cfg, key, default)          # a typo fails here even while that part is off
+    if cfg.get("egress_block", True):
+        for proto, key, default in (("tcp", "egress_block_tcp", EGRESS_TCP), ("udp", "egress_block_udp", EGRESS_UDP)):
+            ports = _ports(cfg, key, default)
+            if ports:
+                out.append(f"{pad}{to_net} {proto} dport {{ {', '.join(map(str, ports))} }} counter drop")
+    mode = cfg.get("iot_egress_lock", "off")
+    if mode not in ("off", "log", "on"):
+        raise GenError(f'iot_egress_lock must be "off", "log" or "on", not {mode!r}')
+    if mode != "off" and iot_ips:
+        verdict = "counter drop" if mode == "on" else 'limit rate 6/minute log prefix "ghostwall iot-egress: " counter'
+        base = f"{to_net} ip saddr @iot_dev ip daddr != {pi_ip} ip daddr != 100.64.0.0/10"
+        for proto, key, default in (("tcp", "iot_allowed_tcp", IOT_TCP), ("udp", "iot_allowed_udp", IOT_UDP)):
+            ports = _ports(cfg, key, default)
+            out.append(f"{pad}{base} meta l4proto {proto} {proto} dport != {{ {', '.join(map(str, ports))} }} {verdict}")
+        out.append(f"{pad}{base} meta l4proto != {{ tcp, udp }} {verdict}")
+    return "\n".join(out) if out else f"{pad}# (egress policy off)"
+
+
+def _elements(ips):
+    return ",\n".join(f"            {ip}" for ip in ips)
+
 
 def render(name, ctx):
     text = (HERE / "templates" / name).read_text(encoding="utf-8")
@@ -104,10 +176,11 @@ def main(argv=None):
     args = ap.parse_args(argv)
     out_dir = Path(args.out) if args.out else OUT
 
-    cfg, static_leases = load_ctx(args.devices, args.config)
+    cfg, static_leases, iot_ips = load_ctx(args.devices, args.config)
     lan_iface = str(cfg.get("lan_iface", "eth0"))
     if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", lan_iface):   # it ends up inside firewall rules
         raise SystemExit(f"lan_iface {lan_iface!r} is not an interface name")
+    v4, v6 = doh_ips()
     ctx = {
         "lan_iface": lan_iface,
         "pi_ip": cfg["pi_ip"],
@@ -117,6 +190,10 @@ def main(argv=None):
         "default_lease_time": cfg["default_lease_time"],
         "static_leases": static_leases,
         "lease_log_file": cfg["lease_log_file"],
+        "doh_ip4_elements": _elements(v4),
+        "iot_dev_elements": (f"        elements = {{ {', '.join(iot_ips)} }}" if iot_ips else ""),
+        "egress_rules": egress_rules(cfg, lan_iface, cfg["lan_cidr"], cfg["pi_ip"], iot_ips),
+        "doh_ip6_elements": _elements(v6),
     }
     if out_dir.exists():
         # Don't rmtree: on Windows the out/ dir may be open (explorer/cwd)
