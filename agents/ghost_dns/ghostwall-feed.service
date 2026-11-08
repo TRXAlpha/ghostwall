@@ -14,6 +14,8 @@ EnvironmentFile=-/etc/ghostwall/ghostwall.env
 ExecStart=/opt/ghostwall/.venv/bin/python update_feed.py --out /var/lib/ghostwall/threat_feed.txt
 # IP reputation for gateway mode (ghost-dns loads it into the firewall); its failure is not the feed's.
 ExecStartPost=-/opt/ghostwall/.venv/bin/python update_ipfeed.py --out /var/lib/ghostwall/ip_blocklist.txt
+# Newly registered domains (rule new_domain): does nothing, not even a download, while nrd_mode is off.
+ExecStartPost=-/opt/ghostwall/.venv/bin/python update_nrd.py --out /var/lib/ghostwall/nrd_domains.bin
 StateDirectory=ghostwall
 StateDirectoryMode=0750
 # It downloads and parses files from the internet: no capabilities, no devices, only

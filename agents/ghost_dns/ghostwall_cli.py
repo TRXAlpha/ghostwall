@@ -143,6 +143,16 @@ def cmd_status(_a) -> int:
         print(f"popular:  {popular.get('domains', 0):,} top sites never alert on their score alone, "
               f"updated {_ago(popular.get('updated'))}" if popular.get("domains") else
               "popular:  no list yet, so every name can alert on its score (the daily feed update fetches it)")
+    nrd = st.get("nrd")
+    if nrd:
+        if nrd.get("stale"):
+            print(f"nrd:      nrd_mode {nrd.get('mode')}, but the list was built {nrd.get('built')}: too old, "
+                  "not used (sudo systemctl start ghostwall-feed)")
+        elif nrd.get("domains"):
+            print(f"nrd:      nrd_mode {nrd.get('mode')}, {nrd.get('domains', 0):,} domains registered in the last "
+                  f"{nrd.get('days')} days, updated {_ago(nrd.get('updated'))}")
+        else:
+            print(f"nrd:      nrd_mode {nrd.get('mode')}, but no list yet (sudo systemctl start ghostwall-feed)")
     devs = st.get("devices") or []
     named, unnamed = st.get("named_devices", len(devs)), st.get("unnamed_clients", len(st.get("clients") or []))
     print(f"devices:  {named} named" + (f", {unnamed} unnamed (sudo ghostwall devices)" if unnamed else "")

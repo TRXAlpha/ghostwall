@@ -102,6 +102,7 @@ Keep them. Ghostwall runs on top and covers what a blocklist can't:
 | `abused_service` | a device that has been on your network for 3+ days starts using a service malware likes for commands, payloads or stolen data: Telegram's bot API, Discord's CDN, paste sites, ngrok and other tunnels, anonymous file drops, raw GitHub downloads, "what is my IP" lookups | warn |
 | `dns_tunnel` | many long random subdomains of one domain (data smuggled over DNS) | high |
 | `dns_beacon` | an odd-looking name queried on a fixed timer (never under a popular site: a polled weather or course page is not a call-home) | warn |
+| `new_domain` | (opt-in, `nrd_mode`) a domain registered in the last 14 days, new to your network and not a popular site: where most phishing and fresh C2 lives before any list catches up. High when the name also looks random or sits on a risky TLD ([results_nrd.md](agents/dga_eval/results_nrd.md)) | warn / high |
 | `iot_new_domain` | a device you marked IoT (camera, TV, plug) looked up a domain it never used in its learning week. Optional default-deny: alert, dry-run or refuse (`iot_enforce`) | warn |
 | `doh_ip`, `raw_ip`, `beacon` | gateway mode only (`ghost-flow`): a connection straight to a DNS-over-HTTPS server's IP, to an IP nobody looked up, or on a fixed timer | warn / high |
 

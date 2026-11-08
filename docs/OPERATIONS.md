@@ -213,6 +213,29 @@ machines with about 2 GB of RAM or more, CERT Polska and OpenPhish (ThreatFox to
 - **Limits:** Pi-hole blocks exact names only (no subdomains). A failing DNS-server API never
   stops Ghostwall: it logs once, retries, and the lists already registered stay in force.
 
+## Newly registered domains (opt-in)
+
+Most phishing sites and fresh malware servers run on domains registered days before they are
+used, before any threat list has them. `new_domain` flags a lookup of a domain registered in the
+last 14 days that your network has never used and that isn't a popular site.
+
+1. Set `"nrd_mode": "alert"` in `/etc/ghostwall/ghost_dns.json`, then
+   `sudo systemctl start ghostwall-feed` (it downloads the list: about 25 MB, 42 MiB in memory)
+   and `sudo systemctl restart ghostwall-dns`.
+2. See how often it would have fired on your own history first:
+   `sudo -u ghostwall /opt/ghostwall/.venv/bin/python /opt/ghostwall/agents/ghost_dns/replay_querylog.py --querylog <your query log> --set nrd_mode=alert`.
+3. Watch a week. A site you use? Trust it. `update_nrd.py --check NAME` says whether a name
+   is on the list and how young it is.
+4. `"nrd_mode": "block"` refuses those names in inline mode with learning off (IoT devices
+   follow `iot_enforce`). Shadow mode can only alert.
+
+Measured on 2026-11-08 ([results_nrd.md](../agents/dga_eval/results_nrd.md)): 0.02% of the
+Tranco top 100k are on the list (and the rule skips popular sites anyway); 3.2% of the
+non-popular names in Cisco Umbrella's top 1M are, an upper bound on how much ordinary
+traffic could raise it, since Umbrella includes trackers and malware too; 4.1% of today's
+threat-list entries were registered in the last 14 days. On a small board, `"nrd_days": 7`
+about halves the memory (the first week alone was 2.7 million names).
+
 ## Automatic isolation (opt-in)
 
 Cuts a device off the moment it does something only infected devices do: an exact hit on a

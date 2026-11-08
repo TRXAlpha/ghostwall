@@ -54,6 +54,13 @@ in Docker, shadow mode) on 2026-11-07: [docs/FIELD_RESULTS.md](docs/FIELD_RESULT
 
 ### New
 
+- **New rule `new_domain` (opt-in, `nrd_mode`):** a domain registered in the last 14 days
+  (HaGeZi's NRD lists, Stamus Labs data), new to your network and not a popular site. High
+  with a random-looking score or a risky TLD; `block` refuses it in inline mode. The list
+  (5.24 million names, 42.5 MiB in memory on 2026-11-08) is downloaded daily by the feed
+  service only while the rule is on (`update_nrd.py`). `nrd_eval.py` measures it:
+  0.02% of the Tranco top 100k on it, 3.2% of non-popular Umbrella names
+  ([results_nrd.md](agents/dga_eval/results_nrd.md)).
 - **Block with your DNS server (opt-in).** `DNS_BLOCK_FEED` `off` (default) / `dry-run` / `on`
   hands the threat feed to AdGuard Home or Pi-hole as a blocklist, through their own API
   (a separate `ghostwall-dnsblock` service holds the login). Trust and the new

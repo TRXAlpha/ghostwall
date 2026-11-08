@@ -20,6 +20,11 @@ docs/ARCHITECTURE.md):
   * a device marked "profile": "iot", after iot_learn_days, looking up a registrable
     domain outside what it learned -> RECOMMEND, event rule=iot_new_domain (BLOCK with
     iot_enforce "on", inline mode, learning off); only when no other rule alerted
+  * nrd_mode "alert"/"block": a name whose registrable domain is on the newly registered
+    domains list, first seen on this network within novelty_days, not popular, not
+    allowlisted -> RECOMMEND, event rule=new_domain (severity high with a second signal: a
+    random-looking score or a risky TLD; BLOCK with nrd_mode "block", inline mode, learning
+    off; an IoT device follows iot_enforce); only when no other rule alerted
   * everything else                -> ALLOW, no event
 """
 from __future__ import annotations
@@ -40,7 +45,8 @@ import sys
 
 import dnsmsg
 import events as events_mod
-from detectors import RARE_TLDS, Detectors, abused_service, is_internal, iot_builtin_allowed, nx_countable, tld_of
+from detectors import (RARE_TLDS, Detectors, abused_service, is_internal, iot_builtin_allowed, nrd_age_text,
+                       nx_countable, tld_of)
 from tokenizer import registrable_part
 
 
@@ -198,6 +204,9 @@ class Resolver:
         reasons = [f"dga score {dga:.2f}"]
         if is_new:
             reasons.append("first seen" if first_seen else "recently seen")
+        nrd = self._nrd_check(domain, now, is_new, upstream_blocked, rcode)
+        if nrd:      # the score rules below say so too; new_domain itself speaks only when they do not
+            reasons.append(f"also on the newly registered domains list ({nrd['age']})")
 
         # Behavioural detectors (not allowlisted names only).
         # Tunnelling stands on its own. A regular timer, though, is what EVERY app does
@@ -280,7 +289,69 @@ class Resolver:
                               reasons=reasons + [f"rarely-legitimate TLD .{tld_of(domain)}"])
             return Decision("recommend", "dga_corroborated", evt)
 
-        return behaviour or self._iot_alert(dev, domain, iot) or Decision("allow", "clean")
+        return (behaviour or self._iot_alert(dev, domain, iot)
+                or self._nrd_alert(client_ip, dev, domain, nrd, sc, first_seen)
+                or Decision("allow", "clean"))
+
+    def _nrd_check(self, domain: str, now: float, is_new: bool, upstream_blocked: bool,
+                   rcode: str | None) -> dict | None:
+        """new_domain, the finding without its alert: the name's registrable domain is on the
+        newly registered list, this network met it within novelty_days, and it is not a
+        popular site (a top-1M name is never new). Not for names your DNS server or upstream
+        already refused (no connection followed) or that do not exist (nx_burst's job).
+        Allowlisted, internal and blocklisted names never get here."""
+        if not is_new or upstream_blocked or rcode == "NXDOMAIN":
+            return None
+        if str(self.cfg.get("nrd_mode", "off")).lower() == "off":
+            return None
+        hit = self.det.nrd.match(domain, now)
+        if hit is None or self.det.popular.match(domain, now):
+            return None
+        return {"days": hit[0], "listed": hit[1], "age": f"registered {nrd_age_text(hit[0])}"}
+
+    def _nrd_alert(self, client_ip: str, dev, domain: str, nrd: dict | None, sc: dict, first_seen: bool):
+        """The Decision for a _nrd_check() finding, alert included (None without one). Severity
+        is high when a second signal agrees (a score of corroborated_threshold or more, or a
+        rarely-legitimate TLD), else warn. One alert per device and domain family
+        (rule_dedupe_seconds); a refused name is refused on every retry, its alert is not
+        repeated. nrd_mode "block" refuses in inline mode with learning off; an IoT device's
+        lookup is refused only with iot_enforce "on" (iot_enforce "dry-run": the alert says it
+        would be); shadow mode answers nothing, so never."""
+        if nrd is None:
+            return None
+        reg = registrable_part(domain)
+        dga = float(sc.get("dga", 0.0))
+        also = []
+        if dga >= float(self.cfg.get("corroborated_threshold", 0.80)):
+            also.append(f"dga score {dga:.2f}")
+        if tld_of(domain) in RARE_TLDS:
+            also.append(f"rarely-legitimate TLD .{tld_of(domain)}")
+        mode = str(self.cfg.get("nrd_mode", "off")).lower()
+        iot = str(dev.profile).lower() == "iot" and client_ip != self.cfg.get("pi_ip")
+        iot_mode = str(self.cfg.get("iot_enforce", "off")).lower()
+        applies = mode == "block" and (not iot or iot_mode in ("on", "dry-run"))
+        block = applies and (not iot or iot_mode == "on") and not self.shadow and not self.state.learning
+        why = [f"{reg} is on the newly registered domains list ({nrd['age']})",
+               "first seen on your network" if first_seen
+               else f"first seen on your network in the last {int(self.cfg['novelty_days'])} days"]
+        why += also
+        why.append(f"a site you know? Trust, or sudo ghostwall allow {reg}")
+        if mode == "block" and not block:
+            if iot and iot_mode != "on":
+                why.append(f'not blocked (an IoT device follows iot_enforce, which is "{iot_mode}")')
+            else:
+                why.append("not blocked (" + ("shadow mode" if self.shadow else "learning mode") + ")")
+        if block and self._is_repeat(dev.name, domain, "new_domain"):
+            self.stats["blocked"] += 1
+            return Decision("block", "new_domain")
+        action = "block" if block else "recommend"
+        hold = None if also else ("a newly registered domain alone is not proof about this device; "
+                                  "it needs a second signal (a random-looking name or a risky TLD)")
+        evt = self._event(dev, domain, rule="new_domain", action=action,
+                          severity="high" if also else "warn", scores=sc, reasons=why,
+                          trust=reg if reg != domain else None,
+                          would_block=applies and not block, isolate_hold=hold)
+        return Decision(action, "new_domain", evt)
 
     def _device(self, client_ip: str):
         mac = self.neighbours.mac(client_ip) if self.neighbours is not None else None

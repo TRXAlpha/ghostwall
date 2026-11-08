@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Memory and speed of the two big lists ghost-dns holds: the threat feed and the
-popular-domain list, loaded from the files update_feed.py writes.
+"""Memory and speed of the big lists ghost-dns holds: the threat feed, the popular-domain
+list and, when nrd_domains.bin is there, the newly registered domains (update_nrd.py).
 
     python agents/ghost_dns/bench_lists.py --dir /var/lib/ghostwall [--top 1000000]
 
@@ -43,11 +43,15 @@ def measure(name: str, make) -> None:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--dir", default="/var/lib/ghostwall", help="folder with threat_feed.txt and popular_domains.txt")
+    ap.add_argument("--nrd-days", type=int, default=14, help="window of the newly registered list (default 14)")
     ap.add_argument("--top", type=int, default=1_000_000, help="popular_top_n (default 1000000)")
     a = ap.parse_args(argv)
     feed, pop = os.path.join(a.dir, "threat_feed.txt"), os.path.join(a.dir, "popular_domains.txt")
     measure("threat feed", lambda: D.ThreatFeed(feed))
     measure(f"popular domains, top {a.top:,}", lambda: D.PopularDomains(pop, top=a.top))
+    nrd = os.path.join(a.dir, "nrd_domains.bin")
+    if os.path.exists(nrd):
+        measure(f"newly registered, {a.nrd_days} days", lambda: D.NrdList(nrd, days=a.nrd_days))
     return 0
 
 
