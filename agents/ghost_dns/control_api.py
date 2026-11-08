@@ -228,6 +228,14 @@ class ControlHandler(BaseHTTPRequestHandler):
             n, mtime = popular.info()
             out["popular"] = {"domains": n, "updated": datetime.fromtimestamp(mtime, timezone.utc)
                               .strftime("%Y-%m-%dT%H:%M:%SZ") if mtime else None}
+        nrd = getattr(getattr(res, "det", None), "nrd", None)
+        mode = str(self.state["cfg"].get("nrd_mode", "off"))
+        if nrd is not None and mode != "off":
+            n, mtime = nrd.info()
+            out["nrd"] = {"mode": mode, "domains": n, "days": nrd.days, "built": nrd.built or None,
+                          "stale": nrd.stale,
+                          "updated": datetime.fromtimestamp(mtime, timezone.utc)
+                          .strftime("%Y-%m-%dT%H:%M:%SZ") if mtime else None}
         if full:
             out["devices"] = devices
             out["clients"] = [{"ip": ip, "last_seen": t} for t, ip in clients]

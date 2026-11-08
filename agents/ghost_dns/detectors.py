@@ -11,12 +11,14 @@ random":
   dns_beacon   the same name queried at a near-constant interval (C2 call-home)
   dga_burst    one device hitting many *different* random-looking domains fast
   nx_burst     one device failing to resolve many *different* unregistered domains
+  new_domain   a registered-days-ago domain (NRD list) that is also new to this network
 
 Every stateful detector takes `now` as an argument (seconds) so tests can drive
 time, and bounds its memory. Stdlib only.
 """
 from __future__ import annotations
 
+import datetime
 import hashlib
 import math
 import os
@@ -29,6 +31,7 @@ from bisect import bisect_left
 from collections import OrderedDict, defaultdict, deque
 from dataclasses import dataclass, field
 
+import nrdfile
 from tokenizer import PUBLIC_SUFFIXES, registrable_part
 
 # DNS-over-HTTPS/TLS resolver hostnames. A LAN client resolving one of these is
@@ -374,6 +377,83 @@ class PopularDomains(_FileIndex):
         return _find(self._hashes, _hash64(registrable_part(host))) >= 0
 
 
+NRD_STALE_DAYS = 7     # a list built longer ago than this is not used: its ages would be wrong
+
+
+def nrd_age_text(days: int) -> str:
+    """What a band of the NRD list means: 7 -> "in the last 7 days", 14 -> "8 to 14 days ago"."""
+    return f"in the last {days} days" if days <= nrdfile.BAND_DAYS else f"{days - nrdfile.BAND_DAYS + 1} to {days} days ago"
+
+
+class NrdList(_FileIndex):
+    """Domains registered in the last `days` days (HaGeZi's NRD lists, from Stamus Labs data),
+    as update_nrd.py writes them to nrd_domains.bin. Sorted 64-bit hashes, one array per
+    age band (7 days wide), 8 bytes a name: about 39 MiB for 14 days (4.9 million names)
+    instead of some 400 MiB as strings. The file is hashes already, so loading is a read and
+    a sort, not parsing text. A name is found by its registrable domain (or itself); the
+    answer says which band, i.e. how young. No path, no file, a damaged file or one built
+    more than NRD_STALE_DAYS ago means no hits: never an error on the answer path."""
+
+    def __init__(self, path: str | None, days: int = 14, recheck_seconds: float = 300.0,
+                 background: bool = False):
+        super().__init__(path, recheck_seconds, background)
+        self.days = nrdfile.window_days(days)
+        self._bands: tuple[tuple[int, array], ...] = ()    # swapped as one
+        self.built = ""
+        self._built_epoch = 0.0
+        self._warned = 0.0
+
+    def __len__(self) -> int:
+        self._maybe_reload(time.monotonic())
+        return self._size()
+
+    def _size(self) -> int:
+        return sum(len(a) for _, a in self._bands)
+
+    @property
+    def stale(self) -> bool:
+        return bool(self._bands) and time.time() - self._built_epoch > NRD_STALE_DAYS * 86400
+
+    def _load(self) -> bool:
+        try:
+            head, bands = nrdfile.read(self.path, self.days)
+        except OSError:
+            return False             # keep what was loaded
+        except ValueError as exc:    # damaged or half-copied: say so once per file version, keep the old list
+            try:
+                m = os.path.getmtime(self.path)
+            except OSError:
+                m = 0.0
+            if m != self._warned:
+                self._warned = m
+                print(f"[ghost-dns] {self.path} is unusable ({exc}); keeping the previous list", flush=True)
+            return False
+        sorted_bands = tuple((d, _sorted_index(a)[0]) for d, a in bands)
+        try:
+            built = datetime.date.fromisoformat(head["built"])
+            epoch = datetime.datetime(built.year, built.month, built.day, tzinfo=datetime.timezone.utc).timestamp()
+        except ValueError:
+            epoch = 0.0
+        self._bands, self.built, self._built_epoch = sorted_bands, head["built"], epoch
+        return True
+
+    def match(self, host: str, now: float = 0.0) -> tuple[int, str] | None:
+        """(band days, listed name) if host's registrable domain (or host) is on the list, the
+        youngest band first; else None."""
+        self._maybe_reload(now)
+        bands = self._bands
+        if not bands or self.stale:
+            return None
+        reg = registrable_part(host)
+        names = (reg,) if reg == host else (reg, host)
+        for name in names:
+            h = _hash64(name)
+            for days, idx in bands:
+                if _find(idx, h) >= 0:
+                    return days, name
+        return None
+
+
 _POPULAR_HOST = re.compile(r"^[a-z0-9]([a-z0-9._-]{0,251}[a-z0-9])?$")
 
 
@@ -686,10 +766,15 @@ class Detectors:
         self.threat_feed = ThreatFeed(cfg.get("threat_feed_path"), background=bg)
         self.popular = PopularDomains(cfg.get("popular_path"), top=int(cfg.get("popular_top_n", 1_000_000)),
                                       background=bg)
+        # Newly registered domains (rule new_domain): off means the list is never read.
+        nrd_on = str(cfg.get("nrd_mode", "off")).lower() != "off"
+        self.nrd = NrdList(cfg.get("nrd_path") if nrd_on else None, days=int(cfg.get("nrd_days", 14)),
+                           background=bg)
         if bg:                       # start loading now, not at the first query
             now = time.monotonic()
             self.threat_feed._maybe_reload(now)
             self.popular._maybe_reload(now)
+            self.nrd._maybe_reload(now)
         self.doh = DohDetector(cfg.get("doh_ignore_clients",
                                        [ip for ip in ("127.0.0.1", "::1", cfg.get("pi_ip")) if ip]))
         self.tunnel = TunnelDetector(min_distinct=int(cfg.get("tunnel_min_distinct", 30)),
@@ -702,5 +787,6 @@ class Detectors:
         self.lock = threading.Lock()
 
     def wait_loaded(self, timeout: float | None = None) -> bool:
-        """True once the threat feed and the popular list have finished loading."""
-        return self.threat_feed.wait_loaded(timeout) and self.popular.wait_loaded(timeout)
+        """True once the threat feed, the popular list and the NRD list have finished loading."""
+        return (self.threat_feed.wait_loaded(timeout) and self.popular.wait_loaded(timeout)
+                and self.nrd.wait_loaded(timeout))
