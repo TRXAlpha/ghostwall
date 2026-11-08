@@ -35,7 +35,8 @@ DEFAULTS = {
     "event_dedupe_seconds": 86400,  # one alert per device per domain family per day
     # ...except where a daily repeat is only noise: a phone with "Private DNS" or a browser
     # with "secure DNS" on keeps using its DoH provider; say so once a month, not daily.
-    "rule_dedupe_seconds": {"doh_bypass": 30 * 86400, "iot_new_domain": 30 * 86400},
+    "rule_dedupe_seconds": {"doh_bypass": 30 * 86400, "iot_new_domain": 30 * 86400,
+                            "new_domain": 7 * 86400},
     "alert_rate_per_device": 30,    # alerts per device per minute at most (0 = no cap)
     "workers": 16,                  # concurrent in-flight queries
     "resolved_dedupe_seconds": 300,  # min gap before re-logging a resolved IP
@@ -90,6 +91,16 @@ DEFAULTS = {
     # (inline mode with learning off refuses names outside the set; shadow mode never blocks).
     "iot_learn_days": 7,
     "iot_enforce": "off",
+    # Newly registered domains (rule new_domain; docs/OPERATIONS.md): a name whose registrable
+    # domain is on the NRD list (registered in the last nrd_days days), first seen on this network
+    # within novelty_days, not a popular site, not allowlisted. "off" (the list is not even
+    # downloaded), "alert" or "block" (inline mode with learning off refuses it; an IoT device's
+    # lookup follows iot_enforce; shadow mode never blocks). update_nrd.py (the daily feed
+    # service) downloads the list into nrd_path (None = nrd_domains.bin next to the threat feed)
+    # only while nrd_mode is not "off". nrd_days: 7 to 35, rounded up to whole weeks.
+    "nrd_mode": "off",
+    "nrd_days": 14,
+    "nrd_path": None,
     "tunnel_min_long": 12,            # distinct 40+ char random subdomains of one apex per 10 min
     "threat_feed_path": os.path.join(HERE, "threat_feed.txt"),  # built by update_feed.py
     # Popular-domain guard: a name whose registrable domain is on this list never raises
@@ -181,12 +192,13 @@ DEFAULTS = {
 
 
 IOT_ENFORCE = ("off", "dry-run", "on")
+NRD_MODES = ("off", "alert", "block")
 AUTO_ISOLATE_MODES = ("off", "dry-run", "on")
 # The rules ghost-dns raises (and so can act on). ghost-flow's are named apart: listing one
 # would silently do nothing.
 DNS_RULES = ("threat_feed", "dns_tunnel", "nx_burst", "dga_burst", "dga_high", "dga_suspect",
              "dga_corroborated", "blocklist", "doh_bypass", "abused_service", "dns_beacon",
-             "iot_new_domain")
+             "iot_new_domain", "new_domain")
 FLOW_RULES = ("raw_ip", "beacon", "doh_ip")
 
 
@@ -230,6 +242,8 @@ def load_config(path: str | None = None, overrides: dict | None = None) -> dict:
         mine |= set(given)
     if cfg.get("ip_blocklist_path") is None and cfg.get("threat_feed_path"):
         cfg["ip_blocklist_path"] = os.path.join(os.path.dirname(cfg["threat_feed_path"]), "ip_blocklist.txt")
+    if cfg.get("nrd_path") is None and cfg.get("threat_feed_path"):
+        cfg["nrd_path"] = os.path.join(os.path.dirname(cfg["threat_feed_path"]), "nrd_domains.bin")
     if cfg.get("popular_path") is None and cfg.get("threat_feed_path"):
         cfg["popular_path"] = os.path.join(os.path.dirname(cfg["threat_feed_path"]), "popular_domains.txt")
     if cfg.get("models") == "v3-public":
@@ -248,5 +262,10 @@ def load_config(path: str | None = None, overrides: dict | None = None) -> dict:
         raise ValueError(f'models must be "default" or "v3-public", not {cfg.get("models")!r}')
     if cfg.get("iot_enforce") not in IOT_ENFORCE:   # a typo must not quietly mean "off"
         raise ValueError(f'iot_enforce must be "off", "dry-run" or "on", not {cfg.get("iot_enforce")!r}')
+    if cfg.get("nrd_mode") not in NRD_MODES:
+        raise ValueError(f'nrd_mode must be "off", "alert" or "block", not {cfg.get("nrd_mode")!r}')
+    days = cfg.get("nrd_days")
+    if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= 35:
+        raise ValueError(f"nrd_days must be a whole number from 1 to 35 (rounded up to whole weeks), not {days!r}")
     _check_auto_isolate(cfg)
     return cfg

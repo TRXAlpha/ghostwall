@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import config as config_mod
+import detectors as D
 import events as events_mod
 from devices import DeviceMap
 from enforce import Enforcer, NullBackend
@@ -88,13 +89,15 @@ def parse_set(items: list[str]) -> dict:
     return out
 
 
-def replay_config(config_path: str | None, feed: str, popular: str, sets: dict, wd: str) -> dict:
+def replay_config(config_path: str | None, feed: str, popular: str, sets: dict, wd: str,
+                  nrd: str = "") -> dict:
     """Your ghost-dns settings (thresholds, ignored devices...) with throw-away state.
 
     The feed is --feed, else the one your config names, else the installed one (older
     installs left a stale copy next to the code; it is only a last resort). The popular
     list is --popular, else your config's popular_path, else popular_domains.txt next to
-    the feed, as ghost-dns finds it."""
+    the feed, as ghost-dns finds it. The newly-registered-domains list (nrd_mode) likewise:
+    --nrd, else nrd_path, else nrd_domains.bin next to the feed."""
     user = {}
     if config_path and os.path.exists(config_path):
         with open(config_path, encoding="utf-8") as f:
@@ -102,7 +105,8 @@ def replay_config(config_path: str | None, feed: str, popular: str, sets: dict, 
     feed = feed or user.get("threat_feed_path") or first_existing(
         INSTALLED_FEED, os.path.join(HERE, "threat_feed.txt")) or ""
     over = {"threat_feed_path": feed if feed and os.path.exists(feed) else None,
-            "popular_path": popular or user.get("popular_path")}
+            "popular_path": popular or user.get("popular_path"),
+            "nrd_path": nrd or user.get("nrd_path")}
     over.update(sets)
     # never the live files, whatever the config or --set say
     over.update({"state_path": os.path.join(wd, "s.json"), "events_path": os.path.join(wd, "e.jsonl"),
@@ -133,6 +137,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--popular", default="",
                     help="popular-domain list for the DGA guard (default: popular_domains.txt "
                          "next to the feed, as update_feed.py writes it)")
+    ap.add_argument("--nrd", default="",
+                    help="newly-registered-domains list for --set nrd_mode=alert (default: nrd_domains.bin "
+                         "next to the feed, as update_nrd.py writes it)")
     ap.add_argument("--events-out", default="", metavar="FILE",
                     help="also write every alert the replay raised to FILE (JSON lines)")
     a = ap.parse_args(argv)
@@ -147,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def run_replay(a, wd: str) -> int:
-    cfg = replay_config(None if a.no_config else a.config, a.feed, a.popular, parse_set(a.set), wd)
+    cfg = replay_config(None if a.no_config else a.config, a.feed, a.popular, parse_set(a.set), wd, a.nrd)
     if not a.no_config and a.config and os.path.exists(a.config):
         print(f"settings: {a.config}" + (f" with {', '.join(a.set)}" if a.set else ""))
     elif a.set:
@@ -233,8 +240,16 @@ def run_replay(a, wd: str) -> int:
             f.writelines(json.dumps(e) + "\n" for e in evs)
     span = (last - first) / 3600 if first and last else 0
     print(f"replayed {n} queries over {span:.1f} h  ({bad} unreadable lines)")
+    nrd_note = (f" | newly registered: {len(r.det.nrd)} (list built {r.det.nrd.built or '?'})"
+                if cfg.get("nrd_mode") != "off" else "")
     print(f"feed: {len(r.det.threat_feed)} domains | popular: {len(r.det.popular)} | "
-          f"allowlist entries: {len(state.allowlist)}")
+          f"allowlist entries: {len(state.allowlist)}{nrd_note}")
+    if cfg.get("nrd_mode") != "off" and r.det.nrd.stale:
+        print(f"the newly registered list was built {r.det.nrd.built}, more than {D.NRD_STALE_DAYS} days ago: "
+              "it is not used (update_nrd.py --force fetches a fresh one)")
+    elif cfg.get("nrd_mode") != "off" and not len(r.det.nrd):
+        print(f"nrd_mode is {cfg['nrd_mode']} but there is no usable list ({cfg.get('nrd_path')}): run "
+              "update_nrd.py --force first (or sudo systemctl start ghostwall-feed with nrd_mode set)")
     print(f"alerts: {len(evs)}  (suppressed repeats: {r.stats['suppressed']}, "
           f"popular-domain guard: {r.stats['popular']})\n")
     by_rule = Counter(e["rule"] for e in evs)

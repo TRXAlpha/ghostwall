@@ -21,6 +21,7 @@ RULE_WORDS = {
     "upstream_block": "blocked by your upstream DNS filter",
     "raw_ip": "connected to a raw IP", "doh_ip": "uses its own DNS-over-HTTPS", "beacon": "connects on a fixed timer",
     "iot_new_domain": "IoT device looked up a domain it never used",
+    "new_domain": "newly registered domain, new to your network",
 }
 
 
