@@ -189,6 +189,14 @@ DEFAULTS = {
     "contain_days": 7,
     "contain_max_per_day": 20,       # past this it only alerts and says why (0 = never contain)
     "contain_ips": True,
+    # A finding that one lookup can cause (a web page or an email can make a device look a
+    # listed name up, or fire off dozens of made-up subdomains) must not cut a device off or
+    # block a site by itself. auto_isolate on a threat_feed hit, and auto_isolate / contain
+    # on a dns_tunnel made of address lookups only (A, AAAA, HTTPS: all a browser can send),
+    # act only when the same finding is seen again at least this many seconds after the
+    # first; until then the alert says so. A tunnel that used TXT, NULL, CNAME or MX queries
+    # acts at once. 0 = act on the first sighting (the behaviour up to 0.3.0b4).
+    "confirm_seconds": 300,
 
     # --- paths ---
     # Development defaults (next to the code). An installed system keeps state and
@@ -261,6 +269,9 @@ def _check_contain(cfg: dict) -> None:
     cap = cfg.get("contain_max_per_day")
     if isinstance(cap, bool) or not isinstance(cap, int) or cap < 0:
         raise ValueError(f"contain_max_per_day must be a whole number, 0 or more, not {cap!r}")
+    wait = cfg.get("confirm_seconds")
+    if isinstance(wait, bool) or not isinstance(wait, (int, float)) or not 0 <= wait <= 86400:
+        raise ValueError(f"confirm_seconds must be a number of seconds from 0 to 86400, not {wait!r}")
 
 
 V3_PUBLIC = {

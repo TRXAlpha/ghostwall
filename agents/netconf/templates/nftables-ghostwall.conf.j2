@@ -71,6 +71,18 @@ table inet ghostwall {
 {{ iot_dev_elements }}
     }
 
+    # Named devices (devices.json) and the MAC each one has: config.json "antispoof" drops
+    # LAN packets that carry a named device's address from any other MAC.
+    set named_dev {
+        type ipv4_addr
+{{ named_dev_elements }}
+    }
+
+    set named_mac {
+        type ipv4_addr . ether_addr
+{{ named_mac_elements }}
+    }
+
     set doh_ip6 {
         type ipv6_addr
         flags interval
@@ -81,7 +93,7 @@ table inet ghostwall {
 
     # ---------- input chain ----------
     chain input {
-        type filter hook input priority filter; policy accept;
+        type filter hook input priority filter; policy {{ input_policy }};
 
         iifname "lo" accept
 
@@ -103,13 +115,9 @@ table inet ghostwall {
         # DHCP from LAN clients
         iifname "{{ lan_iface }}" udp dport 67 accept
 
-        # AdGuard Home UI
-        iifname "{{ lan_iface }}" ip saddr {{ lan_cidr }} tcp dport 3000 accept
-        iifname "tailscale0" tcp dport 3000 accept
-
-        # qBittorrent Web UI: LAN and tailnet
-        iifname "{{ lan_iface }}" ip saddr {{ lan_cidr }} tcp dport 8080 accept
-        iifname "tailscale0" tcp dport 8080 accept
+        # Web interfaces on this box (config.json "lan_services_tcp": AdGuard Home's UI and
+        # the Ghostwall dashboard by default): LAN and tailnet only
+{{ input_rules }}
 
         # ICMP (ping, path-mtu, etc.)
         ip protocol icmp accept
@@ -117,13 +125,18 @@ table inet ghostwall {
 
         ct state established,related accept
 
-        # default accept: keep the box reachable (break-glass friendly).
-        # Tighten later once the ghost agent is proven.
+        # config.json "input_policy": "accept" (default: the box stays reachable whatever
+        # runs on it) or "drop" (only what is accepted above gets in: SSH, DNS, DHCP, the
+        # listed web interfaces, ping, and replies).
     }
 
     # ---------- forward chain ----------
     chain forward {
         type filter hook forward priority filter; policy accept;
+
+        # --- anti-spoofing (config.json "antispoof"): before the fast path, so a borrowed
+        # address never gets a flow of its own ---
+{{ antispoof_rule }}
 
         # --- flow offload for established flows (fast path) ---
         ct state established,related flow add @f

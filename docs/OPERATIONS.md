@@ -273,6 +273,11 @@ sudo ghostwall allow NAME           # a false alarm: trust it (ends the containm
 sudo nft list set inet ghostwall blocked_ip      # gateway mode: the addresses
 ```
 
+It cannot be used to take a site away from you: a behaviour finding (`dns_tunnel`,
+`dga_high`, ...) never contains a domain your network has already used for `novelty_days`
+(7), and a tunnel-like burst of plain address lookups, which any web page can make a
+browser send, contains its zone only if it continues past `confirm_seconds` (300).
+
 It never contains a name you trust, a popular site (Tranco top 1M), a shared platform
 (ngrok, dynamic DNS, paste sites) or an internal name, and at most `contain_max_per_day`
 (20) new ones a day. Containments and their addresses survive a restart and a reboot.
@@ -289,6 +294,14 @@ malware list, or a DNS tunnel. Needs gateway mode (`"enforce": "nft"`) and `pi_i
    are tagged "would isolate" on the dashboard.
 2. Add your own computers and the router to `"auto_isolate_exempt"`.
 3. Set `"auto_isolate": "on"` and turn learning off (`sudo ghostwall learning off`).
+
+**One lookup is not proof.** A web page or an email can make any device look up a listed
+name (a hidden image is enough), so a single `threat_feed` hit only alerts and says "not
+isolated yet". The device is isolated when it reaches for the same thing again at least
+`confirm_seconds` (300) later, which malware does and a closed page does not. The same goes
+for a `dns_tunnel` made only of address lookups, the one kind a browser can be made to send;
+a tunnel using TXT, NULL, CNAME or MX queries isolates at once. `"confirm_seconds": 0`
+restores acting on the first sighting.
 
 An isolated device can still reach the Pi's DNS and the tailnet, nothing else. Undo with the
 Release device button in Telegram, the dashboard, or `sudo ghostwall release NAME`. The same
@@ -410,6 +423,17 @@ whole network; read it fully first, and keep the router's admin page open.
    NetBIOS and SMB (135, 137-139, 445), UPnP (1900). Only traffic leaving the LAN; devices
    still reach each other. Running a mail server at home? Set `"egress_block_tcp"` in
    `agents/netconf/config.json` to the list you want (or `"egress_block": false`).
+
+   **Harden the Pi itself (recommended once gateway mode works):** in
+   `agents/netconf/config.json` set `"input_policy": "drop"`: only SSH (LAN and tailnet), DNS,
+   DHCP, ping, replies and the ports in `"lan_services_tcp"` (default `[3000, 8088]`: AdGuard's
+   UI and the dashboard) reach the Pi; anything else you run on it needs its port listed.
+   The default stays `"accept"` so an upgrade cannot lock you out. `"antispoof": "log"`, then
+   `"on"`, drops LAN packets that carry a named device's address from a different MAC, so a
+   device cannot borrow another's identity by taking its address (a cloned MAC is not
+   caught). And in `/etc/ghostwall/fw_bot.env`, `FW_BOT_ACTIONS=tighten` lets Telegram
+   alert, isolate and lock down but not release, trust or unblock: a stolen Telegram
+   session then cannot open the firewall. Re-run `gen.py` and reload after a change.
 
    **Both directions:** the `blocked_ip`, `drop_net4` and `drop_net6` sets are matched as
    destination and as source, in the forward chain (your devices), the input chain (the Pi

@@ -1,5 +1,46 @@
 # Changelog
 
+## v0.3.0-beta.5 (2026-11-10)
+
+Update as usual: `git pull && sudo ./install.sh`. A design review of v0.3.0-beta.4 (a
+deliberately hostile one) found these. Gateway mode: re-run `agents/netconf/gen.py` and
+reload the firewall.
+
+### Fixed
+
+- **A web page or an email could cut a device off the network.** With `auto_isolate` on, one
+  lookup of a listed malware domain isolated the device, and a hidden image is enough to
+  cause one. A `threat_feed` hit now only alerts and says "not isolated yet"; the device is
+  isolated when it reaches for the same thing again at least `confirm_seconds` (300) later.
+  Set it to 0 for the old behaviour.
+- **A web page could get a site blocked for the whole house.** With `contain` on, a page that
+  made a browser look up dozens of long made-up subdomains of some small site raised
+  `dns_tunnel` and contained that site for a week. Two guards: a behaviour finding never
+  contains a domain the network has already used for `novelty_days`; and a tunnel made only
+  of address lookups (A, AAAA, HTTPS: all a browser can send) contains its zone, or isolates
+  the device, only if it continues past `confirm_seconds`. A tunnel that uses TXT, NULL,
+  CNAME or MX queries still acts at once.
+- **The gateway firewall opened a torrent client's web port** (8080) from a personal setup,
+  and did not open the dashboard's (8088; it only worked because everything was accepted).
+  The Pi's own ports are now `lan_services_tcp` in `netconf/config.json` (default AdGuard's
+  UI and the dashboard), and `health.sh` checks those.
+
+### New (all opt-in)
+
+- **`input_policy: "drop"`** (gateway mode): only SSH, DNS, DHCP, ping, replies and
+  `lan_services_tcp` reach the Pi. The default stays `"accept"`.
+- **`antispoof: "log"` / `"on"`** (gateway mode): a LAN packet that carries a named device's
+  address from a different MAC is logged or dropped, so a device cannot borrow another's
+  identity by taking its address.
+- **`FW_BOT_ACTIONS=tighten`**: Telegram can alert, show status, isolate and lock down, but
+  not release a device, trust or unblock a domain, or switch lockdown or blocking off.
+
+### Docs
+
+- README Limits says plainly what the review found and what cannot be fixed: identity is
+  an address and a MAC, the popular-site guard is a blind spot, the detector fails open,
+  the benign evidence is thin, IPv6 is switched off rather than filtered.
+
 ## v0.3.0-beta.4 (2026-11-10)
 
 Update as usual: `git pull && sudo ./install.sh` (Docker: `git pull && docker compose up -d --build`).

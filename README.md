@@ -58,8 +58,11 @@ of those too).
 > damage stops early: [What happens when a device gets infected](#what-happens-when-a-device-gets-infected)
 > says which layer stops what, and what still gets through.
 >
-> **Current release: v0.3.0-beta.4** (containment: a detected destination is blocked for every
-> device, by name and, in gateway mode, by address in both directions; on top of beta.3's
+> **Current release: v0.3.0-beta.5** (hardening after a design review: a web page can no
+> longer get a device isolated or a site blocked for the house, the Pi's own firewall can
+> be default-deny, anti-spoofing, a tighten-only Telegram mode; on top of beta.4's
+> containment: a detected destination is blocked for every
+> device, by name and, in gateway mode, by address in both directions; and beta.3's
 > opt-in blocking through AdGuard or Pi-hole, IoT default-deny, newly registered domains,
 > automatic isolation and gateway egress rules): [CHANGELOG](CHANGELOG.md). Already installed? `git pull && sudo
 > ./install.sh` upgrades and keeps your settings, alerts, trusted domains and names.
@@ -546,6 +549,28 @@ The full text with dates is in [CHANGELOG.md](CHANGELOG.md).
   IPv4 only (the gateway forwards no IPv6). A contained name stays refused by your DNS
   server until Ghostwall's next state write after it ends (within a minute or so on a
   network in use).
+- **Identity is an address and a MAC, and both can be faked.** Per-device rules, IoT
+  sets and isolation follow a device's MAC and address. `antispoof` (gateway mode) stops a
+  device borrowing a named device's address; nothing on a network can tell a cloned MAC
+  from the real one. A phone using a random ("private") MAC per network is one device;
+  one that rotates it looks like a new device each time.
+- **Automatic actions wait for a second sighting.** A web page or an email can make a
+  device look up a listed name once. So `auto_isolate` acts when the device reaches for it
+  again 5 minutes or more later (`confirm_seconds`); malware that looks a name up exactly
+  once and then goes quiet is alerted on, not isolated. Before v0.3.0-beta.5 a single
+  hidden image could cut a device off, and a page could get a small site blocked for the
+  whole house for a week (`contain` with `dns_tunnel`).
+- **The popular-site guard is a blind spot.** A name under a Tranco top-1M domain never
+  alerts on its score alone, and a compromised popular site is a common place for malware
+  to live. The threat lists, tunnels, bursts and beacons still apply there.
+- **The detector fails open.** If ghost-dns or ghost-flow stops, DNS and traffic keep
+  flowing unchecked. That is deliberate (a home must not lose its internet to a bug), and
+  it means crashing Ghostwall is a way around it. Watch `ghostwall status`.
+- **The benign evidence is thin.** 17 normal-traffic captures (3.5 device-days) and one
+  home network for 19.5 days are too little to promise a false-positive rate: with no
+  false block seen in 3.5 device-days, statistics still allow almost one a day.
+- **IPv6 is not filtered, it is switched off.** Gateway mode asks you to disable your
+  router's IPv6 advertisements. If you leave them on, devices have an unfiltered way out.
 - **Inbound blocking is mostly your router's job.** The Pi drops packets from blocked and
   criminal networks that pass through it or are aimed at it, but replies normally return
   through the router, not the Pi. Dropping the outbound side is what ends a connection.

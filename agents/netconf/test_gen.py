@@ -155,6 +155,38 @@ class TestNftSetTypes(unittest.TestCase):
         self.assertIn("ip daddr @blocked_ip counter drop", out)
         self.assertIn("ip daddr @drop_net4 counter drop", out)
 
+    def test_input_policy_and_this_boxes_services(self):
+        t = _strip_comments((OUT / "ghostwall.nft").read_text())
+        self.assertIn("hook input priority filter; policy accept;", t)       # default: unchanged
+        self.assertIn("tcp dport { 3000, 8088 } accept", t)
+        self.assertNotIn("8080", t)                                           # no stray service ports
+        r, t = self._render({"input_policy": "drop", "lan_services_tcp": [8088]})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        t = _strip_comments(t)
+        self.assertIn("hook input priority filter; policy drop;", t)
+        inp = t.split("chain input {")[1].split("}\n")[0]
+        for needed in ("tcp dport 22", "udp dport 53", "udp dport 67", "ct state established,related accept",
+                       "tcp dport { 8088 } accept"):
+            self.assertIn(needed, inp)                                        # nobody is locked out
+        self.assertNotIn("3000", inp)
+        for bad in ({"input_policy": "reject"}, {"lan_services_tcp": ["ssh"]}, {"lan_services_tcp": [0]}):
+            self.assertNotEqual(self._render(bad)[0].returncode, 0, bad)
+
+    def test_antispoof_binds_named_addresses_to_their_macs(self):
+        t = _strip_comments((OUT / "ghostwall.nft").read_text())
+        self.assertIn("set named_mac", t)
+        self.assertNotIn("!= @named_mac", t)                                  # off by default
+        r, t = self._render({"antispoof": "on"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        t = _strip_comments(t)
+        rule = "ip saddr @named_dev ip saddr . ether saddr != @named_mac counter drop"
+        self.assertIn(rule, t)
+        self.assertLess(t.index(rule), t.index("flow add @f"))
+        r, t = self._render({"antispoof": "log"})
+        self.assertIn('log prefix "ghostwall antispoof: "', t)
+        self.assertNotIn("!= @named_mac counter drop", t)
+        self.assertNotEqual(self._render({"antispoof": "yes"})[0].returncode, 0)
+
     def test_egress_ports_dropped_toward_the_internet_only(self):
         t = (OUT / "ghostwall.nft").read_text()
         self.assertIn('ip daddr != 192.168.1.0/24 tcp dport { 23, 25, 135, 139, 445, 2323 } counter drop', t)

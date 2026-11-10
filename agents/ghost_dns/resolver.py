@@ -54,6 +54,10 @@ from detectors import (RARE_TLDS, Detectors, abused_service, is_internal, iot_bu
 from tokenizer import is_public_suffix, registrable_part
 
 
+# Lookups a web page can make a browser send (HTTPS/SVCB: type 65/64, asked alongside A).
+ADDRESS_QTYPES = frozenset({"A", "AAAA", "HTTPS", "SVCB", "TYPE64", "TYPE65"})
+
+
 def _blockable_ip(ip: str) -> bool:
     """A public IPv4 address (the gateway's blocked_ip set holds IPv4; it forwards no IPv6)."""
     try:
@@ -122,6 +126,12 @@ class Resolver:
         self._ips_lock = threading.Lock()
         self._host_ips: OrderedDict = OrderedDict()      # host -> addresses of its latest answer
         self._ip_regs: dict[str, set] = {}               # address -> registrable domains seen on it
+        # confirm_seconds: findings a web page or an email can cause with one lookup act only
+        # once they continue. (device, domain family, rule, action) -> first sighting (wall
+        # clock), or None once it has been used.
+        self._pending_lock = threading.Lock()
+        self._pending: OrderedDict = OrderedDict()
+        self._qtypes: OrderedDict = OrderedDict()        # (device, apex) -> [lookups, non-address lookups]
         self._contained_ips: dict[str, str] = {ip: name for name, c in state.contained_list().items()
                                                for ip in c["ips"]}
         self.stats["contained"] = 0
@@ -242,6 +252,7 @@ class Resolver:
         # (updaters, telemetry, sync), so a beacon only counts when the name itself is
         # also odd: it scores as random-looking, or sits on a rarely-legitimate TLD.
         behaviour = None
+        self._count_qtype(dev.name, domain, qtype)
         with self.det.lock:
             tun = self.det.tunnel.observe(dev.name, domain, t,
                                           popular=lambda: self.det.popular.match(domain, now))
@@ -516,7 +527,8 @@ class Resolver:
             return evt
         # A device re-querying the same domain family is one finding, not fifty.
         # Blocks are always recorded; only repeat recommendations are suppressed.
-        if (action == "recommend" or rule == "upstream_block") and self._is_repeat(dev.name, domain, rule):
+        if (action == "recommend" or rule == "upstream_block") and self._is_repeat(dev.name, domain, rule) \
+                and not self._confirm_due(dev.name, domain, rule):
             self.stats["suppressed"] += 1
             return evt
         self._count_alert(dev.name)
@@ -552,6 +564,12 @@ class Resolver:
                 reasons.append(f"not blocked for every device: {skip}")
                 return
             days = float(self.cfg.get("contain_days", 7))
+            if rule == "dns_tunnel" and self._web_like(dev.name, domain) and not self.state.contained_by(name):
+                wait = self._confirm_hold(dev.name, domain, rule, "contain")
+                if wait:
+                    evt["would_contain"] = name
+                    reasons.append(f"not blocked for every device yet: {wait}; it is if this continues")
+                    return
             with self._contain_lock:
                 if self.state.contained_by(name):
                     self.state.contain(self.state.contained_by(name), rule, dev.name, days)   # extends it
@@ -593,6 +611,10 @@ class Resolver:
             return f"{name} is not one site's own domain"
         if evt["rule"] == "dga_high" and evt.get("severity") != "high":
             return "the name is not new to this network"
+        if evt["rule"] != "threat_feed" and not self.state.is_new(name, int(self.cfg["novelty_days"])):
+            # behaviour alone never takes away a site the household already uses: a web page
+            # can make a browser produce tunnel-like or random-looking lookups under any name
+            return f"{name} is not new to this network (in use for {self.cfg['novelty_days']}+ days)"
         if self.state.trusts(name) or self.state.trusts(registrable_part(name)):
             return f"you trust {name}"
         if abused_service(domain) or abused_service(name):
@@ -601,6 +623,65 @@ class Resolver:
         if name == reg and self.det.popular.match(name, self.clock()):
             return f"{name} is a popular site; one alert is not enough to block it for everyone"
         return None
+
+    # -- confirmation: one lookup is something any web page or email can cause ----------
+    def _count_qtype(self, device: str, domain: str, qtype: str) -> None:
+        apex = registrable_part(domain)
+        if apex == domain:
+            return
+        key = (device, apex)
+        with self._pending_lock:
+            c = self._qtypes.get(key)
+            if c is None:
+                c = self._qtypes[key] = [0, 0]
+                while len(self._qtypes) > 5000:
+                    self._qtypes.popitem(last=False)
+            c[0] += 1
+            if str(qtype).upper() not in ADDRESS_QTYPES:
+                c[1] += 1
+
+    def _web_like(self, device: str, domain: str) -> bool:
+        """True if every lookup this device made under the domain's apex was an address
+        lookup (A, AAAA, HTTPS): the only kind a web page can make a browser send. A real
+        tunnel tool carries its data in TXT, NULL, CNAME or MX queries."""
+        with self._pending_lock:
+            c = self._qtypes.get((device, registrable_part(domain)))
+        return c is None or c[1] == 0
+
+    def _confirm_hold(self, device: str, domain: str, rule: str, what: str) -> str | None:
+        """Why this finding may not act yet (the first sighting, or one within
+        confirm_seconds of it), or None once it has continued past that. Used once: after
+        None the same finding does not come back until event_dedupe_seconds has passed."""
+        wait = float(self.cfg.get("confirm_seconds", 300))
+        if wait <= 0:
+            return None
+        key = (device, registrable_part(domain), rule, what)
+        now = self.state.clock().timestamp()
+        text = (f"one sighting is something any web page or email can cause, so this waits until it "
+                f"is seen again {wait / 60:g}+ minutes later (confirm_seconds)")
+        with self._pending_lock:
+            first = self._pending.get(key, 0.0)
+            if first is None:                       # already used
+                return text
+            if not first or now - first > 86400 or now < first:
+                self._pending[key] = now
+                while len(self._pending) > 5000:
+                    self._pending.popitem(last=False)
+                return text
+            if now - first < wait:
+                return text
+            self._pending[key] = None
+            return None
+
+    def _confirm_due(self, device: str, domain: str, rule: str) -> bool:
+        """A finding waiting for confirmation has continued long enough: its repeat is an
+        alert of its own (not suppressed), so the action and its reason are on record."""
+        wait = float(self.cfg.get("confirm_seconds", 300))
+        reg, now = registrable_part(domain), self.state.clock().timestamp()
+        with self._pending_lock:
+            return any(first and wait <= now - first <= 86400
+                       for what in ("isolate", "contain")
+                       for first in (self._pending.get((device, reg, rule, what)),))
 
     def _contain_block_ips(self, name: str, days: float) -> list[str]:
         """Gateway mode: drop the public IPv4 addresses `name` (or a name under it) answered
@@ -716,6 +797,12 @@ class Resolver:
             if skip:
                 reasons.append(f"not isolated automatically: {skip}")
                 return
+            if rule == "threat_feed" or (rule == "dns_tunnel" and self._web_like(name, evt["domain"])):
+                wait = self._confirm_hold(name, evt["domain"], rule, "isolate")
+                if wait:
+                    evt["would_isolate"] = True
+                    reasons.append(f"not isolated yet: {wait}; {name} is isolated if it keeps reaching for this")
+                    return
             with self._iso_lock:   # decide() runs on many threads: one check-and-isolate at a time
                 if self.state.is_isolated(name):
                     reasons.append(f"{name} is already isolated")

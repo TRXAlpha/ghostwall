@@ -25,6 +25,18 @@ RULE_WORDS = {
 }
 
 
+LOOSEN_REFUSED = ("Telegram may only tighten things here (FW_BOT_ACTIONS=tighten): "
+                  "do this on the dashboard or with the ghostwall command on the box.")
+
+
+def tighten_only() -> bool:
+    """FW_BOT_ACTIONS=tighten: the bot still alerts, shows status and can isolate or lock
+    down, but nothing that loosens protection (release, trust, unblock, turning lockdown or
+    blocking off) can be done from Telegram. A stolen Telegram session then cannot open
+    the firewall."""
+    return os.environ.get("FW_BOT_ACTIONS", "").strip().lower() == "tighten"
+
+
 def minimal() -> bool:
     """FW_BOT_PRIVACY=minimal: messages name the device and the kind of alert, never a
     domain, IP or MAC, so Telegram learns that something happened, not what. The
