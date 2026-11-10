@@ -157,6 +157,10 @@ def cmd_status(_a) -> int:
     named, unnamed = st.get("named_devices", len(devs)), st.get("unnamed_clients", len(st.get("clients") or []))
     print(f"devices:  {named} named" + (f", {unnamed} unnamed (sudo ghostwall devices)" if unnamed else "")
           + (" (sudo ghostwall status lists them)" if st.get("devices_hidden") and named else ""))
+    con = st.get("contain") or {}
+    if con.get("mode", "off") != "off" or con.get("contained"):
+        print(f"contain:  {con.get('mode')}, {con.get('contained', 0)} destination(s) blocked for every device "
+              "(sudo ghostwall contained)")
     iot = sum(1 for d in devs if d.get("profile") == "iot")
     if iot:
         print(f"iot:      {iot} IoT device(s), iot_enforce {st.get('iot_enforce', 'off')} "
@@ -367,6 +371,31 @@ def cmd_unblock(a) -> int:
     r = control("/unblock", {"domain": _domain(a.domain)})
     print(f"Unblocked {r.get('domain')}: an exception for it and its subdomains is added to the "
           "blocklists in your DNS server (if Ghostwall blocks there) within a minute or two.")
+    return 0
+
+
+def cmd_contained(_a) -> int:
+    r = control("/contained")
+    rows = r.get("contained") or []
+    mode = r.get("mode", "off")
+    print(f"contain: {mode}" + {"off": " (nothing is blocked for every device automatically; "
+                                       '"contain" in /etc/ghostwall/ghost_dns.json)',
+                                "dry-run": " (alerts say what would be blocked for every device)"}.get(mode, ""))
+    if not rows:
+        print("Nothing is contained.")
+        return 0
+    for c in rows:
+        ips = f", {len(c.get('ips') or [])} address(es) dropped at the gateway" if c.get("ips") else ""
+        print(f"  {c.get('domain'):<40} {c.get('rule')} on {c.get('device')}, {_ago(c.get('since'))}, "
+              f"until {c.get('until')}{ips}")
+    print("Let one through again: sudo ghostwall uncontain DOMAIN")
+    return 0
+
+
+def cmd_uncontain(a) -> int:
+    r = control("/uncontain", {"domain": _domain(a.domain)})
+    print(f"{r.get('domain')} is no longer blocked for every device (your DNS server follows within a "
+          "minute). If it was a false alarm, also: sudo ghostwall allow " + str(r.get("domain")))
     return 0
 
 
@@ -696,6 +725,10 @@ def main(argv=None) -> int:
     p.add_argument("device")
     p.set_defaults(fn=cmd_release)
     sub.add_parser("blocking", help="DNS-server blocklists: sizes and whether they are in use").set_defaults(fn=cmd_blocking)
+    sub.add_parser("contained", help="destinations blocked for every device after an alert").set_defaults(fn=cmd_contained)
+    p = sub.add_parser("uncontain", help="let a contained destination through again")
+    p.add_argument("domain")
+    p.set_defaults(fn=cmd_uncontain)
     p = sub.add_parser("learning", help="alerts only (on) or allow blocking (off)")
     p.add_argument("state", choices=["on", "off"])
     p.set_defaults(fn=cmd_learning)

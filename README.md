@@ -17,6 +17,9 @@ sees that device. Two small on-device models score how random a name looks; the 
 rules do most of the work. Alerts go to a dashboard or Telegram.
 
 **It can also block, if you choose.** Opt-in, each with a dry-run first:
+- **Caught once, blocked for everyone:** a destination one device was caught on is refused
+  for every device for a week, and in gateway mode its addresses are dropped in both
+  directions (`contain`, new in v0.3.0-beta.4).
 - **Known-bad domains for every device:** Ghostwall hands its threat lists (about 440k
   malware, C2 and phishing domains) to AdGuard Home or Pi-hole as a blocklist, with
   optional ad lists. It still never sits in the DNS path.
@@ -25,7 +28,7 @@ rules do most of the work. Alerts go to a dashboard or Telegram.
 - **Gateway mode** (the Pi routes your LAN):
   - an infected device is cut off automatically;
   - every device's DNS is forced through your filter;
-  - devices can't reach botnet and criminal networks (Spamhaus DROP, abuse.ch);
+  - botnet and criminal networks (Spamhaus DROP, abuse.ch) are dropped, to and from;
   - ports malware spreads on (Telnet, SMB, SMTP) are closed toward the internet.
 
 Ghostwall never sends
@@ -51,9 +54,14 @@ of those too).
 > against the real servers in CI (a listed name is refused, a trusted one isn't), not yet on
 > a real network. See [Limits](#limits).
 >
-> **Current release: v0.3.0-beta.3** (blocking, all opt-in: known-bad domains through AdGuard
-> or Pi-hole, IoT default-deny, newly registered domains, automatic isolation, and gateway
-> egress rules; plus the first catch rate on real infections): [CHANGELOG](CHANGELOG.md). Already installed? `git pull && sudo
+> **It does not block every virus, and nothing on a network can.** It stacks layers so the
+> damage stops early: [What happens when a device gets infected](#what-happens-when-a-device-gets-infected)
+> says which layer stops what, and what still gets through.
+>
+> **Current release: v0.3.0-beta.4** (containment: a detected destination is blocked for every
+> device, by name and, in gateway mode, by address in both directions; on top of beta.3's
+> opt-in blocking through AdGuard or Pi-hole, IoT default-deny, newly registered domains,
+> automatic isolation and gateway egress rules): [CHANGELOG](CHANGELOG.md). Already installed? `git pull && sudo
 > ./install.sh` upgrades and keeps your settings, alerts, trusted domains and names.
 
 **Try it** on the box that runs AdGuard Home or Pi-hole:
@@ -72,6 +80,54 @@ detector, run over a scripted day on five made-up devices
 ([make_demo.py](agents/web_ui/make_demo.py)); a test fails if the two ever disagree.
 Light theme follows your OS: [screenshot](docs/img/dashboard-light.png).</sub>
 
+## What happens when a device gets infected
+
+Nothing on a network can promise to stop every piece of malware, and Ghostwall does not
+claim to. What it does is stack layers, so that malware which gets past one meets the next,
+and so that **what one device was caught doing is shut for every device** within seconds.
+The aim: the damage stops at whatever happened in the first moments after the malware ran.
+
+Read the table top to bottom as the life of an infection. "Mode" says where the layer works:
+**S** shadow (the default), **D** with DNS-server blocking on (`DNS_BLOCK_FEED=on`),
+**I** inline, **G** gateway. Everything that blocks is opt-in and has a dry-run.
+
+| Stage | What the malware does | What stops or flags it | Mode |
+|---|---|---|---|
+| 1. Delivery | a person opens a phishing link or a malware download | the name is on the threat lists (about 440k names): refused for every device; `threat_feed` says which device tried | D, I |
+| | the link is a domain registered days ago, on no list yet | `new_domain` (`nrd_mode`): alert, or refused in inline mode | S (alert), I (block) |
+| 2. First call home | looks up a listed C2 or malware domain | refused; `threat_feed` alert; the device is cut off (`auto_isolate`) | D, I; G to cut off |
+| | cycles through generated names (DGA) hunting for its server | `nx_burst` (failed lookups, word-based DGAs too), `dga_burst`, `dga_high` | S |
+| | uses a bot API, a paste site, a tunnel or a file drop | `abused_service`, once the device has a 3-day baseline | S |
+| | smuggles data through DNS itself | `dns_tunnel`; the tunnel's zone is contained; the device is cut off | S (alert), D/I/G to stop |
+| | calls a hardcoded IP address, no DNS at all | `raw_ip`; the address is in a criminal network or a botnet C2 list: dropped | G |
+| | hides its DNS in DNS-over-HTTPS | `doh_bypass` by name; 91 resolver addresses dropped, DoT (853) dropped, plain DNS forced to your filter | S (alert), G (block) |
+| 3. The same malware, the next device | another device looks up the domain the first one was caught on | **contained**: refused for every device for 7 days (`contain`) | D, I |
+| | another device connects to the address it resolved to | the address is dropped at the gateway, to and from | G |
+| 4. Spreading | scans the internet on Telnet, SMB, RPC; sends spam on port 25 | those ports are closed toward the internet | G |
+| | an IoT device (camera, TV, plug) is taken over | `iot_new_domain`: any domain outside what it learned is flagged or refused; `iot_egress_lock` limits it to web, MQTT-TLS and time | S (alert), I/G (block) |
+| 5. Staying | keeps beaconing on a timer | `dns_beacon`, `beacon` | S, G |
+| | the device is isolated | only DNS to the Pi and the tailnet still work; one tap releases it | G |
+
+**What still gets through**, so you know what you are buying:
+
+- Malware that only talks to big shared services (a cloud drive, a chat app, a CDN) on a
+  device that already used them looks like everyone else. Nothing name-based can tell.
+- Whatever the malware does **on the device itself** (encrypting files, stealing saved
+  passwords and sending them through a service the device already uses). Ghostwall is on
+  the network, not on the device: keep an antivirus and backups.
+- The first connection to a destination nobody has listed and no rule has seen yet. The
+  layers above shorten that window; they cannot make it zero.
+- Spreading **inside** your LAN (device to device on the same switch or Wi-Fi) never
+  passes the Pi, so no gateway rule sees it. Isolation stops an isolated device's traffic
+  that the Pi routes, not its traffic to the device next to it.
+- In shadow mode without DNS-server blocking, Ghostwall only alerts: it stops nothing.
+
+Measured, not promised: with every default and **no threat list at all**, the behaviour
+rules flagged the infected machine in 44 of 83 replayed real infections (53%), 38 of the
+51 from the last year (75%), usually within 1 to 2 minutes
+([How well it works](#how-well-it-works)). That also means 1 in 4 recent infections raised
+nothing from behaviour alone. The lists and the firewall layers are there for those.
+
 ## Why not just AdGuard Home or Pi-hole?
 
 Keep them. Ghostwall runs on top and covers what a blocklist can't:
@@ -84,6 +140,7 @@ Keep them. Ghostwall runs on top and covers what a blocklist can't:
 | A device using its own DNS-over-HTTPS | no | flagged if it looks the server up by name; in gateway mode blocked by IP too (91 resolver addresses), and Firefox / Private Relay sent back to your filter |
 | A camera that suddenly talks to somewhere new | no | flagged, or refused (opt-in IoT default-deny) |
 | An infected device | no | cut off automatically on a sure finding (opt-in, gateway mode), one-tap Release |
+| A domain nobody has listed, caught by behaviour on one device | no (not on any list) | refused for every device for a week (opt-in `contain`), its addresses dropped at the gateway |
 | Botnet and criminal IP ranges, Telnet/SMB/SMTP toward the internet | no | dropped in gateway mode |
 | Random-looking domains nobody has listed yet (DGA) | no | about 6 in 10 on [public data](agents/dga_eval/results_public.md), plus bursts of them |
 | Malware cycling through generated domains, even word-like ones | no | a burst of failed (NXDOMAIN) lookups: all 25 public DGA families within 10 lookups [in a simulation](agents/dga_eval/results_nx_sim.md) |
@@ -105,19 +162,10 @@ Keep them. Ghostwall runs on top and covers what a blocklist can't:
 | `dns_beacon` | an odd-looking name queried on a fixed timer (never under a popular site: a polled weather or course page is not a call-home) | warn |
 | `new_domain` | (opt-in, `nrd_mode`) a domain registered in the last 14 days, new to your network and not a popular site: where most phishing and fresh C2 lives before any list catches up. High when the name also looks random or sits on a risky TLD ([results_nrd.md](agents/dga_eval/results_nrd.md)) | warn / high |
 | `iot_new_domain` | a device you marked IoT (camera, TV, plug) looked up a domain it never used in its learning week. Optional default-deny: alert, dry-run or refuse (`iot_enforce`) | warn |
+| `blocklist` | a device looked up a destination Ghostwall is blocking by itself: one that is contained (`contain`), or a `dga_high` name blocked in inline mode. The alert names the finding behind it and how to undo it | high |
 | `doh_ip`, `raw_ip`, `beacon` | gateway mode only (`ghost-flow`): a connection straight to a DNS-over-HTTPS server's IP, to an IP nobody looked up, or on a fixed timer | warn / high |
 
-**Opt-in blocking for every device.** `DNS_BLOCK_FEED=on` hands the threat feed (443k names
-on 2026-11-07, none of them a top-100k site) to AdGuard Home or Pi-hole as a blocklist, with
-optional ad lists (HaGeZi Pro or Ultimate) and a malware-blocking upstream (Quad9 or
-Cloudflare). Ghostwall still never sits in the DNS path; try `dry-run` first. DNS blocking
-can't stop ads served from the same domain as the content (YouTube, in-app ads): a browser
-extension is still needed for those. See [docs/OPERATIONS.md](docs/OPERATIONS.md).
-
-**Opt-in containment.** In gateway mode, `auto_isolate` cuts a device off the moment it hits an
-exact malware-list entry or tunnels data over DNS (at most 2 an hour, one-tap Release in
-Telegram); IoT devices can be locked to the domains they learned (`iot_enforce`). Both are off
-by default; run them as dry-run first: see [docs/OPERATIONS.md](docs/OPERATIONS.md).
+What each rule can lead to when you turn blocking on: [What it blocks](#what-it-blocks-all-opt-in-each-with-a-dry-run).
 
 An alert, as written to `events.jsonl` and sent to Telegram:
 
@@ -137,6 +185,67 @@ burst, and the other rules see it as usual.
 when 1% of normal names are flagged, on public data anyone can check; dictionary-word
 DGAs mostly get through, so the behaviour rules above carry most of the weight. The
 numbers, how to reproduce them and the LSTM comparison: [How well it works](#how-well-it-works).
+
+## What it blocks (all opt-in, each with a dry-run)
+
+Seven switches. Each is **off** after an install or an upgrade. Turn them on in this
+order, one at a time, a few days apart; every one of them has a dry-run that only says what
+it would have done. Details, checks and rollback for each: [docs/OPERATIONS.md](docs/OPERATIONS.md).
+
+| # | Switch | What it does | Needs | Undo |
+|---|---|---|---|---|
+| 1 | `DNS_BLOCK_FEED=on` | the threat lists (443k names on 2026-11-07, none of them a top-100k site) become a blocklist in AdGuard Home or Pi-hole: refused for every device | AdGuard Home or Pi-hole v6 | `ghostwall unblock DOMAIN`, or `off` |
+| 2 | `DNS_PROTECTIVE_UPSTREAM=quad9` | your DNS server asks a resolver that refuses known malware itself (a second, independent list) | step 1's service | `off` puts the old upstream back |
+| 3 | `"contain": "on"` | a destination one device was caught on (`threat_feed`, `dns_tunnel`, a new `dga_high` name) is refused for **every** device for 7 days; in gateway mode its addresses are dropped to and from | step 1, or inline mode | `ghostwall uncontain DOMAIN`, Trust |
+| 4 | `"profile": "iot"` + `"iot_enforce": "on"` | cameras, TVs and plugs may only look up what they learned in a week | inline mode to refuse; alerts in any mode | Trust for that device, `ghostwall relearn` |
+| 5 | `"nrd_mode": "block"` | domains registered in the last 14 days, new to your network, are refused | inline mode to refuse; `"alert"` in any mode | `ghostwall allow DOMAIN` |
+| 6 | gateway mode | botnet and criminal networks dropped **in both directions** (Spamhaus DROP, abuse.ch); Telnet, SMB, RPC, SMTP, UPnP closed toward the internet; all DNS forced through your filter; 91 DoH resolver addresses and DoT dropped | the Pi routes your LAN | `breakglass.sh`, re-enable DHCP on the router |
+| 7 | `"auto_isolate": "on"` | a device behind an exact malware-list hit or a DNS tunnel is cut off at once (at most 2 an hour) | gateway mode | the Release button, `ghostwall release NAME` |
+
+Optional extras with step 1: ad and tracker lists (`DNS_BLOCK_ADS=pro` or `ultimate`,
+HaGeZi), and the DoH/VPN/Tor/proxy bypass list (`DNS_BLOCK_BYPASS=on`). DNS blocking can't
+stop ads served from the same domain as the content (YouTube, in-app ads): a browser
+extension is still needed for those.
+
+### Contain: caught once, blocked for everyone
+
+The gap this closes: a blocklist only knows what somebody else already reported. When
+Ghostwall's own rules catch a device on something no list has, that used to be an alert and
+nothing else, and the next device could walk into the same thing.
+
+With `"contain": "on"` in `/etc/ghostwall/ghost_dns.json`, a high-confidence finding
+becomes a block for the whole network:
+
+1. **The name** (and everything under it) is refused for every device for `contain_days`
+   (7). In inline mode Ghostwall refuses it itself. In shadow mode `ghostwall-dnsblock`
+   hands it to AdGuard Home (a custom rule) or Pi-hole (a deny rule): in force at its next
+   check (every 15 seconds), with no list download.
+2. **Its addresses** (gateway mode): the public IPv4 addresses the name answered with are
+   put in the firewall's `blocked_ip` set, which drops packets **to them and from them**,
+   for forwarded traffic and for the Pi itself. That stops malware that already holds the
+   address and never asks DNS again.
+3. **The alert says so**, and how to undo it: `sudo ghostwall uncontain DOMAIN`.
+   `sudo ghostwall contained` lists what is in force.
+
+What keeps it from blocking the wrong thing:
+
+- only rules that name **one destination** with confidence: `threat_feed` (the listed
+  name), `dns_tunnel` (the tunnel's zone) and `dga_high` for a name new to your network.
+  `dns_beacon`, `dga_corroborated` and `new_domain` can be added; rules about a device or a
+  crowd of names (`nx_burst`, `dga_burst`, `abused_service`, `doh_bypass`) are refused;
+- never a name you trust, a popular site (Tranco top 1M), a shared platform (ngrok,
+  dynamic DNS, paste sites: other people's pages live there too) or an internal name;
+- an address another domain also answered with is never dropped (shared hosting, a CDN);
+  if another domain answers with a dropped address later, it is let through again at once;
+- at most `contain_max_per_day` (20) new ones a day; while `learning` is on it only says
+  what it would do; it ends by itself after 7 days unless the finding repeats;
+- `"contain": "dry-run"` first: alerts then carry `would_contain` and change nothing.
+
+"Both directions", honestly: in gateway mode the Pi routes what your devices **send**; the
+replies usually come back through your router, not through the Pi. Dropping the outbound
+packets is what kills a connection (no reply ever comes to a packet that never left), and
+your router's NAT already refuses connections nobody inside asked for. The inbound rules
+cover the Pi itself and any setup where the Pi is also on the return path.
 
 ## Install
 
@@ -238,6 +347,10 @@ sudo ghostwall alerts             # what it found, newest first
 sudo ghostwall telegram           # alerts on your phone: paste a bot token, message the bot, done
 sudo ghostwall allow example.com  # stop alerts for a domain you trust (ghostwall untrust undoes it)
 sudo ghostwall calibrate          # after a few days: what each threshold would flag on YOUR network
+ghostwall blocking                # DNS-server blocklists: sizes, and whether they are in use
+sudo ghostwall contained          # destinations blocked for every device after an alert
+sudo ghostwall uncontain DOMAIN   # let one through again
+sudo ghostwall release NAME       # let an isolated device back on the network
 ```
 
 - **Dashboard:** `https://<box>:8088` (plain `http://` redirects there), user `ghostwall`, password from
@@ -357,7 +470,85 @@ false-positive rate; `"models": "v3-public"` is made for that case. (Up to
 v0.2.0-beta.2 such installs wrote no score-based alerts at all: building the alert failed
 on the missing model's empty score.)
 
+## What was found and fixed
+
+Every version so far started with somebody trying to break the previous one: a code
+audit, a field test on a real home network, real AdGuard Home and Pi-hole servers in CI,
+83 replayed malware infections. This is the list of what that turned up, in plain words.
+The full text with dates is in [CHANGELOG.md](CHANGELOG.md).
+
+**Things that silently did not work**
+
+| Flaw | What it meant | Fix |
+|---|---|---|
+| Upgrading stopped half-way on every AdGuard setup with a clean config | DNS kept working but nothing was scored until a script was re-run by hand | the warning loop can no longer end the script; tested |
+| `dns_beacon` could never fire in shadow mode on AdGuard Home | AdGuard writes its log in batches, and the rule timed queries by when they were read | every timing rule now uses the query's own time from the log |
+| Telegram dropped alerts after one failed send | one outage silenced every later alert while commands still answered | alerts queue, retry in order, survive restarts, say "sent late" |
+| `install.sh` stopped at step 1 on Python 3.10 and 3.11 | no fresh install on Debian 12, Raspberry Pi OS or Ubuntu 22.04 | fixed; CI installs for real on five distributions |
+| Without onnxruntime no score-based alert was ever written | 32-bit ARM installs detected nothing by score | falls back to the n-gram model; `"models": "v3-public"` |
+| The generated gateway firewall never loaded | `destroy table` needs nftables 1.0.8, the Pi ships 1.0.6; a redirect sat in a filter chain | rewritten; CI loads it on 1.0.6 |
+| ghost-flow never saw a packet; capture exited after 5 minutes | the documented queue rule was invalid; tcpdump flags were wrong | fixed; tested on a real kernel queue with real tcpdump |
+| Docker: `ghostwall telegram` set everything up and sent nothing | the image had no bot | the image ships and starts it; CI checks an alert arrives |
+| Three AdGuard settings broke Ghostwall without a word | query log off, memory-only, or "Anonymize client IP" | the installer names each; ghost-dns warns |
+| `replay_querylog.py` used the defaults, not your settings | "replay your history first" showed the wrong thing | uses your config, feed and popular list |
+
+**Detection that could be dodged or blinded**
+
+| Flaw | Fix |
+|---|---|
+| Names under dynamic DNS (`<random>.ddns.net`) were scored as the provider's name, hiding whole malware families | the label under the provider is scored (53.4% to 60.3% on the public benchmark) |
+| `nx_burst` could be blinded by AdGuard's own empty AAAA answers | empty answers (NODATA) prove nothing |
+| `nx_burst` could be dodged by repeating one dead domain | the window keeps each name once |
+| `nx_burst` ignored DGAs on newer TLDs | every TLD in the root zone counts (IANA's list) |
+| A CNAME to a dead name counted as an unregistered domain | it does not |
+| Pi-hole replies logged a moment after their query were lost | queries wait up to 3 s for their reply |
+| Queries in the last moments before a log rotation were skipped | read from the `.1` file first |
+| A name on the phishing list could not be trusted | trusting the listed name works; a listed subdomain of a trusted name still alerts |
+| The firewall's DoH list (19 addresses) and ghost-flow's had drifted apart | one shared list, 91 addresses |
+| A detected destination stayed open for every other device | `contain` (this release) |
+| Blocked addresses were only dropped outbound; the Pi itself could still talk to them | dropped to and from, in the forward, input and output chains (this release) |
+
+**False alarms**
+
+| Flaw | Fix |
+|---|---|
+| Popular sites raised DGA alerts on their score alone | Tranco top-1M guard: 0.315% to 0.098% of Umbrella names, no DGA family hidden |
+| The threat lists named whole popular sites and shared platforms | dropped at download time (top 100k); hosts under them stay |
+| `dns_tunnel` flagged a game launcher (4 alerts in 20 field days) | under a popular domain only long random labels count |
+| `dns_beacon` flagged weather and course-page polling (3 of 3 field alerts) | never under a popular site |
+| A phone with Private DNS raised the same alert every day | once a month per device and provider, and says it is no sign of infection |
+| Device names stuck to addresses, so "isolate laptop" could cut off the TV | names follow the MAC, IPv6 privacy addresses included |
+| Trust on a tunnel alert trusted one throw-away subdomain | it trusts the zone |
+
+**Security of Ghostwall itself**
+
+- Control API: loopback only, refuses requests from web pages, actions need a token only
+  the `ghostwall` user can read; the device list needs the token too.
+- Dashboard: HTTPS, a password, a limit on wrong passwords, a content security policy.
+- Telegram commands count only from the owner, in a private chat.
+- `state.json` keeps what your household visits as keyed hashes, not as a readable list.
+- A web page cannot flood you: alerts are capped per device per minute, state writes are throttled.
+- The Docker container runs with no capabilities, a read-only filesystem and pinned images;
+  Python dependencies are hash-locked and checked weekly against the OSV database.
+- Everything that reaches `nft` as root is parsed again first: addresses, networks (never
+  private, never wider than a /8), device names never reach a command line.
+- Blocking fails safe: a list that fails to download keeps the old one; a firewall
+  transaction applies whole or not at all; a bug in scoring forwards the query (fail open).
+
 ## Limits
+
+- **It is not an antivirus and does not stop every virus.** It sees the network, not the
+  device: [what still gets through](#what-happens-when-a-device-gets-infected).
+- **Containment is new and only lab-tested.** `contain` has unit tests for every guard and
+  path, and the firewall rules load in CI, but it has not blocked a real infection on a
+  real network. Run `"contain": "dry-run"` first. Its address block needs gateway mode
+  and, in shadow mode, AdGuard Home's log (Pi-hole's log has no full answers); it holds
+  IPv4 only (the gateway forwards no IPv6). A contained name stays refused by your DNS
+  server until Ghostwall's next state write after it ends (within a minute or so on a
+  network in use).
+- **Inbound blocking is mostly your router's job.** The Pi drops packets from blocked and
+  criminal networks that pass through it or are aimed at it, but replies normally return
+  through the router, not the Pi. Dropping the outbound side is what ends a connection.
 
 - **Baselines trust what is already there.** `abused_service` learns each device's usual
   services in its first 3 days, and novelty counts names as normal after a week. A device
@@ -416,6 +607,8 @@ Stdlib `unittest`, no network needed (`numpy` and `onnxruntime` for the scoring 
   over v0.2.0-beta.2 that must keep its alerts, trusted domains, names and thresholds;
 - `tests/gateway_e2e.sh`: ghost-flow on a real kernel queue, capture with real tcpdump, the
   generated nftables ruleset;
+- `tests/realdns_e2e.py`: real AdGuard Home and Pi-hole containers: answer codes, one
+  `nx_burst`, and that a listed name is refused while a trusted one is not;
 - the Docker image on both CPUs, with no capabilities, including Telegram alerts;
 - weekly, every pinned Python package against the OSV vulnerability database.
 

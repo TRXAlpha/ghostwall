@@ -61,6 +61,28 @@ def adguard_rcode(j: dict, host: str, blocked: bool, no_soa_filters: bool = Fals
     return rcode, (dnsmsg.negative_zone(msg) if rcode == "NXDOMAIN" else None)
 
 
+def adguard_answer_ips(line: str) -> tuple[str, list[str]] | None:
+    """(name, addresses) of an upstream answer in one AdGuard query log line; None for a
+    blocked or rewritten one, or a line without an answer."""
+    try:
+        j = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(j, dict):
+        return None
+    res = j.get("Result")
+    if isinstance(res, dict) and (res.get("IsFiltered") or res.get("Reason") not in _ADGUARD_UPSTREAM_REASONS):
+        return None
+    ans, host = j.get("Answer"), str(j.get("QH") or "").rstrip(".").lower()
+    if not host or not isinstance(ans, str) or not ans:
+        return None
+    try:
+        ips = dnsmsg.extract_answer_ips(base64.b64decode(ans, validate=True))
+    except (ValueError, binascii.Error):
+        return None
+    return (host, ips) if ips else None
+
+
 # AdGuard writes up to 9 fraction digits ("...:08.12345+02:00", trailing zeros dropped);
 # Python 3.10's fromisoformat wants exactly 3 or 6
 _FRAC = re.compile(r"\.(\d+)")
@@ -320,6 +342,10 @@ class QueryLogFollower:
                 parsed = self.parse(line)
                 if not parsed:
                     continue
+                if self._want_ips():
+                    got = adguard_answer_ips(line)
+                    if got:
+                        self.resolver.note_ips(*got)
                 pending.append(list(parsed[0]) + [time.monotonic(), parsed[1]])
                 if self.fmt != "pihole" or len(pending) > 64:
                     done += self._decide(pending.pop(0))
@@ -333,6 +359,11 @@ class QueryLogFollower:
                 keep.append(q)
         pending[:] = keep
         return done
+
+    def _want_ips(self) -> bool:
+        """contain with addresses, gateway mode, AdGuard's log (Pi-hole's has no full answers)."""
+        ready = getattr(self.resolver, "_ip_block_ready", None)
+        return self.fmt == "adguard" and ready is not None and ready()
 
     def _when(self, asked: float | None) -> float | None:
         """The query's time on the resolver's clock: now, minus how long ago it was asked

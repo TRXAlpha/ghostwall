@@ -169,6 +169,27 @@ DEFAULTS = {
     "auto_isolate_exempt": [],
     "auto_isolate_max_per_hour": 2,  # past this it only alerts and says why (0 = never isolate)
 
+    # --- contain (opt-in; docs/OPERATIONS.md "Contain what was detected") ---
+    # What one device was caught reaching is refused for EVERY device for contain_days:
+    # Ghostwall refuses the name itself in inline mode; ghostwall-dnsblock pushes it to
+    # AdGuard Home / Pi-hole (needs DNS_BLOCK_FEED=on); in gateway mode ("enforce": "nft")
+    # the public IPv4 addresses it answered with are dropped to and from, unless another
+    # domain answered with the same address (contain_ips false turns the address part off).
+    # "off", "dry-run" (events say "would_contain") or "on" ("on" while `learning` is on
+    # behaves as dry-run). Never a name you trust, a popular site (Tranco top N), a shared
+    # platform (abused_service, dynamic DNS) or an internal name. Undo: ghostwall uncontain.
+    "contain": "off",
+    # Rules whose finding names one destination with high confidence:
+    #   threat_feed  the listed name itself (also blocks it at the gateway by address)
+    #   dns_tunnel   the zone the tunnel goes to
+    #   dga_high     a name new to this network scoring over block_threshold
+    # Also allowed: dns_beacon, dga_corroborated, new_domain (more false positives: your
+    # call). Refused: rules that are about a device or a crowd of names, not one destination.
+    "contain_rules": ["threat_feed", "dns_tunnel", "dga_high"],
+    "contain_days": 7,
+    "contain_max_per_day": 20,       # past this it only alerts and says why (0 = never contain)
+    "contain_ips": True,
+
     # --- paths ---
     # Development defaults (next to the code). An installed system keeps state and
     # events in /var/lib/ghostwall and config in /etc/ghostwall; go_shadow.sh writes
@@ -221,6 +242,27 @@ def _check_auto_isolate(cfg: dict) -> None:
     if isinstance(cap, bool) or not isinstance(cap, int) or cap < 0:
         raise ValueError(f"auto_isolate_max_per_hour must be a whole number, 0 or more, not {cap!r}")
 
+CONTAIN_RULES = ("threat_feed", "dns_tunnel", "dga_high", "dns_beacon", "dga_corroborated", "new_domain")
+
+
+def _check_contain(cfg: dict) -> None:
+    if cfg.get("contain") not in AUTO_ISOLATE_MODES:
+        raise ValueError(f'contain must be "off", "dry-run" or "on", not {cfg.get("contain")!r}')
+    rules = cfg.get("contain_rules")
+    if not isinstance(rules, list) or not all(isinstance(r, str) for r in rules):
+        raise ValueError('contain_rules must be a list of rule names, e.g. ["threat_feed", "dns_tunnel"]')
+    for r in rules:
+        if r not in CONTAIN_RULES:
+            raise ValueError(f"contain_rules: {r!r} does not name one destination with confidence "
+                             f"(one of: {', '.join(CONTAIN_RULES)})")
+    days = cfg.get("contain_days")
+    if isinstance(days, bool) or not isinstance(days, (int, float)) or not 0 < days <= 365:
+        raise ValueError(f"contain_days must be a number of days from above 0 to 365, not {days!r}")
+    cap = cfg.get("contain_max_per_day")
+    if isinstance(cap, bool) or not isinstance(cap, int) or cap < 0:
+        raise ValueError(f"contain_max_per_day must be a whole number, 0 or more, not {cap!r}")
+
+
 V3_PUBLIC = {
     "onnx_model": None,
     "lr_coef": os.path.join(ROOT, "ghostwall", "models", "lr_v3_public.npy"),
@@ -268,4 +310,5 @@ def load_config(path: str | None = None, overrides: dict | None = None) -> dict:
     if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= 35:
         raise ValueError(f"nrd_days must be a whole number from 1 to 35 (rounded up to whole weeks), not {days!r}")
     _check_auto_isolate(cfg)
+    _check_contain(cfg)
     return cfg

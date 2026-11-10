@@ -12,7 +12,8 @@ Two backends:
 
 Domain blocking is NOT done here -- that happens in the resolver (sinkhole /
 NXDOMAIN). This bridge only handles the three things that need the kernel:
-isolating a device, blackholing a destination IP, and LAN lockdown.
+isolating a device, blackholing a destination IP (dropped to and from: forward, input
+and output chains), and LAN lockdown.
 """
 from __future__ import annotations
 
@@ -157,11 +158,19 @@ class Enforcer:
             self.backend._run("add", "element", *TABLE.split(), SET_BLOCKED_IP,
                               "{", *elem, "}")
 
-    def unblock_ip(self, ip: str) -> None:
+    def unblock_ip(self, ip: str) -> bool:
+        """Idempotent: False (no error) if the address was not in the set (its timeout ran
+        out, or a reload emptied the set)."""
         ip = _valid_ip(ip)
         with self._lock:
-            self.backend._run("delete", "element", *TABLE.split(), SET_BLOCKED_IP,
-                              "{", ip, "}")
+            try:
+                self.backend._run("delete", "element", *TABLE.split(), SET_BLOCKED_IP,
+                                  "{", ip, "}")
+            except Exception as exc:  # noqa: BLE001
+                if _not_there(exc):
+                    return False
+                raise
+            return True
 
     # -- LAN lockdown -----------------------------------------------------
     def load_drop_nets(self, v4, v6) -> bool:

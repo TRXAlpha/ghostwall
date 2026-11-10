@@ -143,6 +143,18 @@ class TestNftSetTypes(unittest.TestCase):
                            capture_output=True, text=True, cwd=str(HERE))
         return r, (d / "out" / "ghostwall.nft").read_text() if r.returncode == 0 else ""
 
+    def test_blocked_and_criminal_networks_dropped_both_ways(self):
+        t = _strip_comments((OUT / "ghostwall.nft").read_text())
+        for rule in ("ip daddr @blocked_ip counter drop", "ip saddr @blocked_ip counter drop",
+                     "ip saddr @drop_net4 counter drop", "ip6 saddr @drop_net6 counter drop"):
+            self.assertIn(rule, t)
+        inp = t.split("chain input {")[1].split("}")[0]
+        self.assertIn("ip saddr @blocked_ip counter drop", inp)          # this box is covered too
+        self.assertLess(inp.index("@blocked_ip"), inp.index("dport 22"))  # before any accept
+        out = t.split("chain output {")[1].split("}")[0]
+        self.assertIn("ip daddr @blocked_ip counter drop", out)
+        self.assertIn("ip daddr @drop_net4 counter drop", out)
+
     def test_egress_ports_dropped_toward_the_internet_only(self):
         t = (OUT / "ghostwall.nft").read_text()
         self.assertIn('ip daddr != 192.168.1.0/24 tcp dport { 23, 25, 135, 139, 445, 2323 } counter drop', t)

@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.3.0-beta.4 (2026-11-10)
+
+Update as usual: `git pull && sudo ./install.sh` (Docker: `git pull && docker compose up -d --build`).
+Your settings, alerts, allowlist and thresholds are kept. Containment is **off** until you
+turn it on, and has a dry-run. Gateway mode: re-run `agents/netconf/gen.py` and reload the
+firewall to get the both-directions rules.
+
+### New
+
+- **Contain: caught once, blocked for everyone (opt-in).** `"contain"` `"off"` (default) /
+  `"dry-run"` / `"on"`: the destination behind a high-confidence alert (`contain_rules`: a
+  threat-list hit, a DNS tunnel's zone, a very random name new to the network) is refused for
+  every device for `contain_days` (7). Inline mode refuses it itself; in shadow mode
+  `ghostwall-dnsblock` gives AdGuard Home a custom rule and Pi-hole a deny rule at its next
+  check (15 s), without a list download (needs `DNS_BLOCK_FEED=on`). In gateway mode the
+  public IPv4 addresses the name answered with are dropped too (`contain_ips`), unless
+  another domain answered with the same address; one that another domain answers with later
+  is let through again at once. Never a trusted name, a popular site, a shared platform or
+  an internal name; at most `contain_max_per_day` (20) a day; dry-run while learning is on.
+  Events carry `contained` or `would_contain`; other devices that try the name raise a
+  `blocklist` alert that names the finding. `ghostwall contained` lists, `ghostwall
+  uncontain DOMAIN` (or Trust) undoes; control API `/contained`, `/uncontain`. Containments
+  and their addresses survive a restart and a reboot. Unit-tested, not yet proven on a real
+  network: docs/OPERATIONS.md "Contain what was detected".
+
+### Fixed
+
+- **A destination Ghostwall itself detected stayed open for every other device.** Only names
+  already on a public list were blocked network-wide; a tunnel zone or a fresh DGA domain
+  found by behaviour raised an alert and nothing else. See `contain` above.
+- **Gateway mode dropped blocked addresses in one direction only, and not for the Pi.**
+  `blocked_ip` and the Spamhaus / abuse.ch sets were matched as destination in the forward
+  chain alone. They are now matched as destination and as source in the forward chain, as
+  source at the top of the input chain (before SSH, DNS or the dashboard are accepted) and
+  as destination in a new output chain, so the Pi neither answers nor contacts them.
+- `Enforcer.unblock_ip` failed when the address had already timed out of the set; it is
+  idempotent now, like `release`.
+- In shadow mode a `blocklist` alert said "shadow mode: not enforced" even when your DNS
+  server had refused the name; it says "blocked by your DNS server" then.
+
+### Docs
+
+- README: what happens when a device gets infected (which layer stops what, by mode, and
+  what still gets through), the seven blocking switches in the order to turn them on, and
+  everything found and fixed so far.
+
 ## v0.3.0-beta.3 (2026-11-08)
 
 Update as usual: `git pull && sudo ./install.sh` (Docker: `git pull && docker compose up -d --build`;

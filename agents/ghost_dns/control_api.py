@@ -161,6 +161,8 @@ class ControlHandler(BaseHTTPRequestHandler):
             "/learning": lambda: self._learning(body),
             "/unblock": lambda: self._unblock(body),
             "/relearn": lambda: self._relearn(body),
+            "/contained": self._contained,
+            "/uncontain": lambda: self._uncontain(body),
         }
         fn = routes.get(self.path)
         if fn is None:
@@ -215,6 +217,7 @@ class ControlHandler(BaseHTTPRequestHandler):
                # counters since start; "queries" rising proves queries are being scored
                "stats": dict(getattr(res, "stats", None) or {})}
         out["iot_enforce"] = self.state["cfg"].get("iot_enforce", "off")
+        out["contain"] = {"mode": self.state["cfg"].get("contain", "off"), "contained": len(g.contained_list())}
         scorer = getattr(res, "scorer", None)
         if scorer is not None:
             out["models"] = getattr(scorer, "backend", None)
@@ -325,7 +328,35 @@ class ControlHandler(BaseHTTPRequestHandler):
             self.state["gstate"].iot_allow(d.name, reg)
             return 200, {"ok": True, "domain": reg, "device": d.name, "allowed": True}
         self.state["gstate"].allow(domain)
-        return 200, {"ok": True, "domain": domain, "allowed": True}
+        # trusting a name ends a containment of it (or of the domain it is under)
+        held = self.state["gstate"].contained_by(domain)
+        if held:
+            self._end_containment(held)
+        return 200, {"ok": True, "domain": domain, "allowed": True, **({"uncontained": held} if held else {})}
+
+    def _end_containment(self, name: str) -> bool:
+        res = self.state.get("resolver")
+        if res is not None and hasattr(res, "uncontain"):
+            return res.uncontain(name)
+        return self.state["gstate"].uncontain(name) is not None
+
+    def _contained(self):
+        """What is blocked for every device right now (config "contain"), newest first."""
+        def iso(t):
+            return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        rows = [{"domain": k, "since": iso(v["since"]), "until": iso(v["until"]), "rule": v["rule"],
+                 "device": v["device"], "ips": v["ips"]}
+                for k, v in sorted(self.state["gstate"].contained_list().items(), key=lambda kv: -kv[1]["since"])]
+        return 200, {"ok": True, "mode": self.state["cfg"].get("contain", "off"), "contained": rows}
+
+    def _uncontain(self, body):
+        domain = str(body.get("domain", "")).strip().rstrip(".").lower()
+        if not domain or not DOMAIN_RE.match(domain):
+            raise _ApiError(400, "need a domain name")
+        held = self.state["gstate"].contained_by(domain)
+        if not held or not self._end_containment(held):
+            raise _ApiError(404, f"{domain} is not contained")
+        return 200, {"ok": True, "domain": held, "contained": False}
 
     def _iot_device(self, body):
         name = str(body.get("device", "")).strip()
