@@ -67,11 +67,13 @@ def load_ctx(dev_path=None, cfg_path=None):
     seen_macs, seen_ips = set(), set()
 
     static_lines, iot_ips = [], []
+    cfg["_ip_mac"] = []            # (address, MAC) of every named device, for "antispoof"
     for d in dev.get("devices", []):
         validate_device(d, seen_macs, seen_ips, pi_ip)
         if d.get("profile") == "iot":
             iot_ips.append(d["ip"])
         mac = d["mac"].lower().replace("-", ":")
+        cfg["_ip_mac"].append((d["ip"], mac))
         static_lines.append(
             f"dhcp-host={mac},{d['ip']},{d['name']},{d.get('lease_time', cfg['default_lease_time'])}"
         )
@@ -162,6 +164,47 @@ def _elements(ips):
     return ",\n".join(f"            {ip}" for ip in ips)
 
 
+def input_rules(cfg, lan_iface, lan_cidr):
+    """Accept rules for this box's own web interfaces, and the input chain's policy."""
+    policy = cfg.get("input_policy", "accept")
+    if policy not in ("accept", "drop"):
+        raise GenError(f'input_policy must be "accept" or "drop", not {policy!r}')
+    ports = cfg.get("lan_services_tcp", [3000, 8088])
+    if not isinstance(ports, list) or not all(isinstance(p, int) and not isinstance(p, bool)
+                                              and 1 <= p <= 65535 for p in ports):
+        raise GenError("lan_services_tcp must be a list of port numbers, e.g. [3000, 8088]")
+    lines = []
+    if ports:
+        plist = ", ".join(str(p) for p in sorted(set(ports)))
+        lines.append(f'        iifname "{lan_iface}" ip saddr {lan_cidr} tcp dport {{ {plist} }} accept')
+        lines.append(f'        iifname "tailscale0" tcp dport {{ {plist} }} accept')
+    return policy, "\n".join(lines)
+
+
+def antispoof(cfg, lan_iface):
+    """("named device addresses" set, "address . MAC" set, rule). antispoof "log" or "on": a
+    packet from the LAN that carries a named device's address but not that device's MAC is
+    logged or dropped, so another device cannot borrow its identity (and with it its
+    profile, its allowances or its clean record) by taking its address. A cloned MAC is
+    not caught: nothing on the network can tell that apart."""
+    mode = cfg.get("antispoof", "off")
+    if mode not in ("off", "log", "on"):
+        raise GenError(f'antispoof must be "off", "log" or "on", not {mode!r}')
+    pairs = cfg.get("_ip_mac") or []
+    for ip, mac in pairs:           # these end up inside firewall rules: parse them again
+        ipaddress.IPv4Address(ip)
+        if not re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", mac):
+            raise GenError(f"{mac!r} is not a MAC address")
+    ips = f"        elements = {{ {', '.join(ip for ip, _ in pairs)} }}" if pairs else ""
+    macs = f"        elements = {{ {', '.join(f'{ip} . {mac}' for ip, mac in pairs)} }}" if pairs else ""
+    rule = ""
+    if mode != "off" and pairs:
+        match = f'iifname "{lan_iface}" ip saddr @named_dev ip saddr . ether saddr != @named_mac'
+        rule = (f'        {match} limit rate 6/minute log prefix "ghostwall antispoof: "\n'
+                + (f"        {match} counter drop\n" if mode == "on" else ""))
+    return ips, macs, rule.rstrip("\n")
+
+
 def render(name, ctx):
     text = (HERE / "templates" / name).read_text(encoding="utf-8")
     for k, v in ctx.items():
@@ -181,7 +224,14 @@ def main(argv=None):
     if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", lan_iface):   # it ends up inside firewall rules
         raise SystemExit(f"lan_iface {lan_iface!r} is not an interface name")
     v4, v6 = doh_ips()
+    in_policy, in_rules = input_rules(cfg, lan_iface, cfg["lan_cidr"])
+    named_ips, named_macs, spoof_rule = antispoof(cfg, lan_iface)
     ctx = {
+        "named_dev_elements": named_ips,
+        "named_mac_elements": named_macs,
+        "antispoof_rule": spoof_rule,
+        "input_policy": in_policy,
+        "input_rules": in_rules,
         "lan_iface": lan_iface,
         "pi_ip": cfg["pi_ip"],
         "lan_cidr": cfg["lan_cidr"],

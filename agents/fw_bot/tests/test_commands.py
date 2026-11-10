@@ -92,6 +92,18 @@ class CommandTests(unittest.TestCase):
                          "example.com added to allowlist.")
         self.assertIn(("isolate", "laptop"), self.c.calls)
 
+    def test_tighten_only_refuses_what_loosens(self):
+        import os
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"FW_BOT_ACTIONS": "tighten"}):
+            for cmd in ("/fw release laptop", "/fw allow example.com", "/fw learning on"):
+                self.assertIn("only tighten", handle_command(cmd, self.c), cmd)
+            self.assertEqual(handle_command("/fw isolate laptop", self.c), "laptop isolated.")
+            self.assertIn("off", handle_command("/fw learning off", self.c).lower())
+            self.assertIn("ON", handle_command("/fw lockdown", self.c))      # lockdown was off: turning it on tightens
+        self.assertNotIn(("release", "laptop"), self.c.calls)
+        self.assertEqual(handle_command("/fw release laptop", self.c), "laptop released.")   # default: unchanged
+
     def test_lockdown_learning(self):
         self.assertEqual(handle_command("/fw lockdown", self.c), "Lockdown ON.")
         self.assertEqual(handle_command("/fw learning on", self.c), "Learning mode on.")

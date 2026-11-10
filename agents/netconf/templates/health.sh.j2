@@ -53,8 +53,8 @@ if command -v ss >/dev/null 2>&1; then
     ss -lun | grep -q ':53 ' && ok "DNS port 53 listening (AdGuard)" || echo "[note] nothing on UDP 53 (AdGuard not running?)"
 fi
 
-# 8) AdGuard / qBittorrent ports reachable locally
-for p in 3000 8080 22; do
+# 8) AdGuard, dashboard and SSH ports reachable locally
+for p in 3000 8088 22; do
     ss -ltn | grep -q ":$p " && ok "tcp $p listening" || bad "tcp $p not listening"
 done
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 
+import alerts
 from alerts import minimal
 from control_client import ControlClient, ControlError
 from signing import CallbackError, parse_callback
@@ -57,7 +58,9 @@ class CallbackHandler:
             event = self.events.get(event_id, {})
             device = str(event.get("device", "?"))
             domain = str(event.get("domain", "?"))
-            if action == "unblock":
+            if action in ("unblock", "trust", "release") and alerts.tighten_only():
+                text = alerts.LOOSEN_REFUSED
+            elif action == "unblock":
                 self.client.unblock(event_id, domain)
                 text = f"Unblocked {domain} (event {event_id})."
             elif action == "trust":
