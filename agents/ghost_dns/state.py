@@ -57,6 +57,9 @@ class GhostState:
         self.isolated: set[str] = set()
         self.isolated_ips: dict[str, list[str]] = {}    # device -> the addresses put in the nft set
         self.auto_isolations: list[float] = []          # epoch of each automatic isolation (the cap)
+        # Containment (config "contain"): destinations a high-confidence rule found, refused for
+        # every device until "until". name -> {"since", "until" (epoch), "rule", "device", "ips"}
+        self.contained: dict[str, dict] = {}
         self.lockdown: bool = False
         self.learning: bool = learning_default
         self.first_seen: dict[str, str] = {}
@@ -145,6 +148,14 @@ class GhostState:
                              if k in self.isolated and isinstance(v, list)}
         self.auto_isolations = [float(t) for t in d.get("auto_isolations", [])
                                 if isinstance(t, (int, float))][-100:]
+        self.contained = {}
+        for k, v in dict(d.get("contained", {})).items():
+            try:
+                self.contained[str(k)] = {
+                    "since": float(v["since"]), "until": float(v["until"]), "rule": str(v.get("rule", "")),
+                    "device": str(v.get("device", "")), "ips": [str(i) for i in v.get("ips", [])]}
+            except (KeyError, TypeError, ValueError):
+                continue
         self.lockdown = bool(d.get("lockdown", False))
         self.learning = bool(d.get("learning", self.learning))
         self.first_seen = {}
@@ -182,6 +193,7 @@ class GhostState:
             "isolated": sorted(self.isolated),
             "isolated_ips": self.isolated_ips,
             "auto_isolations": self.auto_isolations[-100:],
+            "contained": self.contained,
             "lockdown": self.lockdown,
             "learning": self.learning,
             "first_seen": self.first_seen,
@@ -210,6 +222,7 @@ class GhostState:
         view = json.dumps({"trusted": sorted(self.allowlist - self.static_allow),
                            "exceptions": sorted(self.dns_exceptions),
                            "blocked": sorted(self.blocklist),
+                           "contained": sorted(self._contained_live()),
                            "starter": sorted(self.static_allow)}, sort_keys=True)
         if view == getattr(self, "_last_view", None):
             return
@@ -256,7 +269,76 @@ class GhostState:
 
     def is_blocked(self, domain: str) -> bool:
         with self._lock:
-            return domain in self.blocklist or registrable_part(domain) in self.blocklist
+            return domain in self.blocklist or registrable_part(domain) in self.blocklist \
+                or self._contained_by(domain) is not None
+
+    # -- containment -------------------------------------------------------
+    def _contained_live(self) -> dict[str, dict]:
+        now = self.clock().timestamp()
+        return {k: v for k, v in self.contained.items() if v["until"] > now}
+
+    def _contained_by(self, domain: str) -> str | None:
+        if not self.contained:
+            return None
+        now = self.clock().timestamp()
+        parts = domain.split(".")
+        for i in range(len(parts) - 1):          # the name itself, then each parent down to a.tld
+            c = self.contained.get(".".join(parts[i:]))
+            if c is not None and c["until"] > now:
+                return ".".join(parts[i:])
+        return None
+
+    def contained_by(self, domain: str) -> str | None:
+        """The contained name that covers `domain` (itself or a parent), if any is in force."""
+        with self._lock:
+            return self._contained_by(domain)
+
+    def contained_list(self) -> dict[str, dict]:
+        """Containments in force: {name: {"since", "until", "rule", "device", "ips"}}."""
+        with self._lock:
+            return {k: dict(v, ips=list(v["ips"])) for k, v in self._contained_live().items()}
+
+    def contain(self, domain: str, rule: str, device: str, days: float, ips=()) -> bool:
+        """Refuse `domain` (and everything under it) for every device for `days`. True if it
+        was not contained already; an existing one is extended and keeps its addresses."""
+        now = self.clock().timestamp()
+        with self._lock:
+            old = self._contained_live().get(domain)
+            self.contained = self._contained_live()          # expired ones go
+            entry = old or {"since": now, "rule": rule, "device": device, "ips": []}
+            entry["until"] = now + float(days) * 86400
+            for ip in ips:
+                if ip not in entry["ips"]:
+                    entry["ips"].append(ip)
+            self.contained[domain] = entry
+            self._save_locked()
+            return old is None
+
+    def uncontain(self, domain: str) -> list[str] | None:
+        """End a containment. Returns the addresses blocked for it (to take out of the
+        firewall), or None if `domain` was not contained."""
+        with self._lock:
+            entry = self.contained.pop(domain, None)
+            if entry is None:
+                return None
+            self._save_locked()
+            return list(entry["ips"])
+
+    def uncontain_ip(self, ip: str) -> list[str]:
+        """Forget one blocked address (it turned out to be shared). Returns the names it was
+        blocked for."""
+        with self._lock:
+            names = [k for k, v in self.contained.items() if ip in v["ips"]]
+            for k in names:
+                self.contained[k]["ips"].remove(ip)
+            if names:
+                self._save_locked()
+            return names
+
+    def containments_within(self, seconds: float) -> int:
+        now = self.clock().timestamp()
+        with self._lock:
+            return sum(1 for v in self.contained.values() if -86400 < now - v["since"] < seconds)
 
     def _stamp(self) -> str:
         return self.clock().strftime("%Y-%m-%dT%H:%M:%SZ")

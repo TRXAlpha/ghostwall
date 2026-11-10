@@ -41,7 +41,10 @@ Both modes run the same `Resolver.decide()`; shadow mode feeds it from the query
            ├──▶ resolved_ips.jsonl ──▶ ghost-flow   (gateway mode)
            └──▶ POST /freeze ────────▶ capture      (gateway mode)
 
-enforcement (opt-in, nftables table `ghostwall`): isolated_dev set, blocked_ip set, lockdown rule
+enforcement (opt-in, nftables table `ghostwall`): isolated_dev set, blocked_ip set (dropped to
+and from; filled by `contain`), drop_net sets, lockdown rule
+containment (opt-in `contain`): a finding's destination -> state.json `contained` -> refused
+by ghost-dns (inline), pushed to AdGuard / Pi-hole by dns_block.py, addresses -> blocked_ip
 ```
 
 Only `ghost-dns` decides allow or block for a domain. Everything else feeds it or is

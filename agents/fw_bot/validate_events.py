@@ -62,6 +62,11 @@ def validate_event(evt: object) -> list[str]:
     for flag in ("auto_isolated", "would_isolate", "auto_isolate_failed"):
         if flag in evt and not isinstance(evt[flag], bool):
             errs.append(f"{flag} must be true or false")
+    for key in ("contained", "would_contain"):     # contain: the name blocked for every device
+        if key in evt and not DOMAIN_OK(evt[key]):
+            errs.append(f"{key} must be a lowercase hostname without trailing dot")
+    if "contained" in evt and "would_contain" in evt:
+        errs.append("contained and would_contain cannot both be set")
     if evt.get("auto_isolated") is True and (evt.get("would_isolate") or evt.get("auto_isolate_failed")):
         errs.append("auto_isolated cannot be true together with would_isolate or auto_isolate_failed")
     eid = evt.get("event_id")

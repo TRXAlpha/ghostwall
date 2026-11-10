@@ -236,6 +236,49 @@ traffic could raise it, since Umbrella includes trackers and malware too; 4.1% o
 threat-list entries were registered in the last 14 days. On a small board, `"nrd_days": 7`
 about halves the memory (the first week alone was 2.7 million names).
 
+## Contain what was detected (opt-in)
+
+A blocklist only knows what somebody else reported. `contain` turns Ghostwall's own
+high-confidence findings into a block for the whole network: what one device was caught
+reaching is refused for every device for a week.
+
+1. Set `"contain": "dry-run"` in `/etc/ghostwall/ghost_dns.json` and
+   `sudo systemctl restart ghostwall-dns`. Alerts that would have contained something say
+   "would block NAME for every device" and carry `would_contain`. Leave it a week.
+2. Make sure something can enforce it: `DNS_BLOCK_FEED=on` (shadow mode: your DNS server
+   does the refusing, [above](#block-with-your-dns-server-opt-in)) or inline mode
+   (Ghostwall refuses it itself).
+3. Set `"contain": "on"` and turn learning off (`sudo ghostwall learning off`).
+
+What happens on a finding (`contain_rules`: an exact or parent hit on the threat lists, a
+DNS tunnel, a very random name new to your network):
+
+- the name and everything under it is refused for every device for `contain_days` (7).
+  AdGuard Home gets a custom rule, Pi-hole a deny rule, at `ghostwall-dnsblock`'s next
+  check (every 15 seconds); neither waits for a list download;
+- in gateway mode the public IPv4 addresses the name answered with go into the firewall's
+  `blocked_ip` set: dropped to them and from them, for forwarded traffic and for the Pi
+  itself, for as long as the containment lasts. An address another domain also answered
+  with is left alone, and one that another domain answers with later is let through again
+  at once (the journal says so);
+- the alert says what was blocked and how to undo it; other devices that try the name
+  raise a `blocklist` alert naming the finding.
+
+Check and undo:
+
+```bash
+sudo ghostwall contained            # what is blocked, by which rule, on which device, until when
+sudo ghostwall uncontain NAME       # let it through again (also takes its addresses out)
+sudo ghostwall allow NAME           # a false alarm: trust it (ends the containment too)
+sudo nft list set inet ghostwall blocked_ip      # gateway mode: the addresses
+```
+
+It never contains a name you trust, a popular site (Tranco top 1M), a shared platform
+(ngrok, dynamic DNS, paste sites) or an internal name, and at most `contain_max_per_day`
+(20) new ones a day. Containments and their addresses survive a restart and a reboot.
+Limits: the address block needs inline mode or AdGuard's log (Pi-hole's log has no full
+answers) and holds IPv4 only; `"contain_ips": false` turns it off.
+
 ## Automatic isolation (opt-in)
 
 Cuts a device off the moment it does something only infected devices do: an exact hit on a
@@ -367,6 +410,14 @@ whole network; read it fully first, and keep the router's admin page open.
    NetBIOS and SMB (135, 137-139, 445), UPnP (1900). Only traffic leaving the LAN; devices
    still reach each other. Running a mail server at home? Set `"egress_block_tcp"` in
    `agents/netconf/config.json` to the list you want (or `"egress_block": false`).
+
+   **Both directions:** the `blocked_ip`, `drop_net4` and `drop_net6` sets are matched as
+   destination and as source, in the forward chain (your devices), the input chain (the Pi
+   itself, before anything is accepted) and the output chain (the Pi's own traffic). Replies
+   to your devices normally come back through the router, not the Pi: dropping the
+   outbound packet is what ends a connection, and the router's NAT refuses what nobody
+   asked for. Re-run `gen.py` and reload the firewall to get these rules on an existing
+   gateway. Counters: `sudo nft list chain inet ghostwall input | grep counter`.
 
    **IP reputation:** LAN devices can't reach networks on Spamhaus DROP / DROPv6 (run by
    criminals, hijacked, or leased to botnet operators) or abuse.ch's botnet C2 lists (SSLBL,

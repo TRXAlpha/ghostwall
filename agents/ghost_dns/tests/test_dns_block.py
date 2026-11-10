@@ -58,6 +58,7 @@ class FakeAdGuard:
 class FakePiHole:
     def __init__(self):
         self.lists, self.regex, self.calls, self.gravity = {}, {}, [], 0
+        self.deny = {}
         self.special = {"mozillaCanary": False, "iCloudPrivateRelay": False}
 
     def request(self, method, url, headers=None, body=None, timeout=30):
@@ -88,6 +89,14 @@ class FakePiHole:
             return 201, b"{}"
         if path.startswith("/api/domains/allow/regex/") and method == "DELETE":
             self.regex.pop(urllib.request.unquote(path.rsplit("/", 1)[1]), None)
+            return 204, b""
+        if path == "/api/domains/deny/regex" and method == "GET":
+            return ok({"domains": list(self.deny.values())})
+        if path == "/api/domains/deny/regex" and method == "POST":
+            self.deny[j["domain"]] = {"domain": j["domain"], "comment": j["comment"]}
+            return 201, b"{}"
+        if path.startswith("/api/domains/deny/regex/") and method == "DELETE":
+            self.deny.pop(urllib.request.unquote(path.rsplit("/", 1)[1]), None)
             return 204, b""
         if path == "/api/action/gravity":
             self.gravity += 1

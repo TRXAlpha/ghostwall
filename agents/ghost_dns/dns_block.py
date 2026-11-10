@@ -57,6 +57,7 @@ SERVED = "ghostwall-blocklist.txt"
 FEED_LIST = "Ghostwall threat feed"
 ADS_PREFIX = "Ghostwall ads: "
 COMMENT = "Ghostwall"                      # marks what this script created in Pi-hole
+CONTAINED = "Ghostwall contained: "        # ...and the deny rules for contained names
 RULES_BEGIN = "! >>> Ghostwall exceptions (managed by Ghostwall; edit outside this block) >>>"
 RULES_END = "! <<< Ghostwall exceptions <<<"
 FEED_MODES = ("off", "dry-run", "on")
@@ -221,7 +222,8 @@ def load_view(s: dict) -> dict:
         with open(view, encoding="utf-8") as f:
             d = json.load(f)
         if isinstance(d, dict):
-            return {k: [str(x) for x in d.get(k, [])] for k in ("trusted", "exceptions", "blocked", "starter")}
+            return {k: [str(x) for x in d.get(k, [])]
+                    for k in ("trusted", "exceptions", "blocked", "contained", "starter")}
     except (OSError, ValueError):
         pass
     d = {}
@@ -238,7 +240,9 @@ def load_view(s: dict) -> dict:
         pass
     allow = {str(x) for x in d.get("allowlist", [])}
     return {"trusted": sorted(allow - starter), "exceptions": [str(x) for x in d.get("dns_exceptions", [])],
-            "blocked": [str(x) for x in d.get("blocklist", [])], "starter": sorted(starter)}
+            "blocked": [str(x) for x in d.get("blocklist", [])], "starter": sorted(starter),
+            "contained": sorted(str(k) for k, v in dict(d.get("contained", {})).items()
+                                if isinstance(v, dict) and float(v.get("until", 0)) > time.time())}
 
 
 def build(s: dict) -> dict:
@@ -251,7 +255,11 @@ def build(s: dict) -> dict:
     exc = set(view["trusted"]) | set(view["exceptions"]) | (set(view["starter"]) & feed_names)
     canaries = s["canaries"] if s["feed"] == "on" and s["canaries"] in ("on", "no-relay") else "off"
     text = render_adguard(names, canaries) if s["server"] == "adguard" else render_pihole(names, exc)
-    return {"names": names, "counts": counts, "exceptions": exc, "text": text,
+    # Contained names (what an alert got blocked for every device) are not in the big list:
+    # they go to the DNS server as rules of their own, in force at once (no list download).
+    contained = {n for n in view.get("contained", []) if _DOMAIN.match(n) and "." in n}
+    contained = drop_under(contained, exc)
+    return {"names": names, "counts": counts, "exceptions": exc, "text": text, "contained": contained,
             "hash": hashlib.sha256(text.encode()).hexdigest()[:16]}
 
 
@@ -365,9 +373,10 @@ class AdGuard:
     def set_rules(self, rules: list[str]) -> None:
         self.api.call("POST", "/control/filtering/set_rules", {"rules": rules})
 
-    def sync(self, s: dict, want: dict[str, str], exceptions, changed: bool) -> list[str]:
-        """Make the registered lists `want` ({url: name}); exceptions go into a marked block of
-        the custom rules. Returns what was done, [] when nothing needed doing."""
+    def sync(self, s: dict, want: dict[str, str], exceptions, changed: bool, contained=()) -> list[str]:
+        """Make the registered lists `want` ({url: name}); exceptions and contained names go
+        into a marked block of the custom rules (in force at once). Returns what was done,
+        [] when nothing needed doing."""
         st = self.status()
         done = []
         have = self.lists(st)
@@ -391,10 +400,12 @@ class AdGuard:
             done.append("refreshed")
         rules = [str(r) for r in (st.get("user_rules") or [])]
         keep = strip_block(rules)
-        new = keep + ([RULES_BEGIN, *exceptions_adguard_rules(exceptions), RULES_END] if exceptions and want else [])
+        block = [*exceptions_adguard_rules(exceptions), *(f"||{d}^" for d in sorted(contained))] if want else []
+        new = keep + ([RULES_BEGIN, *block, RULES_END] if block else [])
         if new != rules:
             self.set_rules(new)
-            done.append(f"{len(exceptions) if want else 0} exceptions")
+            done.append(f"{len(exceptions) if want else 0} exceptions"
+                        + (f", {len(contained)} contained" if contained and want else ""))
         if st.get("enabled") is False and want:
             done.append("WARNING: filtering is switched off in AdGuard (Settings > General settings)")
         return done
@@ -454,7 +465,11 @@ class PiHole:
         r = self.api.call("GET", "/domains/allow/regex")
         return {x["domain"]: x for x in (r.get("domains") or []) if isinstance(x, dict) and x.get("domain")}
 
-    def sync(self, s: dict, want: dict[str, str], exceptions, changed: bool) -> list[str]:
+    def denies(self) -> dict[str, dict]:
+        r = self.api.call("GET", "/domains/deny/regex")
+        return {x["domain"]: x for x in (r.get("domains") or []) if isinstance(x, dict) and x.get("domain")}
+
+    def sync(self, s: dict, want: dict[str, str], exceptions, changed: bool, contained=()) -> list[str]:
         self.login()
         try:
             done, added = [], False
@@ -487,6 +502,18 @@ class PiHole:
                 if rx not in want_rx and str(x.get("comment", "")).startswith(COMMENT):
                     self.api.call("DELETE", "/domains/allow/regex/" + urllib.parse.quote(rx, safe=""))
                     done.append("exception removed")
+            # contained names: deny regexes of their own, in force at once (no gravity run)
+            want_no = {pihole_regex(d): d for d in contained} if want else {}
+            have_no = self.denies()
+            for rx, d in want_no.items():
+                if rx not in have_no:
+                    self.api.call("POST", "/domains/deny/regex", {"domain": rx, "comment": CONTAINED + d,
+                                                                  "groups": [0], "enabled": True})
+                    done.append(f"contained {d}")
+            for rx, x in have_no.items():
+                if rx not in want_no and str(x.get("comment", "")).startswith(CONTAINED):
+                    self.api.call("DELETE", "/domains/deny/regex/" + urllib.parse.quote(rx, safe=""))
+                    done.append("containment ended")
             if s["feed"] == "on" and s["canaries"] != "off":
                 # FTL answers these NXDOMAIN itself (its "special domains"); on by default, made sure of here
                 special = {"mozillaCanary": True, "iCloudPrivateRelay": s["canaries"] == "on"}
@@ -650,6 +677,7 @@ class Syncer:
         b = build(s)
         report = {"time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "mode_feed": feed, "mode_ads": ads, "mode_bypass": bypass,
                   "server": s["server"], "names": len(b["names"]), "exceptions": len(b["exceptions"]),
+                  "contained": len(b["contained"]),
                   "sources": b["counts"], "registered": False, "list_hash": b["hash"]}
         if feed != "off":
             try:
@@ -687,7 +715,7 @@ class Syncer:
             self.server.set(b["text"])
         changed = self.state.get("pushed_hash") != b["hash"]
         try:
-            done = self.client().sync(s, self.wanted(feed), b["exceptions"], changed)
+            done = self.client().sync(s, self.wanted(feed), b["exceptions"], changed, b["contained"])
         except ApiError as e:
             self.failures += 1
             self.next_try = time.monotonic() + min(RETRY_MAX, 60.0 * 2 ** (self.failures - 1))

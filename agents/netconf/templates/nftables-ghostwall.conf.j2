@@ -19,9 +19,10 @@ table inet ghostwall {
     }
 
     # ---------- named sets ----------
-    # Blackholed destination IPs (drop anything the LAN sends to these).
-    # timeout flag: entries can carry a per-element expiry (e.g. feeder adds
-    # a malicious IP with a 24h timeout and it self-cleans).
+    # Blackholed IPs: dropped in BOTH directions (to them and from them), for forwarded
+    # traffic and for this box itself. ghost-dns fills it for contained destinations
+    # (config "contain"), ghost-flow for a blocked beacon.
+    # timeout flag: entries carry a per-element expiry and self-clean.
     # Starter list is EMPTY: populate via
     #   nft add element inet ghostwall blocked_ip { 1.2.3.4 timeout 24h }
     # (nftables does not accept an empty `elements` block, so the line is
@@ -84,6 +85,11 @@ table inet ghostwall {
 
         iifname "lo" accept
 
+        # --- blocked and criminal networks never reach this box either (inbound) ---
+        ip saddr @blocked_ip counter drop
+        ip saddr @drop_net4 counter drop
+        ip6 saddr @drop_net6 counter drop
+
         # SSH: LAN and tailscale0 only
         iifname "{{ lan_iface }}" ip saddr {{ lan_cidr }} tcp dport 22 ct state new accept
         iifname "tailscale0" tcp dport 22 accept
@@ -127,8 +133,9 @@ table inet ghostwall {
         ip daddr @isolated_dev ip daddr != {{ pi_ip }} drop
         iifname "{{ lan_iface }}" ip saddr @isolated_dev ip daddr != {{ pi_ip }} ip daddr != 100.64.0.0/10 drop
 
-        # --- blocked destinations (any device) ---
-        ip daddr @blocked_ip drop
+        # --- blocked destinations (any device), both directions ---
+        ip daddr @blocked_ip counter drop
+        ip saddr @blocked_ip counter drop
         ip daddr @doh_ip4 udp dport 443 drop
         ip daddr @doh_ip4 tcp dport 443 drop
         ip6 daddr @doh_ip6 udp dport 443 drop
@@ -141,6 +148,10 @@ table inet ghostwall {
         # --- IP reputation: no LAN device talks to criminal networks or botnet C2 ---
         iifname "{{ lan_iface }}" ip daddr @drop_net4 counter drop
         iifname "{{ lan_iface }}" ip6 daddr @drop_net6 counter drop
+        # ...and nothing from them is forwarded in (only when this box is on the return path;
+        # with the router doing NAT, an unanswered outbound packet already means no session)
+        ip saddr @drop_net4 counter drop
+        ip6 saddr @drop_net6 counter drop
 
         # --- egress policy: ports no home device needs toward the internet, and (opt-in)
         # IoT devices limited to web / MQTT-TLS / time. From config.json via gen.py.
@@ -175,6 +186,15 @@ table inet ghostwall {
 
         # Everything else: forward (the router does NAT; we do NOT masquerade
         # LAN traffic — the router's own NAT handles internet egress).
+    }
+
+    # ---------- output chain: this box does not talk to them either ----------
+    chain output {
+        type filter hook output priority filter; policy accept;
+        oifname "lo" accept
+        ip daddr @blocked_ip counter drop
+        ip daddr @drop_net4 counter drop
+        ip6 daddr @drop_net6 counter drop
     }
 
     # ---------- force LAN DNS to the Pi ----------

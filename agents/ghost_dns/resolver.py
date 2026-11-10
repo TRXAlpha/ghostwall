@@ -9,6 +9,9 @@ Blocking policy (deliberately conservative -- the models over-flag; full order i
 docs/ARCHITECTURE.md):
   * allowlisted domain            -> ALLOW, no event
   * blocklisted domain            -> BLOCK (sinkhole), event rule=blocklist
+    (the blocklist is dga_high's own blocks plus every containment in force: `contain`
+     puts the destination behind a threat_feed / dns_tunnel / new dga_high alert there
+     for contain_days, for every device; see _contain)
   * dga >= block_threshold
         AND domain is new
         AND learning mode is off   -> BLOCK, promote to blocklist, event action=block
@@ -37,6 +40,7 @@ import queue
 import socket
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -47,7 +51,16 @@ import dnsmsg
 import events as events_mod
 from detectors import (RARE_TLDS, Detectors, abused_service, is_internal, iot_builtin_allowed, nrd_age_text,
                        nx_countable, tld_of)
-from tokenizer import registrable_part
+from tokenizer import is_public_suffix, registrable_part
+
+
+def _blockable_ip(ip: str) -> bool:
+    """A public IPv4 address (the gateway's blocked_ip set holds IPv4; it forwards no IPv6)."""
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return a.version == 4 and a.is_global
 
 
 def _prune(d: dict, cutoff: float, cap: int) -> dict:
@@ -103,6 +116,15 @@ class Resolver:
                       "rate_limited": 0, "blocked_upstream": 0, "popular": 0,
                       "auto_isolated": 0}
         self._iso_lock = threading.Lock()   # auto_isolate: check the cap and isolate as one step
+        # contain: which addresses each name answered with lately (to drop them at the gateway),
+        # and which registrable domains share an address (a shared address is never dropped).
+        self._contain_lock = threading.Lock()
+        self._ips_lock = threading.Lock()
+        self._host_ips: OrderedDict = OrderedDict()      # host -> addresses of its latest answer
+        self._ip_regs: dict[str, set] = {}               # address -> registrable domains seen on it
+        self._contained_ips: dict[str, str] = {ip: name for name, c in state.contained_list().items()
+                                               for ip in c["ips"]}
+        self.stats["contained"] = 0
 
     # -- policy (pure, no I/O except event log + state + enforcer) --------
     def decide(self, client_ip: str, domain: str, qtype: str, upstream_blocked: bool = False,
@@ -156,7 +178,7 @@ class Resolver:
             evt = self._event(dev, domain, rule="threat_feed",
                               action="block" if enforce else "recommend",
                               severity="high", scores={"feed": 1.0}, reasons=why,
-                              isolate_hold=self._feed_hold(domain, listed, exact, now))
+                              isolate_hold=self._feed_hold(domain, listed, exact, now), contain=listed)
             return Decision("block" if enforce else "recommend", "threat_feed", evt)
         hit = self.det.doh.check(client_ip, domain)
         if hit and domain not in self.state.allowlist:   # trusted by exact name: a DoH you chose
@@ -190,11 +212,18 @@ class Resolver:
             return Decision("allow", "internal")
 
         if self.state.is_blocked(domain):
+            held = self.state.contained_by(domain)
+            why = "on confirmed blocklist"
+            if held:
+                c = self.state.contained_list().get(held) or {}
+                why = (f"{held} is contained: blocked for every device after {c.get('rule') or 'an alert'}"
+                       f" on {c.get('device') or 'a device'}; undo: sudo ghostwall uncontain {held}")
             evt = self._event(dev, domain, rule="blocklist",
                               action="recommend" if self.shadow else "block",
                               severity="high",
-                              reasons=["on confirmed blocklist"]
-                              + (["shadow mode: not enforced"] if self.shadow else []))
+                              reasons=[why]
+                              + (["blocked by your DNS server" if upstream_blocked else
+                                  "shadow mode: Ghostwall itself does not block"] if self.shadow else []))
             return Decision("recommend" if self.shadow else "block", "blocklist", evt)
 
         first_seen = self.state.note_seen(domain)
@@ -471,9 +500,10 @@ class Resolver:
         return None
 
     def _event(self, dev, domain, *, rule, action, severity, scores=None,
-               reasons=None, trust=None, would_block=False, isolate_hold=None) -> dict:
+               reasons=None, trust=None, would_block=False, isolate_hold=None, contain=None) -> dict:
         """isolate_hold: why this finding, though its rule is in auto_isolate_rules, must
-        not isolate the device (said in the event when auto_isolate is on or dry-run)."""
+        not isolate the device (said in the event when auto_isolate is on or dry-run).
+        contain: the name to contain for this finding (default: the registrable domain)."""
         evt = events_mod.make_event(
             device=dev.name, ip=dev.ip, mac=dev.mac, domain=domain,
             rule=rule, action=action, severity=severity, scores=scores,
@@ -491,6 +521,7 @@ class Resolver:
             return evt
         self._count_alert(dev.name)
         self._auto_isolate(dev, evt, isolate_hold)   # before the write: the alert says what happened
+        self._contain(dev, evt, contain)
         self.events.write(evt)
         self.state.record_event(evt)
         if action == "block":
@@ -499,6 +530,155 @@ class Resolver:
             self.stats["recommended"] += 1
         self._maybe_freeze(dev, evt)
         return evt
+
+    # -- containment: what one device was caught reaching, refused for every device ----
+    def _contain(self, dev, evt, name: str | None = None) -> None:
+        """Opt-in (contain): the destination behind a high-confidence alert is refused for the
+        whole network for contain_days: by Ghostwall itself in inline mode, by AdGuard Home /
+        Pi-hole through ghostwall-dnsblock, and (gateway mode) the addresses it answered with
+        are dropped in both directions. Dry-run, and "on" while learning, only say
+        "would_contain". Never raises. Never a trusted name, a popular site, a shared platform
+        or an internal name; at most contain_max_per_day new ones a day."""
+        mode = self.cfg.get("contain", "off")
+        rule = evt["rule"]
+        if mode not in ("dry-run", "on") or rule not in (self.cfg.get("contain_rules") or ()):
+            return
+        reasons = evt.setdefault("reasons", [])
+        try:
+            domain = evt["domain"]
+            name = (name or registrable_part(domain)).rstrip(".").lower()
+            skip = self._contain_skip(domain, name, evt)
+            if skip:
+                reasons.append(f"not blocked for every device: {skip}")
+                return
+            days = float(self.cfg.get("contain_days", 7))
+            with self._contain_lock:
+                if self.state.contained_by(name):
+                    self.state.contain(self.state.contained_by(name), rule, dev.name, days)   # extends it
+                    reasons.append(f"{name} is already blocked for every device (contained)")
+                    return
+                dry = "contain is dry-run" if mode == "dry-run" else \
+                    "learning mode (alerts only): sudo ghostwall learning off" if self.state.learning else None
+                if dry:
+                    evt["would_contain"] = name
+                    reasons.append(f"would block {name} for every device ({rule}); not blocked: {dry}")
+                    return
+                cap = int(self.cfg.get("contain_max_per_day", 20))
+                if self.state.containments_within(86400) >= cap:
+                    evt["would_contain"] = name
+                    reasons.append(f"not blocked for every device: {cap} containment(s) in the last day is "
+                                   "the cap (contain_max_per_day)")
+                    return
+                ips = self._contain_block_ips(name, days)
+                self.state.contain(name, rule, dev.name, days, ips)
+                self.stats["contained"] += 1
+                evt["contained"] = name
+                where = "your DNS server refuses it once ghostwall-dnsblock has pushed it (DNS_BLOCK_FEED=on)" \
+                    if self.shadow else "Ghostwall refuses it, and so does your DNS server if ghostwall-dnsblock is on"
+                text = f"blocked {name} for every device for {days:g} days ({rule}): {where}"
+                if ips:
+                    text += (f"; {len(ips)} address(es) it answered with are dropped at the gateway, "
+                             "to and from")
+                reasons.append(text + f"; undo: sudo ghostwall uncontain {name}")
+            print(f"[ghost-dns] contained {name} ({rule} on {dev.name}, event {evt['event_id']}, "
+                  f"{len(ips)} address(es))", file=sys.stderr, flush=True)
+        except Exception as exc:  # noqa: BLE001 (a bug here must never cost the alert)
+            evt.pop("contained", None)
+            reasons.append(f"blocking it for every device FAILED ({str(exc).strip()[:200] or type(exc).__name__})")
+            print(f"[ghost-dns] contain failed for {evt.get('domain')}: {exc!r}", file=sys.stderr, flush=True)
+
+    def _contain_skip(self, domain: str, name: str, evt) -> str | None:
+        """Why this finding must not become a network-wide block, or None."""
+        if "." not in name or is_internal(name) or is_public_suffix(name):
+            return f"{name} is not one site's own domain"
+        if evt["rule"] == "dga_high" and evt.get("severity") != "high":
+            return "the name is not new to this network"
+        if self.state.trusts(name) or self.state.trusts(registrable_part(name)):
+            return f"you trust {name}"
+        if abused_service(domain) or abused_service(name):
+            return "it is on a shared service (other people's pages live there too)"
+        reg = registrable_part(name)
+        if name == reg and self.det.popular.match(name, self.clock()):
+            return f"{name} is a popular site; one alert is not enough to block it for everyone"
+        return None
+
+    def _contain_block_ips(self, name: str, days: float) -> list[str]:
+        """Gateway mode: drop the public IPv4 addresses `name` (or a name under it) answered
+        with lately, unless another domain answered with the same address (shared hosting,
+        a CDN). Returns the addresses now in the firewall's blocked_ip set."""
+        if not self._ip_block_ready():
+            return []
+        reg = registrable_part(name)
+        with self._ips_lock:
+            cand = [ip for host, ips in self._host_ips.items() if host == name or host.endswith("." + name)
+                    for ip in ips]
+            shared = {ip for ip in cand if any(r != reg and self.state.contained_by(r) is None
+                                               for r in self._ip_regs.get(ip, ()))}
+        out = []
+        timeout = f"{max(1, int(days * 24))}h"
+        for ip in dict.fromkeys(cand):
+            if ip in shared or not _blockable_ip(ip) or self._is_this_box(ip):
+                continue
+            try:
+                self.enforcer.block_ip(ip, timeout=timeout)
+            except Exception as exc:  # noqa: BLE001 (no ghostwall table: the DNS block still holds)
+                print(f"[ghost-dns] could not drop {ip} for {name}: {exc!r}", file=sys.stderr, flush=True)
+                continue
+            out.append(ip)
+            self._contained_ips[ip] = name
+        return out
+
+    def _ip_block_ready(self) -> bool:
+        return (self.cfg.get("contain") == "on" and bool(self.cfg.get("contain_ips", True))
+                and getattr(self.enforcer.backend, "name", "") == "nft")
+
+    def note_ips(self, host: str, ips) -> None:
+        """An answer for `host` carried these addresses. Kept (bounded) so a containment can
+        drop them; and if one is an address dropped for a contained name while `host` is not
+        contained, the address is shared: it is let through again at once."""
+        if not ips or not self._ip_block_ready():
+            return
+        host = host.rstrip(".").lower()
+        reg = registrable_part(host)
+        with self._ips_lock:
+            self._host_ips[host] = tuple(ips)
+            self._host_ips.move_to_end(host)
+            while len(self._host_ips) > 20000:
+                self._host_ips.popitem(last=False)
+            if len(self._ip_regs) > 100000:
+                self._ip_regs.clear()
+            for ip in ips:
+                regs = self._ip_regs.setdefault(ip, set())
+                if len(regs) < 8:
+                    regs.add(reg)
+            hit = [ip for ip in ips if ip in self._contained_ips]
+        if hit and self.state.contained_by(host) is None:
+            for ip in hit:
+                self.release_ip(ip, f"{host} answers with it too (a shared address)")
+
+    def release_ip(self, ip: str, why: str = "") -> None:
+        self._contained_ips.pop(ip, None)
+        self.state.uncontain_ip(ip)
+        try:
+            self.enforcer.unblock_ip(ip)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[ghost-dns] could not unblock {ip}: {exc!r}", file=sys.stderr, flush=True)
+            return
+        if why:
+            print(f"[ghost-dns] no longer dropping {ip}: {why}", file=sys.stderr, flush=True)
+
+    def uncontain(self, name: str) -> bool:
+        """End a containment (the CLI, the control API, Trust). False if there was none."""
+        ips = self.state.uncontain(name)
+        if ips is None:
+            return False
+        for ip in ips:
+            self._contained_ips.pop(ip, None)
+            try:
+                self.enforcer.unblock_ip(ip)
+            except Exception as exc:  # noqa: BLE001
+                print(f"[ghost-dns] could not unblock {ip}: {exc!r}", file=sys.stderr, flush=True)
+        return True
 
     def _feed_hold(self, domain: str, listed: str, exact: bool, now: float) -> str | None:
         """Why a threat_feed hit is not proof enough to cut a device off, or None. Checked
@@ -719,6 +899,8 @@ class Resolver:
             return dnsmsg.build_servfail(packet, q.end)
         self.stats["forwarded"] += 1
         self._record_resolved(client_ip, q.name, up)
+        if self._ip_block_ready():
+            self.note_ips(q.name, dnsmsg.extract_answer_ips(up))
         return up
 
     def _score_after_answer(self, q) -> bool:

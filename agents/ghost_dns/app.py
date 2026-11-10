@@ -106,6 +106,26 @@ def restore_isolations(gstate, enforcer, devices, log=print) -> int:
     return n
 
 
+def restore_contained(gstate, enforcer, log=print) -> int:
+    """Put the addresses of every containment still in force back into the gateway's
+    blocked_ip set, for the time each has left (a reboot or a reload of ghostwall.nft
+    empties the set). Only with the nft backend; a failure is logged, never fatal."""
+    if enforcer.backend.name != "nft":
+        return 0
+    n, now = 0, gstate.clock().timestamp()
+    for name, c in sorted(gstate.contained_list().items()):
+        hours = max(1, int((c["until"] - now) / 3600))
+        for ip in c["ips"]:
+            try:
+                enforcer.block_ip(ip, timeout=f"{hours}h")
+                n += 1
+            except Exception as exc:  # noqa: BLE001
+                log(f"[ghost-dns] WARNING could not drop {ip} again (contained {name}): {exc}", flush=True)
+    if n:
+        log(f"[ghost-dns] {n} contained address(es) back in the blocked set", flush=True)
+    return n
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="ghost-dns resolver + control API")
     ap.add_argument("--config")
@@ -151,6 +171,10 @@ def main(argv=None):
         print("[ghost-dns] --once: built OK, exiting", flush=True)
         return 0
     restore_isolations(gstate, enforcer, devices)
+    restore_contained(gstate, enforcer)
+    if cfg.get("contain") != "off":
+        print(f"[ghost-dns] contain={cfg['contain']} rules={','.join(cfg['contain_rules'])} "
+              f"days={cfg['contain_days']:g}", flush=True)
 
     # Shadow mode: pin the follower's starting point (the log's current end) before the
     # control API answers, so every query written after /status responds gets scored.
