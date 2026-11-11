@@ -40,6 +40,20 @@ reload the firewall. **If you use `auto_isolate`: it now needs `"antispoof": "on
 - **A containment made before the clock was set could end at once** (a Pi has no clock
   battery). Containment time never runs behind the last saved state.
 
+### Fixed by an audit of the dashboard, the bot, the installer and the model loader
+
+- **The installer could run a command as root** taken from a path in AdGuard's config or a
+  Docker mount: `ghostwall.env` values were written unquoted and root sources that file. Values
+  are now always quoted. If you installed earlier, check `/etc/ghostwall/ghostwall.env` for
+  values containing `;`, `&` or parentheses.
+- `FW_BOT_ACTIONS=tighten` could be bypassed with `/fw learning ON` in capitals.
+- The Telegram bot kept every alert and digest line in memory for as long as it ran.
+- Four malformed dashboard requests (an unparseable Host, a non-object `params`, deeply nested
+  JSON, a `limit` with thousands of digits) raised an unhandled error. They now get a 400 or 403.
+- A model file with `buckets: 0` loaded and then crashed every lookup; it is refused at load.
+- `ghostwall.env` gets its 640 mode before the dashboard password is written; the backup of
+  AdGuard's config is 600; `ghost-capture.service` is sandboxed further.
+
 ### New
 
 - **Rule `lookalike`** (high): an internationalised domain written with Cyrillic or Greek
