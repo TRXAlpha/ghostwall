@@ -176,6 +176,20 @@ class EndToEndTests(unittest.TestCase):
         with open(self.bot.cfg.digest_path, encoding="utf-8") as f:
             self.assertTrue(f.read().strip())
 
+    def test_memory_is_bounded(self):
+        # Alerts used to stay in events_by_id, and info lines in the digest buffer, for the
+        # whole life of the bot (follow mode never flushes the digest).
+        import fw_bot as fwmod
+        from unittest import mock
+        with mock.patch.object(fwmod, "EVENTS_KEEP", 3), mock.patch.object(fwmod, "DIGEST_KEEP", 3):
+            bot = make_bot(self.tmp, self.tg)
+            for i in range(10):
+                bot.feed_event(dict(EVENT, event_id=f"evt_b{i}", device=f"dev{i}"), chat_id=4242)
+                bot.feed_event(dict(EVENT, severity="info", event_id=f"evt_i{i}"))
+        self.assertEqual(len(bot.events_by_id), 3)
+        self.assertEqual(list(bot.events_by_id)[-1], "evt_b9")   # the newest are kept
+        self.assertEqual(len(bot._digest_lines), 3)
+
 
 if __name__ == "__main__":
     unittest.main()

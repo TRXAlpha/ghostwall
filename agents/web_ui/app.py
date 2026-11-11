@@ -143,7 +143,10 @@ def validate_action(payload: dict) -> tuple[str, dict]:
     if name not in ACTIONS:
         raise ValueError(f"unknown action {name!r}")
     path, allowed = ACTIONS[name]
-    body = {k: v for k, v in (payload.get("params") or {}).items() if k in allowed}
+    params = payload.get("params") or {}
+    if not isinstance(params, dict):
+        raise ValueError("params must be a JSON object")
+    body = {k: v for k, v in params.items() if k in allowed}
     if name in ("isolate", "release") and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", str(body.get("name", ""))):
         raise ValueError("device name required")
     if name in ("allow", "untrust"):
@@ -179,8 +182,11 @@ def password_ok(header: str | None, password: str) -> bool:
 
 
 def host_name(host_header: str | None) -> str:
-    """'192.168.1.5:8088' -> '192.168.1.5', '[::1]:8088' -> '::1'."""
-    return urllib.parse.urlsplit("//" + (host_header or "")).hostname or ""
+    """'192.168.1.5:8088' -> '192.168.1.5', '[::1]:8088' -> '::1'. Unparseable -> ''."""
+    try:
+        return urllib.parse.urlsplit("//" + (host_header or "")).hostname or ""
+    except ValueError:   # e.g. '[abc': not an address, so the caller refuses it
+        return ""
 
 
 class FailLimiter:
@@ -292,7 +298,7 @@ def make_handler(control_base: str, events_path: str, password: str | None = Non
                     self._json(503, {"ok": False, "error": f"resolver unreachable: {e}"})
             elif self.path.startswith("/api/events"):
                 m = re.search(r"[?&]limit=(\d+)", self.path)
-                limit = min(int(m.group(1)) if m else 50, 500)
+                limit = min(int(m.group(1)[:6]) if m else 50, 500)   # [:6]: no huge digit strings
                 self._json(200, {"ok": True, "events": read_events(events_path, limit)})
             else:
                 self._json(404, {"ok": False, "error": "not found"})
@@ -321,7 +327,7 @@ def make_handler(control_base: str, events_path: str, password: str | None = Non
                 if not isinstance(payload, dict):
                     raise ValueError("expected a JSON object")
                 path, body = validate_action(payload)
-            except (ValueError, TypeError) as e:
+            except (ValueError, TypeError, RecursionError) as e:   # RecursionError: nested JSON
                 self._json(400, {"ok": False, "error": str(e)})
                 return
             try:
