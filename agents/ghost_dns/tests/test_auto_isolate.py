@@ -94,7 +94,8 @@ class Base(unittest.TestCase):
         self.cfg = config_mod.load_config(None, {
             "state_path": os.path.join(self.dir, "s.json"), "events_path": os.path.join(self.dir, "e.jsonl"),
             "query_log": None, "resolved_ips_path": None, "allowlist_path": None,
-            "threat_feed_path": fpath, "pi_ip": PI, "auto_isolate": "on", "confirm_seconds": 0, **over})
+            "threat_feed_path": fpath, "pi_ip": PI, "auto_isolate": "on", "confirm_seconds": 0, "auto_isolate_min_sources": 1,
+            "auto_isolate_need_antispoof": False, **over})
         self.state = GhostState(self.cfg["state_path"], learning_default=learning)
         self.wall = getattr(self, "wall", 1_800_000_000.0)
         self.state.clock = lambda: datetime.fromtimestamp(self.wall, timezone.utc)

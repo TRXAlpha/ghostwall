@@ -79,10 +79,18 @@ class ContainTests(C.Base):
         self.build(contain_rules=["dns_tunnel"], novelty_days=7)
         self.state.note_seen("www.oldfriend.example")
         self.state.first_seen[next(iter(self.state.first_seen))] = "2020-01-01"
-        evt = self.tunnel(apex="oldfriend.example")               # even with TXT queries
+        evt = self.page_tunnel(apex="oldfriend.example")          # lookups a web page can cause
         self.assertNotIn("contained", evt)
         self.assertNotIn("would_contain", evt)
         self.assertIn("not new to this network", " ".join(evt["reasons"]))
+
+    def test_looking_a_server_up_early_buys_no_amnesty(self):
+        """Malware cannot make its server "established" by one lookup a week ahead: a tunnel
+        that carries TXT queries (which no web page can send) is contained all the same."""
+        self.build(contain_rules=["dns_tunnel"], novelty_days=7)
+        self.state.note_seen("www.patient.example")
+        self.state.first_seen[next(iter(self.state.first_seen))] = "2020-01-01"
+        self.assertEqual(self.tunnel(apex="patient.example")["contained"], "patient.example")
 
     def test_a_feed_hit_is_contained_at_once(self):
         self.build()

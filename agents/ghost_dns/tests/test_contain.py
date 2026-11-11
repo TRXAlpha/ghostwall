@@ -198,13 +198,19 @@ class GuardTests(Base):
         self.assertNotIn("contained", self.hit())
 
     def test_daily_cap(self):
-        self.build(feed=("a.example", "b.example", "c.example"), contain_max_per_day=2)
-        self.assertIn("contained", self.hit(domain="a.example"))
-        self.assertIn("contained", self.hit(domain="b.example"))
-        evt = self.hit(domain="c.example")
+        self.build(contain_max_per_day=2)
+        self.assertIn("contained", self.tunnel(apex="a.example"))
+        self.assertIn("contained", self.tunnel(apex="b.example"))
+        evt = self.tunnel(apex="c.example")
         self.assertEqual(evt["would_contain"], "c.example")
         self.assertIn("cap", evt["reasons"][-1])
         self.assertEqual(len(self.state.contained_list()), 2)
+
+    def test_listed_names_do_not_use_the_cap_up(self):
+        self.build(feed=("a.example", "b.example", "c.example"), contain_max_per_day=1)
+        for name in ("a.example", "b.example", "c.example"):       # junk lookups of listed names
+            self.assertIn("contained", self.hit(domain=name))
+        self.assertEqual(self.tunnel(apex="realc2.example")["contained"], "realc2.example")
 
     def test_expires_and_survives_a_restart_until_then(self):
         self.build(contain_rules=["dns_tunnel"])

@@ -1,5 +1,56 @@
 # Changelog
 
+## v0.3.0-beta.6 (2026-11-11)
+
+Update as usual: `git pull && sudo ./install.sh`. A second hostile review, asking of every
+automatic action: who chooses its target? Gateway mode: re-run `agents/netconf/gen.py` and
+reload the firewall. **If you use `auto_isolate`: it now needs `"antispoof": "on"` in
+`netconf/config.json`, and a listed name on two lists; until then it only alerts and says why.**
+
+### Fixed
+
+- **Whoever ran a bad domain could aim the firewall.** `contain` drops the addresses a
+  contained name resolved to, and the domain's owner chooses those: pointing it at your DNS
+  server's upstream resolver got that resolver dropped, in the Pi's own output chain, for a
+  week. A containment now never drops this box's DNS upstreams and resolvers, the public
+  resolvers in `netconf/doh_ips.txt`, anything in `contain_protect`, or more than
+  `contain_max_ips` (8) addresses.
+- **Any device could get another one isolated.** Isolation trusts the sender address of a
+  lookup, which any LAN device can forge. The firewall's `antispoof` rule now also covers
+  lookups sent to the Pi (it covered forwarded traffic only), and `auto_isolate` acts only
+  while that rule is loaded (`auto_isolate_need_antispoof`).
+- **One list entry was a remote off switch.** A `threat_feed` hit isolates only when two
+  separate lists carry the name (`auto_isolate_min_sources`).
+- **Looking a server up a week early bought an amnesty.** beta.5 never contained a domain
+  the network had used for `novelty_days`. That now holds only for evidence a web page can
+  produce (address lookups); a tunnel carrying TXT, NULL, CNAME or MX queries is contained
+  whatever its age.
+- **An isolated device could still move data out through DNS.** Inline mode now answers
+  nothing for an isolated device (its lookups are still scored), the gateway firewall lets
+  only 20 lookups a minute from it reach the Pi, and it can no longer start connections
+  into the tailnet (the tailnet can still reach it).
+- **A flood of junk alerts could hide the one that matters,** and skip its isolation with
+  it: past `alert_rate_per_device` every alert was dropped. Findings that can isolate or
+  contain have a budget of their own.
+- **Junk could use up the containment cap.** Listed names no longer count toward
+  `contain_max_per_day`.
+- **A trusted cloud hid a contained host.** The allowlist was checked first, and its
+  starter file trusts whole platforms. A containment in force now wins, except over a name
+  you trusted yourself.
+- **A containment made before the clock was set could end at once** (a Pi has no clock
+  battery). Containment time never runs behind the last saved state.
+
+### New
+
+- **Rule `lookalike`** (high): an internationalised domain written with Cyrillic or Greek
+  letters that reads as a popular site. Ordinary accents are left alone.
+- **`FW_BOT_ACTIONS=none`**: Telegram alerts and status only.
+
+### Checked, no change needed
+
+- Telegram messages are plain text and the dashboard escapes what it shows: a domain name
+  cannot inject markup. 20,000 malformed names through the decision function: no crash.
+
 ## v0.3.0-beta.5 (2026-11-10)
 
 Update as usual: `git pull && sudo ./install.sh`. A design review of v0.3.0-beta.4 (a

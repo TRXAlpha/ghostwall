@@ -58,9 +58,10 @@ of those too).
 > damage stops early: [What happens when a device gets infected](#what-happens-when-a-device-gets-infected)
 > says which layer stops what, and what still gets through.
 >
-> **Current release: v0.3.0-beta.5** (hardening after a design review: a web page can no
-> longer get a device isolated or a site blocked for the house, the Pi's own firewall can
-> be default-deny, anti-spoofing, a tighten-only Telegram mode; on top of beta.4's
+> **Current release: v0.3.0-beta.6** (a second review: whoever runs a bad domain can no
+> longer aim the firewall at your DNS resolver, a device can no longer get another one
+> isolated by forging its address, an isolated device gets no DNS answers, a flood can no
+> longer hide the alert that matters; on top of beta.5's fixes and beta.4's
 > containment: a detected destination is blocked for every
 > device, by name and, in gateway mode, by address in both directions; and beta.3's
 > opt-in blocking through AdGuard or Pi-hole, IoT default-deny, newly registered domains,
@@ -165,6 +166,7 @@ Keep them. Ghostwall runs on top and covers what a blocklist can't:
 | `dns_beacon` | an odd-looking name queried on a fixed timer (never under a popular site: a polled weather or course page is not a call-home) | warn |
 | `new_domain` | (opt-in, `nrd_mode`) a domain registered in the last 14 days, new to your network and not a popular site: where most phishing and fresh C2 lives before any list catches up. High when the name also looks random or sits on a risky TLD ([results_nrd.md](agents/dga_eval/results_nrd.md)) | warn / high |
 | `iot_new_domain` | a device you marked IoT (camera, TV, plug) looked up a domain it never used in its learning week. Optional default-deny: alert, dry-run or refuse (`iot_enforce`) | warn |
+| `lookalike` | an internationalised domain written with Cyrillic or Greek letters that look like a popular site's name (`pаypal` with a Cyrillic `а`): the classic phishing-link trick. Names with ordinary accents are left alone | high |
 | `blocklist` | a device looked up a destination Ghostwall is blocking by itself: one that is contained (`contain`), or a `dga_high` name blocked in inline mode. The alert names the finding behind it and how to undo it | high |
 | `doh_ip`, `raw_ip`, `beacon` | gateway mode only (`ghost-flow`): a connection straight to a DNS-over-HTTPS server's IP, to an IP nobody looked up, or on a fixed timer | warn / high |
 
@@ -554,6 +556,25 @@ The full text with dates is in [CHANGELOG.md](CHANGELOG.md).
   device borrowing a named device's address; nothing on a network can tell a cloned MAC
   from the real one. A phone using a random ("private") MAC per network is one device;
   one that rotates it looks like a new device each time.
+- **Isolation trusts the sender address on a lookup, and that can be forged.** So
+  `auto_isolate` only acts while the gateway firewall's `antispoof` is on, which binds each
+  named device's address to its MAC, for forwarded traffic and for lookups sent to the Pi.
+  Without it another device could send lookups under your laptop's address and get the
+  laptop cut off. A cloned MAC is still not caught.
+- **A listed name isolates only when two lists carry it** (`auto_isolate_min_sources`).
+  Some lists take submissions from anyone; one entry must not be a remote off switch.
+- **The caps can still be used up.** At most 2 automatic isolations an hour and 20
+  behaviour containments a day, on purpose (a bad list must not take the house offline).
+  Past them Ghostwall only alerts and says so. Listed names no longer count toward the
+  containment cap.
+- **Unnamed devices are never isolated automatically,** because a release works on names.
+  Name every device (`sudo ghostwall name`); a guest device stays alert-only.
+- **A page that reloads can still confirm itself.** `confirm_seconds` stops a single
+  lookup from acting; a page left open that looks the name up again five minutes later
+  looks the same as malware doing it.
+- **Customer subdomains of big hosting platforms** (app hosts, serverless hosts) sit under
+  a popular domain, so their random-looking names raise no score alert. The lists, tunnels
+  and bursts still apply.
 - **Automatic actions wait for a second sighting.** A web page or an email can make a
   device look up a listed name once. So `auto_isolate` acts when the device reaches for it
   again 5 minutes or more later (`confirm_seconds`); malware that looks a name up exactly

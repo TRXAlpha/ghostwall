@@ -54,6 +54,17 @@ from detectors import (RARE_TLDS, Detectors, abused_service, is_internal, iot_bu
 from tokenizer import is_public_suffix, registrable_part
 
 
+# Letters of other alphabets (Cyrillic, Greek) that look like Latin ones: what a lookalike
+# domain is built from. Deliberately short: only near-identical shapes.
+CONFUSABLES = {
+    "\u0430": "a", "\u0435": "e", "\u043e": "o", "\u0440": "p", "\u0441": "c", "\u0445": "x",
+    "\u0443": "y", "\u0456": "i", "\u0458": "j", "\u0455": "s", "\u04bb": "h", "\u0501": "d",
+    "\u051b": "q", "\u051d": "w", "\u043a": "k", "\u043c": "m", "\u043d": "h", "\u0442": "t",
+    "\u0432": "b", "\u0491": "r",
+    "\u03bf": "o", "\u03b1": "a", "\u03bd": "v", "\u03c1": "p", "\u03c4": "t", "\u03b9": "i",
+    "\u03ba": "k", "\u03c5": "u", "\u03b5": "e", "\u03c7": "x",
+}
+
 # Lookups a web page can make a browser send (HTTPS/SVCB: type 65/64, asked alongside A).
 ADDRESS_QTYPES = frozenset({"A", "AAAA", "HTTPS", "SVCB", "TYPE64", "TYPE65"})
 
@@ -215,14 +226,18 @@ class Resolver:
         if iot is not None and iot["block"]:
             return self._iot_alert(dev, domain, iot)
 
-        if self.state.is_allowed(domain):
+        # A containment in force wins over the allowlist (its starter file trusts whole
+        # clouds, which is where contained hosts sit), unless you trusted that very name.
+        held = self.state.contained_by(domain)
+        if held and (self.state.trusts(held) or self.state.trusts(domain)):
+            held = None
+        if not held and self.state.is_allowed(domain):
             return self._iot_alert(dev, domain, iot) or Decision("allow", "allowlist")
 
         if is_internal(domain):          # homepi, *.ts.net, *.local, _svc._tcp... not internet names
             return Decision("allow", "internal")
 
-        if self.state.is_blocked(domain):
-            held = self.state.contained_by(domain)
+        if held or self.state.is_blocked(domain):
             why = "on confirmed blocklist"
             if held:
                 c = self.state.contained_list().get(held) or {}
@@ -235,6 +250,14 @@ class Resolver:
                               + (["blocked by your DNS server" if upstream_blocked else
                                   "shadow mode: Ghostwall itself does not block"] if self.shadow else []))
             return Decision("recommend" if self.shadow else "block", "blocklist", evt)
+
+        look = self._lookalike(domain, now)
+        if look:
+            evt = self._event(dev, domain, rule="lookalike", action="recommend", severity="high",
+                              reasons=[f"{look[0]} is written with letters from another alphabet that look "
+                                       f"like {look[1]}, a popular site: the usual trick of a phishing link",
+                                       f"really yours? sudo ghostwall allow {registrable_part(domain)}"])
+            return Decision("recommend", "lookalike", evt)
 
         first_seen = self.state.note_seen(domain)
         is_new = self.state.is_new(domain, int(self.cfg["novelty_days"]))
@@ -332,6 +355,27 @@ class Resolver:
         return (behaviour or self._iot_alert(dev, domain, iot)
                 or self._nrd_alert(client_ip, dev, domain, nrd, sc, first_seen)
                 or Decision("allow", "clean"))
+
+    def _lookalike(self, domain: str, now: float) -> tuple[str, str] | None:
+        """(the name as displayed, the popular site it imitates) when the registrable label
+        is an internationalised name made only of ASCII plus letters of another alphabet
+        that look like Latin ones, and reading them as Latin gives a popular site. Names
+        with ordinary accents are left alone (companies register those themselves)."""
+        if "xn--" not in domain or not self.cfg.get("lookalike_enabled", True):
+            return None
+        reg = registrable_part(domain)
+        label, _, rest = reg.partition(".")
+        if not label.startswith("xn--") or not rest:
+            return None
+        try:
+            shown = label[4:].encode("ascii").decode("punycode")
+        except (UnicodeError, ValueError):
+            return None
+        latin = "".join(CONFUSABLES.get(c, c) for c in shown)
+        if latin == shown or not latin.isascii() or not all(c.isascii() or c in CONFUSABLES for c in shown):
+            return None
+        target = f"{latin}.{rest}"
+        return (f"{shown}.{rest}", target) if self.det.popular.match(target, now) else None
 
     def _nrd_check(self, domain: str, now: float, is_new: bool, upstream_blocked: bool,
                    rcode: str | None) -> dict | None:
@@ -522,7 +566,12 @@ class Resolver:
         # Any web page can make a browser look up thousands of made-up names, so one
         # device's alerts are capped per minute (a block still happens; only its alert
         # is dropped). The flood itself still shows up as a dga_burst alert.
-        if self._over_rate(dev.name):
+        # Findings that can isolate or contain have a budget of their own: a device flooding
+        # junk lookups must not be able to push the one alert that matters over the cap
+        # (and skip the isolation with it).
+        acting = rule in (self.cfg.get("auto_isolate_rules") or ()) or rule in (self.cfg.get("contain_rules") or ())
+        rate_key = dev.name + ("|acting" if acting else "")
+        if self._over_rate(rate_key):
             self.stats["rate_limited"] += 1
             return evt
         # A device re-querying the same domain family is one finding, not fifty.
@@ -531,7 +580,7 @@ class Resolver:
                 and not self._confirm_due(dev.name, domain, rule):
             self.stats["suppressed"] += 1
             return evt
-        self._count_alert(dev.name)
+        self._count_alert(rate_key)
         self._auto_isolate(dev, evt, isolate_hold)   # before the write: the alert says what happened
         self._contain(dev, evt, contain)
         self.events.write(evt)
@@ -582,7 +631,9 @@ class Resolver:
                     reasons.append(f"would block {name} for every device ({rule}); not blocked: {dry}")
                     return
                 cap = int(self.cfg.get("contain_max_per_day", 20))
-                if self.state.containments_within(86400) >= cap:
+                # a listed name does not count: blocking it harms nobody, and junk lookups of
+                # listed names must not be able to use the cap up before the real thing
+                if rule != "threat_feed" and self.state.containments_within(86400, skip_rule="threat_feed") >= cap:
                     evt["would_contain"] = name
                     reasons.append(f"not blocked for every device: {cap} containment(s) in the last day is "
                                    "the cap (contain_max_per_day)")
@@ -611,11 +662,17 @@ class Resolver:
             return f"{name} is not one site's own domain"
         if evt["rule"] == "dga_high" and evt.get("severity") != "high":
             return "the name is not new to this network"
-        if evt["rule"] != "threat_feed" and not self.state.is_new(name, int(self.cfg["novelty_days"])):
-            # behaviour alone never takes away a site the household already uses: a web page
-            # can make a browser produce tunnel-like or random-looking lookups under any name
-            return f"{name} is not new to this network (in use for {self.cfg['novelty_days']}+ days)"
-        if self.state.trusts(name) or self.state.trusts(registrable_part(name)):
+        if evt["rule"] != "threat_feed" and self._web_like(str(evt.get("device")), domain) \
+                and not self.state.is_new(name, int(self.cfg["novelty_days"])):
+            # Evidence a web page can produce (address lookups only) never takes away a site
+            # the household already uses. Evidence a page cannot produce (a tunnel carrying
+            # TXT / NULL / CNAME / MX queries) still does: otherwise malware would only have
+            # to look its server up once and wait novelty_days to be left alone for good.
+            return (f"{name} is not new to this network (in use for {self.cfg['novelty_days']}+ days) and "
+                    "every lookup was one a web page can cause")
+        # your own Trust counts; the starter allowlist (whole clouds) does not: a listed or
+        # tunnelling host under one of those is exactly what containment is for
+        if self.state.trusts(name) or self.state.user_trusts(registrable_part(name)):
             return f"you trust {name}"
         if abused_service(domain) or abused_service(name):
             return "it is on a shared service (other people's pages live there too)"
@@ -697,9 +754,18 @@ class Resolver:
                                                for r in self._ip_regs.get(ip, ()))}
         out = []
         timeout = f"{max(1, int(days * 24))}h"
+        limit = int(self.cfg.get("contain_max_ips", 8))
         for ip in dict.fromkeys(cand):
             if ip in shared or not _blockable_ip(ip) or self._is_this_box(ip):
                 continue
+            if self._protected_ip(ip):
+                # whoever runs the bad domain chooses what it resolves to: it must never be
+                # able to point this firewall at a DNS resolver or at something you named
+                print(f"[ghost-dns] not dropping {ip} for {name}: a protected address "
+                      "(a DNS resolver, this box's upstream, or contain_protect)", file=sys.stderr, flush=True)
+                continue
+            if len(out) >= limit:
+                break
             try:
                 self.enforcer.block_ip(ip, timeout=timeout)
             except Exception as exc:  # noqa: BLE001 (no ghostwall table: the DNS block still holds)
@@ -708,6 +774,34 @@ class Resolver:
             out.append(ip)
             self._contained_ips[ip] = name
         return out
+
+    def _protected_ip(self, ip: str) -> bool:
+        """Addresses a containment never drops: this box's DNS upstreams and system
+        resolvers, the public DNS resolvers in netconf/doh_ips.txt (your DNS server's
+        upstream is almost certainly one of them), and the networks in contain_protect."""
+        nets = getattr(self, "_protected_nets", None)
+        if nets is None:
+            cands = [h for h, _ in self._upstreams()] + [str(x) for x in (self.cfg.get("contain_protect") or ())]
+            for path in ("/etc/resolv.conf", os.path.join(os.path.dirname(os.path.dirname(
+                    os.path.abspath(__file__))), "netconf", "doh_ips.txt")):
+                try:
+                    with open(path, encoding="utf-8", errors="replace") as f:
+                        for line in f:
+                            cands += line.split("#", 1)[0].replace("nameserver", " ").split()
+                except OSError:
+                    pass
+            nets = []
+            for c in cands:
+                try:
+                    nets.append(ipaddress.ip_network(c, strict=False))
+                except ValueError:
+                    continue
+            self._protected_nets = nets
+        try:
+            a = ipaddress.ip_address(ip)
+        except ValueError:
+            return True
+        return any(a.version == n.version and a in n for n in nets)
 
     def _ip_block_ready(self) -> bool:
         return (self.cfg.get("contain") == "on" and bool(self.cfg.get("contain_ips", True))
@@ -771,6 +865,10 @@ class Resolver:
         if abused_service(domain):
             return "it is on a shared service malware abuses, not proof about this device"
         labels = self.det.threat_feed.sources(listed)
+        need = int(self.cfg.get("auto_isolate_min_sources", 2))
+        if labels and len(labels) < need:
+            return (f"only {len(labels)} list names it ({labels[0]}); some lists take submissions from "
+                    f"anyone, so cutting a device off needs {need} (auto_isolate_min_sources)")
         if labels and all(lab.endswith("(phishing)") for lab in labels):
             return "only phishing lists name it (someone opened a link; the device is not infected)"
         return None
@@ -872,6 +970,10 @@ class Resolver:
             return 'enforcement is off (needs gateway mode and "enforce": "nft")'
         if not self.cfg.get("pi_ip"):
             return 'set "pi_ip" first, so this box can never isolate itself'
+        if self.cfg.get("auto_isolate_need_antispoof", True) and not self.enforcer.antispoof_active():
+            return ('the firewall\'s anti-spoofing is off, so another device could send lookups under '
+                    'this one\'s address to get it cut off: set "antispoof": "on" in netconf/config.json, '
+                    're-run gen.py and reload (or "auto_isolate_need_antispoof": false to accept that)')
         return None
 
     def _iso_skip(self, dev) -> str | None:
@@ -966,6 +1068,12 @@ class Resolver:
                 self.stats["failopen"] += 1
                 print(f"[ghost-dns] decide() failed for {q.name}: {exc!r}; forwarding", file=sys.stderr, flush=True)
                 decision = Decision("allow", "failopen")
+        if decision.action != "block" and self.state.isolated and \
+                self.state.is_isolated(self._device(client_ip).name):
+            # isolated means isolated: its lookups are still scored and logged above, but
+            # nothing is resolved for it (a recursive answer is a way out, a few bytes a time)
+            self.stats["isolated_refused"] = self.stats.get("isolated_refused", 0) + 1
+            decision = Decision("block", "isolated")
         if decision.action == "block":
             if self.cfg.get("block_response") == "nxdomain":
                 return dnsmsg.build_nxdomain(packet, q.end)

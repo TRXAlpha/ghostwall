@@ -102,6 +102,14 @@ table inet ghostwall {
         ip saddr @drop_net4 counter drop
         ip6 saddr @drop_net6 counter drop
 
+        # --- anti-spoofing for what is sent to this box too (config.json "antispoof"): a
+        # DNS lookup under another device's address would be counted against that device ---
+{{ antispoof_rule }}
+
+        # --- an isolated device gets a trickle of DNS, enough to see what it keeps asking
+        # for, too little to carry data out through lookups ---
+        ip saddr @isolated_dev meta l4proto { tcp, udp } th dport 53 limit rate over 20/minute burst 20 packets counter drop
+
         # SSH: LAN and tailscale0 only
         iifname "{{ lan_iface }}" ip saddr {{ lan_cidr }} tcp dport 22 ct state new accept
         iifname "tailscale0" tcp dport 22 accept
@@ -144,6 +152,9 @@ table inet ghostwall {
         # --- isolation: strict-profile devices ---
         # They may only do DNS to the Pi and reach the tailnet.
         ip daddr @isolated_dev ip daddr != {{ pi_ip }} drop
+        # (the tailnet may reach an isolated device, to look at it; it may not start
+        # connections into the tailnet)
+        iifname "{{ lan_iface }}" ip saddr @isolated_dev ip daddr 100.64.0.0/10 ct state new counter drop
         iifname "{{ lan_iface }}" ip saddr @isolated_dev ip daddr != {{ pi_ip }} ip daddr != 100.64.0.0/10 drop
 
         # --- blocked destinations (any device), both directions ---

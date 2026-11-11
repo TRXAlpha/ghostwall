@@ -58,7 +58,9 @@ class CallbackHandler:
             event = self.events.get(event_id, {})
             device = str(event.get("device", "?"))
             domain = str(event.get("domain", "?"))
-            if action in ("unblock", "trust", "release") and alerts.tighten_only():
+            if action in ("unblock", "trust", "release", "isolate") and alerts.actions_off():
+                text = alerts.NO_ACTIONS
+            elif action in ("unblock", "trust", "release") and alerts.tighten_only():
                 text = alerts.LOOSEN_REFUSED
             elif action == "unblock":
                 self.client.unblock(event_id, domain)

@@ -1,7 +1,7 @@
 # Project metadata only. Ghostwall is installed with install.sh or Docker, not pip.
 [project]
 name = "ghostwall"
-version = "0.3.0b5"
+version = "0.3.0b6"
 description = "Spots infected devices on a home network from their DNS lookups, next to AdGuard Home or Pi-hole. Local-first."
 readme = "README.md"
 license = "MIT"
