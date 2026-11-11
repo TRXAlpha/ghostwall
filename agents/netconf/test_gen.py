@@ -148,7 +148,7 @@ class TestNftSetTypes(unittest.TestCase):
         for rule in ("ip daddr @blocked_ip counter drop", "ip saddr @blocked_ip counter drop",
                      "ip saddr @drop_net4 counter drop", "ip6 saddr @drop_net6 counter drop"):
             self.assertIn(rule, t)
-        inp = t.split("chain input {")[1].split("}")[0]
+        inp = t.split("chain input {")[1].split("chain forward {")[0]
         self.assertIn("ip saddr @blocked_ip counter drop", inp)          # this box is covered too
         self.assertLess(inp.index("@blocked_ip"), inp.index("dport 22"))  # before any accept
         out = t.split("chain output {")[1].split("}")[0]
@@ -164,7 +164,7 @@ class TestNftSetTypes(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         t = _strip_comments(t)
         self.assertIn("hook input priority filter; policy drop;", t)
-        inp = t.split("chain input {")[1].split("}\n")[0]
+        inp = t.split("chain input {")[1].split("chain forward {")[0]
         for needed in ("tcp dport 22", "udp dport 53", "udp dport 67", "ct state established,related accept",
                        "tcp dport { 8088 } accept"):
             self.assertIn(needed, inp)                                        # nobody is locked out
@@ -181,11 +181,22 @@ class TestNftSetTypes(unittest.TestCase):
         t = _strip_comments(t)
         rule = "ip saddr @named_dev ip saddr . ether saddr != @named_mac counter drop"
         self.assertIn(rule, t)
-        self.assertLess(t.index(rule), t.index("flow add @f"))
+        self.assertLess(t.rindex(rule), t.index("flow add @f"))
+        inp = t.split("chain input {")[1].split("chain forward {")[0]
+        self.assertIn(rule, inp)                                              # lookups sent to this box too
+        self.assertLess(inp.index(rule), inp.index("udp dport 53 accept"))
         r, t = self._render({"antispoof": "log"})
         self.assertIn('log prefix "ghostwall antispoof: "', t)
         self.assertNotIn("!= @named_mac counter drop", t)
         self.assertNotEqual(self._render({"antispoof": "yes"})[0].returncode, 0)
+
+    def test_isolated_devices_get_a_trickle_of_dns_and_no_way_into_the_tailnet(self):
+        t = _strip_comments((OUT / "ghostwall.nft").read_text())
+        inp = t.split("chain input {")[1].split("chain forward {")[0]
+        limit = "ip saddr @isolated_dev meta l4proto { tcp, udp } th dport 53 limit rate over 20/minute"
+        self.assertIn(limit, inp)
+        self.assertLess(inp.index(limit), inp.index("udp dport 53 accept"))
+        self.assertIn("ip saddr @isolated_dev ip daddr 100.64.0.0/10 ct state new counter drop", t)
 
     def test_egress_ports_dropped_toward_the_internet_only(self):
         t = (OUT / "ghostwall.nft").read_text()

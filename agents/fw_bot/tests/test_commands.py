@@ -104,6 +104,14 @@ class CommandTests(unittest.TestCase):
         self.assertNotIn(("release", "laptop"), self.c.calls)
         self.assertEqual(handle_command("/fw release laptop", self.c), "laptop released.")   # default: unchanged
 
+    def test_tighten_only_ignores_case_of_learning_on(self):
+        import os
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"FW_BOT_ACTIONS": "tighten"}):
+            for cmd in ("/fw learning ON", "/fw Learning On", "/fw LEARNING on"):
+                self.assertIn("only tighten", handle_command(cmd, self.c), cmd)
+        self.assertNotIn(("learning", True), self.c.calls)
+
     def test_lockdown_learning(self):
         self.assertEqual(handle_command("/fw lockdown", self.c), "Lockdown ON.")
         self.assertEqual(handle_command("/fw learning on", self.c), "Learning mode on.")

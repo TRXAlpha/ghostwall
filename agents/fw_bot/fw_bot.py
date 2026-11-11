@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import time
+from collections import OrderedDict, deque
 
 import alerts
 import commands
@@ -21,6 +22,10 @@ from control_client import ControlClient
 from grouping import AlertGrouper
 
 
+EVENTS_KEEP = 5000     # newest alerts kept for button lookups: memory must not grow with the log
+DIGEST_KEEP = 100000   # info lines kept for the digest (follow mode never flushes it): oldest dropped
+
+
 class FwBot:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -28,8 +33,8 @@ class FwBot:
         self.api = alerts.TelegramAPI(cfg.telegram_api, cfg.telegram_token)
         self.grouper = AlertGrouper(cfg.group_window_minutes)
         self.callbacks = CallbackHandler(cfg, self.client, self.api)
-        self.events_by_id: dict[str, dict] = {}
-        self._digest_lines: list[str] = []
+        self.events_by_id: OrderedDict[str, dict] = OrderedDict()
+        self._digest_lines: deque[str] = deque(maxlen=DIGEST_KEEP)
 
     # ---- incoming Telegram updates ------------------------------------
     def process_update(self, update: dict) -> str:
@@ -55,6 +60,8 @@ class FwBot:
             return "digest"
         grp = payload
         self.events_by_id[grp.event["event_id"]] = grp.event
+        while len(self.events_by_id) > EVENTS_KEEP:
+            self.events_by_id.popitem(last=False)
         self.callbacks.events = self.events_by_id
         if kind == "new":
             if chat_id is None:

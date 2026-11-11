@@ -81,11 +81,13 @@ class LRModel:
     """
 
     def __init__(self, coef_path: str, meta_path: str):
-        self.coef = np.load(coef_path).astype(np.float64).ravel()
+        self.coef = np.load(coef_path, allow_pickle=False).astype(np.float64).ravel()
         with open(meta_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
         self.intercept = float(meta["intercept"])
         self.buckets = int(meta["buckets"])
+        if self.buckets < 1:  # rejected here: a zero modulus would fail on every lookup, not at load
+            raise ValueError(f"{meta_path}: buckets must be at least 1, not {self.buckets}")
         self.ngram_max = int(meta.get("ngram_max", 3))
         self.boundary = bool(meta.get("boundary", False))
         if self.coef.shape[0] != self.buckets:

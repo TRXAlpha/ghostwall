@@ -69,8 +69,10 @@ def handle_command(text: str, client: ControlClient) -> str:
                 return "usage: /fw isolate <name>"
             r = client.isolate(args[0])
             return f"{r.get('name', args[0])} isolated."
+        if alerts.actions_off() and sub in ("isolate", "release", "allow", "lockdown", "learning"):
+            return alerts.NO_ACTIONS
         if alerts.tighten_only() and (sub in ("release", "allow") or
-                                      (sub == "learning" and args[:1] == ["on"]) or
+                                      (sub == "learning" and args[:1] and args[0].lower() == "on") or
                                       (sub == "lockdown" and client.status().get("lockdown"))):
             return alerts.LOOSEN_REFUSED
         if sub == "release":

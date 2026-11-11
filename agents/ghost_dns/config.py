@@ -168,6 +168,13 @@ DEFAULTS = {
     # (pi_ip), loopback, unnamed clients and anything not an IPv4 LAN address never are.
     "auto_isolate_exempt": [],
     "auto_isolate_max_per_hour": 2,  # past this it only alerts and says why (0 = never isolate)
+    # A listed name cuts a device off only when this many separate lists carry it: some
+    # lists take submissions from anyone, and one entry must not be a remote off switch.
+    "auto_isolate_min_sources": 2,
+    # Isolation trusts "this lookup came from that device", and a lookup's sender address can
+    # be forged by any device on the LAN. So auto_isolate only acts while the firewall's
+    # anti-spoofing is loaded (netconf/config.json "antispoof": "on"); until then it says why.
+    "auto_isolate_need_antispoof": True,
 
     # --- contain (opt-in; docs/OPERATIONS.md "Contain what was detected") ---
     # What one device was caught reaching is refused for EVERY device for contain_days:
@@ -189,6 +196,14 @@ DEFAULTS = {
     "contain_days": 7,
     "contain_max_per_day": 20,       # past this it only alerts and says why (0 = never contain)
     "contain_ips": True,
+    "contain_max_ips": 8,            # addresses dropped per containment, at most
+    # Networks a containment never drops, besides the ones it protects by itself: this box's
+    # DNS upstreams and resolvers and the public DNS resolvers in netconf/doh_ips.txt. Whoever
+    # runs a bad domain chooses what it resolves to. e.g. ["203.0.113.0/24"]
+    "contain_protect": [],
+    # lookalike: an internationalised domain written with Cyrillic or Greek letters that look
+    # like a popular site's Latin name (the usual phishing-link trick). Alert, severity high.
+    "lookalike_enabled": True,
     # A finding that one lookup can cause (a web page or an email can make a device look a
     # listed name up, or fire off dozens of made-up subdomains) must not cut a device off or
     # block a site by itself. auto_isolate on a threat_feed hit, and auto_isolate / contain
@@ -227,7 +242,7 @@ AUTO_ISOLATE_MODES = ("off", "dry-run", "on")
 # would silently do nothing.
 DNS_RULES = ("threat_feed", "dns_tunnel", "nx_burst", "dga_burst", "dga_high", "dga_suspect",
              "dga_corroborated", "blocklist", "doh_bypass", "abused_service", "dns_beacon",
-             "iot_new_domain", "new_domain")
+             "iot_new_domain", "new_domain", "lookalike")
 FLOW_RULES = ("raw_ip", "beacon", "doh_ip")
 
 
@@ -250,7 +265,8 @@ def _check_auto_isolate(cfg: dict) -> None:
     if isinstance(cap, bool) or not isinstance(cap, int) or cap < 0:
         raise ValueError(f"auto_isolate_max_per_hour must be a whole number, 0 or more, not {cap!r}")
 
-CONTAIN_RULES = ("threat_feed", "dns_tunnel", "dga_high", "dns_beacon", "dga_corroborated", "new_domain")
+CONTAIN_RULES = ("threat_feed", "dns_tunnel", "dga_high", "dns_beacon", "dga_corroborated", "new_domain",
+                 "lookalike")
 
 
 def _check_contain(cfg: dict) -> None:
@@ -269,6 +285,19 @@ def _check_contain(cfg: dict) -> None:
     cap = cfg.get("contain_max_per_day")
     if isinstance(cap, bool) or not isinstance(cap, int) or cap < 0:
         raise ValueError(f"contain_max_per_day must be a whole number, 0 or more, not {cap!r}")
+    for key, low in (("contain_max_ips", 0), ("auto_isolate_min_sources", 1)):
+        v = cfg.get(key)
+        if isinstance(v, bool) or not isinstance(v, int) or v < low:
+            raise ValueError(f"{key} must be a whole number, {low} or more, not {v!r}")
+    protect = cfg.get("contain_protect")
+    if not isinstance(protect, list):
+        raise ValueError('contain_protect must be a list of addresses or networks, e.g. ["203.0.113.0/24"]')
+    import ipaddress
+    for n in protect:
+        try:
+            ipaddress.ip_network(str(n), strict=False)
+        except ValueError:
+            raise ValueError(f"contain_protect: {n!r} is not an address or a network") from None
     wait = cfg.get("confirm_seconds")
     if isinstance(wait, bool) or not isinstance(wait, (int, float)) or not 0 <= wait <= 86400:
         raise ValueError(f"confirm_seconds must be a number of seconds from 0 to 86400, not {wait!r}")

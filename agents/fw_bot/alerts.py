@@ -22,6 +22,7 @@ RULE_WORDS = {
     "raw_ip": "connected to a raw IP", "doh_ip": "uses its own DNS-over-HTTPS", "beacon": "connects on a fixed timer",
     "iot_new_domain": "IoT device looked up a domain it never used",
     "new_domain": "newly registered domain, new to your network",
+    "lookalike": "lookalike of a popular site (letters from another alphabet)",
 }
 
 
@@ -35,6 +36,16 @@ def tighten_only() -> bool:
     blocking off) can be done from Telegram. A stolen Telegram session then cannot open
     the firewall."""
     return os.environ.get("FW_BOT_ACTIONS", "").strip().lower() == "tighten"
+
+
+def actions_off() -> bool:
+    """FW_BOT_ACTIONS=none: the bot only alerts and shows status. Nothing can be changed
+    from Telegram at all (a stolen session could otherwise isolate every device)."""
+    return os.environ.get("FW_BOT_ACTIONS", "").strip().lower() == "none"
+
+
+NO_ACTIONS = ("Telegram is alerts-only here (FW_BOT_ACTIONS=none): "
+              "use the dashboard or the ghostwall command on the box.")
 
 
 def minimal() -> bool:

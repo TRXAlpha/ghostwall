@@ -303,3 +303,32 @@ class ConnectionCapTests(unittest.TestCase):
         r.srv, r.port = srv, port
         self.assertEqual(r.req("GET", "/api/events").status, 200)   # slots come back
         srv.shutdown()
+
+
+class MalformedInputTests(unittest.TestCase):
+    """Malformed requests get an answer (400 or 403), not an unhandled exception that drops them."""
+
+    def setUp(self):
+        self.s = Server()
+
+    def tearDown(self):
+        self.s.close()
+
+    def test_unparseable_host_is_refused(self):
+        self.assertEqual(app.host_name("[abc"), "")
+        self.assertEqual(self.s.req("GET", "/api/events", host="[abc").status, 403)
+
+    def test_params_must_be_an_object(self):
+        with self.assertRaises(ValueError):
+            app.validate_action({"action": "trusted", "params": "x"})
+        r = self.s.req("POST", "/api/action", headers={"Content-Type": "application/json"},
+                       body=b'{"action":"trusted","params":"x"}')
+        self.assertEqual(r.status, 400)
+
+    def test_deeply_nested_json_is_refused(self):
+        body = b"[" * 32000 + b"]" * 32000   # under the 64 KiB body cap, deeper than Python's recursion limit
+        r = self.s.req("POST", "/api/action", headers={"Content-Type": "application/json"}, body=body)
+        self.assertEqual(r.status, 400)
+
+    def test_huge_limit_is_clamped(self):
+        self.assertEqual(self.s.req("GET", "/api/events?limit=" + "9" * 5000).status, 200)

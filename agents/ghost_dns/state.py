@@ -60,6 +60,7 @@ class GhostState:
         # Containment (config "contain"): destinations a high-confidence rule found, refused for
         # every device until "until". name -> {"since", "until" (epoch), "rule", "device", "ips"}
         self.contained: dict[str, dict] = {}
+        self._clock_floor = 0.0
         self.lockdown: bool = False
         self.learning: bool = learning_default
         self.first_seen: dict[str, str] = {}
@@ -156,6 +157,10 @@ class GhostState:
                     "device": str(v.get("device", "")), "ips": [str(i) for i in v.get("ips", [])]}
             except (KeyError, TypeError, ValueError):
                 continue
+        try:
+            self._clock_floor = float(d.get("saved_at", 0.0))
+        except (TypeError, ValueError):
+            self._clock_floor = 0.0
         self.lockdown = bool(d.get("lockdown", False))
         self.learning = bool(d.get("learning", self.learning))
         self.first_seen = {}
@@ -194,6 +199,7 @@ class GhostState:
             "isolated_ips": self.isolated_ips,
             "auto_isolations": self.auto_isolations[-100:],
             "contained": self.contained,
+            "saved_at": max(self.clock().timestamp(), self._clock_floor) if self.contained else 0.0,
             "lockdown": self.lockdown,
             "learning": self.learning,
             "first_seen": self.first_seen,
@@ -267,6 +273,11 @@ class GhostState:
         with self._lock:
             return domain in self.allowlist
 
+    def user_trusts(self, domain: str) -> bool:
+        """True if you trusted exactly this name yourself (the starter file does not count)."""
+        with self._lock:
+            return domain in self.allowlist and domain not in self.static_allow
+
     def is_blocked(self, domain: str) -> bool:
         with self._lock:
             return domain in self.blocklist or registrable_part(domain) in self.blocklist \
@@ -274,13 +285,13 @@ class GhostState:
 
     # -- containment -------------------------------------------------------
     def _contained_live(self) -> dict[str, dict]:
-        now = self.clock().timestamp()
+        now = self._wall()
         return {k: v for k, v in self.contained.items() if v["until"] > now}
 
     def _contained_by(self, domain: str) -> str | None:
         if not self.contained:
             return None
-        now = self.clock().timestamp()
+        now = self._wall()
         parts = domain.split(".")
         for i in range(len(parts) - 1):          # the name itself, then each parent down to a.tld
             c = self.contained.get(".".join(parts[i:]))
@@ -301,7 +312,7 @@ class GhostState:
     def contain(self, domain: str, rule: str, device: str, days: float, ips=()) -> bool:
         """Refuse `domain` (and everything under it) for every device for `days`. True if it
         was not contained already; an existing one is extended and keeps its addresses."""
-        now = self.clock().timestamp()
+        now = self._wall()
         with self._lock:
             old = self._contained_live().get(domain)
             self.contained = self._contained_live()          # expired ones go
@@ -335,10 +346,17 @@ class GhostState:
                 self._save_locked()
             return names
 
-    def containments_within(self, seconds: float) -> int:
-        now = self.clock().timestamp()
+    def containments_within(self, seconds: float, skip_rule: str | None = None) -> int:
+        now = self._wall()
         with self._lock:
-            return sum(1 for v in self.contained.values() if -86400 < now - v["since"] < seconds)
+            return sum(1 for v in self.contained.values()
+                       if -86400 < now - v["since"] < seconds and v["rule"] != skip_rule)
+
+    def _wall(self) -> float:
+        """Wall-clock time for containment, never earlier than the latest time this state
+        was saved: a Pi has no clock battery and can boot with an old time, and a
+        containment made then would otherwise end the moment the clock is set."""
+        return max(self.clock().timestamp(), self._clock_floor)
 
     def _stamp(self) -> str:
         return self.clock().strftime("%Y-%m-%dT%H:%M:%SZ")

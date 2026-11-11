@@ -264,6 +264,13 @@ DNS tunnel, a very random name new to your network):
 - the alert says what was blocked and how to undo it; other devices that try the name
   raise a `blocklist` alert naming the finding.
 
+What the address block will never touch: this box's DNS upstreams and resolvers, the public
+DNS resolvers in `netconf/doh_ips.txt`, anything in `"contain_protect"`, and more than
+`contain_max_ips` (8) addresses per name. The owner of a bad domain chooses what it resolves
+to, and must not be able to aim your firewall at something you need. A containment also
+wins over the starter allowlist (which trusts whole clouds) but never over a name you
+trusted yourself.
+
 Check and undo:
 
 ```bash
@@ -294,6 +301,15 @@ malware list, or a DNS tunnel. Needs gateway mode (`"enforce": "nft"`) and `pi_i
    are tagged "would isolate" on the dashboard.
 2. Add your own computers and the router to `"auto_isolate_exempt"`.
 3. Set `"auto_isolate": "on"` and turn learning off (`sudo ghostwall learning off`).
+
+**Needs anti-spoofing.** Isolation trusts that a lookup came from the device whose address
+it carries, and any LAN device can forge that. `auto_isolate` therefore only acts while the
+firewall's `"antispoof": "on"` rule is loaded (`agents/netconf/config.json`, then `gen.py`
+and a reload); until then alerts say "anti-spoofing is off". A listed name also has to be
+on two separate lists (`auto_isolate_min_sources`). An isolated device gets no DNS answers
+in inline mode, and at most 20 lookups a minute reach the Pi in gateway mode: enough to see
+what it keeps asking for, too little to carry data out. It cannot start connections into
+your tailnet.
 
 **One lookup is not proof.** A web page or an email can make any device look up a listed
 name (a hidden image is enough), so a single `threat_feed` hit only alerts and says "not
@@ -433,7 +449,8 @@ whole network; read it fully first, and keep the router's admin page open.
    device cannot borrow another's identity by taking its address (a cloned MAC is not
    caught). And in `/etc/ghostwall/fw_bot.env`, `FW_BOT_ACTIONS=tighten` lets Telegram
    alert, isolate and lock down but not release, trust or unblock: a stolen Telegram
-   session then cannot open the firewall. Re-run `gen.py` and reload after a change.
+   session then cannot open the firewall (`FW_BOT_ACTIONS=none`: alerts and status only,
+   so it cannot isolate everything either). Re-run `gen.py` and reload after a change.
 
    **Both directions:** the `blocked_ip`, `drop_net4` and `drop_net6` sets are matched as
    destination and as source, in the forward chain (your devices), the input chain (the Pi

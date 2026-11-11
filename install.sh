@@ -80,11 +80,12 @@ find_dns_server() {
 
 setenv() {  # setenv KEY VALUE: replace or append KEY in ghostwall.env
   python3 - "$ENVF" "$1" "$2" <<'PY'
-import re, shlex, sys
+import shlex, sys
 path, key, val = sys.argv[1:4]
 lines = open(path, encoding="utf-8").read().splitlines()
-needs_quotes = re.search(r"[\s\"'$`\\]", val)  # (no quotes nested in an f-string: Python < 3.12)
-new = key + "=" + (shlex.quote(val) if needs_quotes else val)
+# Always quoted: root sources this file, so a value such as "/x;id" must never reach the
+# shell unquoted (shlex.quote leaves plain paths as they are).
+new = key + "=" + (shlex.quote(val) if val else "")
 for i, line in enumerate(lines):
     if line.startswith(key + "="):
         lines[i] = new
@@ -102,6 +103,7 @@ if [ ! -f "$ENVF" ]; then
   FRESH=1
   install -m 640 "$SRC/agents/ghost_dns/ghostwall.env.example" "$ENVF"
 fi
+chmod 640 "$ENVF"   # before any secret is written: an older install may have left it world-readable
 # Explicit choice > existing config > detection.
 if [ -n "${DNS_SOURCE:-}" ]; then
   setenv DNS_SOURCE "$DNS_SOURCE"

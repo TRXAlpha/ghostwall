@@ -50,6 +50,9 @@ class NullBackend:
     def _run(self, *args: str) -> None:
         self.calls.append(args)
 
+    def chain_text(self, chain: str) -> str:
+        return ""
+
     def lockdown_on(self, pi_ip: str) -> None:
         self._run("insert", "rule", *TABLE.split(), "forward", "lockdown", pi_ip)
 
@@ -74,6 +77,14 @@ class NftBackend:
     def _run(self, *args: str) -> None:
         subprocess.run([self.nft, *args], check=True,
                        capture_output=True, text=True, timeout=5)
+
+    def chain_text(self, chain: str) -> str:
+        """The loaded rules of one chain of the ghostwall table ("" if it is not there)."""
+        try:
+            return subprocess.run([self.nft, "list", "chain", "inet", "ghostwall", chain], check=True,
+                                  capture_output=True, text=True, timeout=5).stdout
+        except (OSError, subprocess.SubprocessError):
+            return ""
 
     def run_script(self, text: str) -> None:
         """One nft transaction (`nft -f -`): all of it applies, or none of it."""
@@ -183,6 +194,20 @@ class Enforcer:
         with self._lock:
             run(script)
         return True
+
+    def antispoof_active(self) -> bool:
+        """True if the loaded firewall drops lookups that carry a named device's address
+        from another MAC (netconf "antispoof": "on"). Asked at most once a minute."""
+        import time
+        now = time.monotonic()
+        cached = getattr(self, "_antispoof", None)
+        if cached is not None and now - cached[0] < 60:
+            return cached[1]
+        fn = getattr(self.backend, "chain_text", None)
+        text = fn("input") if fn else ""
+        ok = any("@named_mac" in line and "drop" in line for line in text.splitlines())
+        self._antispoof = (now, ok)
+        return ok
 
     def set_lockdown(self, on: bool, pi_ip: str) -> bool:
         """Toggle the forward-chain lockdown rule; pi_ip (this box) stays reachable.
