@@ -27,6 +27,23 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ReadWritePaths=/run/ghostwall/cap /var/lib/ghostwall/incidents
 PrivateTmp=yes
+# Still root (see above), but nothing here needs home folders, kernel settings or namespaces,
+# and the socket families are only the ones tcpdump and libpcap use (packet, netlink, inet, unix).
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_PACKET AF_NETLINK AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+# captured packets are private: new files are not readable by other users (no world bit)
+UMask=0027
 
 [Install]
 WantedBy=multi-user.target

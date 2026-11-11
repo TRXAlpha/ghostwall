@@ -66,6 +66,7 @@ moved=0
 if [ "$SOURCE" = adguard ] && [ -f "$YAML" ]; then
   backup="$YAML.bak-ghostwall-$(date +%s)"
   cp -p "$YAML" "$backup"
+  chmod 600 "$backup"   # it holds AdGuard's login hash: never more readable than root-only
   # The DNS port back to 53 if inline mode moved it, and a small query-log buffer.
   changes=$("$PY" /opt/ghostwall/agents/ghost_dns/adguard_conf.py "$YAML" --flush "$FLUSH" --port-back)
   if [ -z "$changes" ]; then
