@@ -192,7 +192,9 @@ class ServiceTests(unittest.TestCase):
             for p in r.ports:
                 touch(p, b"x")
             self.assertTrue(wait_until(lambda: r.decoy.stats.get("rate_limited", 0) == 1))
-            self.assertEqual(r.decoy.stats.get("events", 0), 2)
+            # an event is counted once its line is on disk (written off the event loop), so
+            # the third touch can be refused before the second event has been counted
+            self.assertTrue(wait_until(lambda: r.decoy.stats.get("events", 0) == 2))
         self.assertEqual(len(read_events(self.path)), 2)
 
     def test_oversized_input_is_capped_and_service_survives(self):
