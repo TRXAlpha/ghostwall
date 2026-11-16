@@ -167,6 +167,15 @@ def run_replay(a, wd: str) -> int:
                  Enforcer(NullBackend()), dm, EventLog(cfg["events_path"]))
     clock = {"t": 0.0}
     r.clock = lambda: clock["t"]
+    # --set verdict=dry-run: count what the first-contact verdict would have done, per lookup
+    vcount: Counter = Counter()        # allow / hold / block over the judged lookups
+    holds: Counter = Counter()         # (device, day) -> holds
+    if cfg.get("verdict") == "dry-run":
+        def on_verdict(device, day, outcome):
+            vcount[outcome] += 1
+            if outcome == "hold":
+                holds[(device, day)] += 1
+        r.on_verdict = on_verdict
     # novelty, device baselines and alert de-duplication follow the log's time too
     state.clock = lambda: datetime.fromtimestamp(clock["t"], timezone.utc)
     # and so does each alert's "time": the query's, not the moment of the replay
@@ -260,7 +269,29 @@ def run_replay(a, wd: str) -> int:
     per_dev = Counter(e["device"] for e in evs)
     print("\nalerts per device:", dict(per_dev))
     print("alerts per day:", dict(sorted(Counter(e["time"][:10] for e in evs).items())))
+    if cfg.get("verdict") == "dry-run":
+        print_verdict_summary(vcount, holds, span / 24 if span else 0.0)
     return 0
+
+
+def print_verdict_summary(vcount: Counter, holds: Counter, span_days: float) -> None:
+    """The friction number: how many destinations new to a device the verdict would hold, per device
+    per day. Nothing was refused; this is what would have happened."""
+    judged = sum(vcount.values())
+    print(f"\nverdict (dry-run): {judged} lookups judged (destinations new to their device): "
+          f"allow {vcount['allow']}, hold {vcount['hold']}, block {vcount['block']}")
+    days = max(span_days, 1.0)
+    print(f"holds per device per day, over {days:.1f} days of log "
+          "(the first day counts every destination as new, so it reads high):")
+    per_dev: Counter = Counter()
+    for (device, _day), n in holds.items():
+        per_dev[device] += n
+    if not per_dev:
+        print("  no holds")
+    for device, total in per_dev.most_common():
+        print(f"  {device:18s} {total:6d} holds  {total / days:7.2f} per day")
+    total = sum(per_dev.values())
+    print(f"  {'all devices':18s} {total:6d} holds  {total / days:7.2f} per day")
 
 
 if __name__ == "__main__":

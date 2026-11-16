@@ -236,6 +236,54 @@ traffic could raise it, since Umbrella includes trackers and malware too; 4.1% o
 threat-list entries were registered in the last 14 days. On a small board, `"nrd_days": 7`
 about halves the memory (the first week alone was 2.7 million names).
 
+## Decoys (opt-in)
+
+Ports that nothing legitimate ever connects to, on an address nothing else uses. A device
+that connects **and sends data** is scanning your network: rule `decoy_touch`, severity high.
+It only alerts; it never blocks or isolates. A probe that connects and sends nothing is
+counted, not alerted.
+
+1. Pick a spare LAN address the router never hands out and that is not the Pi's own, and add
+   it to the Pi's interface (for a test: `sudo ip addr add 192.168.1.250/24 dev eth0`).
+2. `sudo install -m 0640 -o root -g ghostwall /opt/ghostwall/agents/decoy/decoy.example.json /etc/ghostwall/decoy.json`
+   and edit it: `"bind"` is that address, `"exempt"` lists your own scanner tools (by device
+   name or address), `"events_path"` is `/var/lib/ghostwall/events.jsonl` and
+   `"devices_json"` is `/etc/ghostwall/devices.json`.
+3. Check it: `/opt/ghostwall/.venv/bin/python /opt/ghostwall/agents/decoy/decoy.py --config /etc/ghostwall/decoy.json --check`
+4. Set `"decoy": "on"`, then
+   `sudo install -m 644 /opt/ghostwall/agents/decoy/ghostwall-decoy.service /etc/systemd/system/`
+   and `sudo systemctl enable --now ghostwall-decoy`. Watch `journalctl -u ghostwall-decoy`.
+
+Default ports: Telnet (23, 2323), RDP (3389), VNC (5900). SMB (445) is left out on purpose:
+Windows network browsing and printer discovery knock on it all day. It refuses to listen on
+every address (`0.0.0.0`): a decoy on the Pi's real address would catch normal traffic. If
+a port is taken by something real, the service says which and exits; drop it from `"ports"`.
+One alert per device per port per hour. Not yet run on a real network.
+
+## First-contact verdict (measure only)
+
+The plan is to judge every destination the first time a device reaches for it. Before
+anything like that may refuse a lookup, you need to know how often it would get in your way.
+`"verdict": "dry-run"` in `/etc/ghostwall/ghost_dns.json` measures that and changes nothing.
+
+For each destination new to a device it looks at five families of evidence: the **name**
+(random-looking, a risky TLD, a lookalike), its **age** (newly registered, with `nrd_mode`
+on), the **lists**, **history** (new to the whole network; an IoT device outside what it
+learned) and **service** (a service malware favours). Two signals count as two only when
+they come from different families. One family: it would hold. Two, or an exact list hit:
+it would block. A popular site, a name you trust, a destination the network already uses,
+or a lookup your DNS server refused: allow. An IoT device counts weaker evidence than a
+laptop.
+
+- On your history, nothing installed or changed:
+  `sudo /opt/ghostwall/.venv/bin/python /opt/ghostwall/agents/ghost_dns/replay_querylog.py --querylog <log> --set verdict=dry-run`
+  prints holds per device per day. The first day reads high: every destination is new then.
+- Live: alerts that would have been held or blocked say so (`would_hold`,
+  `would_block_verdict`), and `ghostwall status` counts them.
+
+`"verdict": "on"` is refused: enforcement is not built, and will not be until these numbers
+exist for more than one network.
+
 ## Contain what was detected (opt-in)
 
 A blocklist only knows what somebody else reported. `contain` turns Ghostwall's own

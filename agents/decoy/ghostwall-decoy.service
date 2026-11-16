@@ -1,0 +1,46 @@
+[Unit]
+Description=ghost-decoy -- honeypot TCP ports on spare LAN addresses (opt-in)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Not root. The low ports (23, 445) need CAP_NET_BIND_SERVICE and nothing else: no
+# raw sockets, no network admin, no home folder. It only writes events; it never
+# blocks, isolates or sends anything back.
+User=ghostwall
+Group=ghostwall
+WorkingDirectory=/opt/ghostwall/agents/decoy
+# Stays off until "decoy": "on" in /etc/ghostwall/decoy.json. Off exits 0, so
+# Restart=on-failure does not loop on it. A bad config exits 2 and is not retried.
+ExecStart=/opt/ghostwall/.venv/bin/python decoy.py --config /etc/ghostwall/decoy.json
+Restart=on-failure
+RestartSec=10
+# events.jsonl is shared with ghost-dns and ghost-flow (StateDirectory is writable).
+StateDirectory=ghostwall
+StateDirectoryMode=0750
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# AF_UNIX: asyncio's internal socket pair. No netlink: nothing here touches nft.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

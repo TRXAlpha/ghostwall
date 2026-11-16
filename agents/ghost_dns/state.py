@@ -33,6 +33,8 @@ _MAX_RESOLVED = 50000
 _MAX_IOT_LEARNED = 512     # domains learned per IoT device ...
 _MAX_IOT_TOTAL = 1024      # ... and with the ones you allowed by hand
 _MAX_IOT_DEVICES = 1000
+_MAX_SEEN_PER_DEVICE = 2048  # verdict dry-run: registrable domains remembered per device (oldest go first)
+_MAX_SEEN_DEVICES = 512
 
 
 def _now() -> str:
@@ -72,6 +74,9 @@ class GhostState:
         self.resolved: dict[str, str] = {}              # domain family (hashed) -> last day it resolved
         # IoT default-deny: device -> {"since": ISO, "domains": [hashed domain families]}
         self.iot: dict[str, dict] = {}
+        # verdict dry-run: device -> hashed registrable domains it has looked up (an ordered set:
+        # a dict with None values). Only written when verdict is "dry-run"; "off" never touches it.
+        self.device_seen: dict[str, dict] = {}
         # note_seen() fires on every brand-new domain; persisting each one would
         # be a disk write per query, so it is throttled: mark dirty, flush at
         # most every _flush_interval seconds (and on explicit flush()/shutdown).
@@ -178,6 +183,8 @@ class GhostState:
         self.resolved = {str(k): str(v) for k, v in dict(d.get("resolved", {})).items()}
         self.iot = {str(k): {"since": str(v.get("since", "")), "domains": [str(x) for x in v.get("domains", [])]}
                     for k, v in dict(d.get("iot", {})).items() if isinstance(v, dict)}
+        self.device_seen = {str(k): dict.fromkeys(str(x) for x in v)
+                            for k, v in dict(d.get("device_seen", {})).items() if isinstance(v, list)}
 
     def _save_locked(self) -> None:
         # Keep the persisted file bounded.
@@ -210,6 +217,7 @@ class GhostState:
             "recent_alerts": self.recent_alerts,
             "resolved": self.resolved,
             "iot": self.iot,
+            "device_seen": {k: list(v) for k, v in self.device_seen.items()},
         }
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -458,6 +466,43 @@ class GhostState:
                     self._touch_locked()
                 return "learned"
             return "new"
+
+    def iot_status(self, device: str, domain: str, learn_days: float) -> str:
+        """The read-only twin of iot_observe(): "learning" (inside the window, or no record yet),
+        "known" (after the window, in the device's set) or "new" (after the window, not in the set).
+        It learns nothing, so the verdict can ask it before the lookup is decided."""
+        key = self._nkey(registrable_part(domain))
+        with self._lock:
+            rec = self.iot.get(device)
+            if rec is None:
+                return "learning"
+            try:
+                age = (self.clock() - _parse_iso(rec["since"])).total_seconds() / 86400
+            except ValueError:
+                age = learn_days
+            if age < learn_days:
+                return "learning"
+            return "known" if key in rec["domains"] else "new"
+
+    def device_observe(self, device: str, domain: str) -> bool:
+        """verdict dry-run: True if this device has not looked up this registrable domain before
+        (and records it now). Hashed like first_seen and bounded per device: past
+        _MAX_SEEN_PER_DEVICE the oldest families are forgotten, so they may count as new again.
+        A device beyond _MAX_SEEN_DEVICES is never "new" (its memory cannot be kept)."""
+        key = self._nkey(registrable_part(domain))
+        with self._lock:
+            rec = self.device_seen.get(device)
+            if rec is None:
+                if len(self.device_seen) >= _MAX_SEEN_DEVICES:
+                    return False
+                rec = self.device_seen[device] = {}
+            if key in rec:
+                return False
+            rec[key] = None
+            if len(rec) > _MAX_SEEN_PER_DEVICE:
+                del rec[next(iter(rec))]
+            self._touch_locked()
+            return True
 
     def iot_allow(self, device: str, domain: str) -> None:
         """Add a domain family to one IoT device's set (Trust on an iot_new_domain alert)."""

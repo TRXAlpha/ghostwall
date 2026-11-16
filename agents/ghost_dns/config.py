@@ -91,6 +91,11 @@ DEFAULTS = {
     # (inline mode with learning off refuses names outside the set; shadow mode never blocks).
     "iot_learn_days": 7,
     "iot_enforce": "off",
+    # First-contact verdict (verdict.py): for each destination new to a device, allow / hold / block
+    # from its evidence. "off" (default) does nothing. "dry-run" only records what it would have done
+    # (events say would_hold / would_block_verdict, stats count verdict_allow / verdict_hold /
+    # verdict_block); no decision changes. "on" is not built yet and is refused at load.
+    "verdict": "off",
     # Newly registered domains (rule new_domain; docs/OPERATIONS.md): a name whose registrable
     # domain is on the NRD list (registered in the last nrd_days days), first seen on this network
     # within novelty_days, not a popular site, not allowlisted. "off" (the list is not even
@@ -238,12 +243,22 @@ DEFAULTS = {
 IOT_ENFORCE = ("off", "dry-run", "on")
 NRD_MODES = ("off", "alert", "block")
 AUTO_ISOLATE_MODES = ("off", "dry-run", "on")
+VERDICT_MODES = ("off", "dry-run")
 # The rules ghost-dns raises (and so can act on). ghost-flow's are named apart: listing one
 # would silently do nothing.
 DNS_RULES = ("threat_feed", "dns_tunnel", "nx_burst", "dga_burst", "dga_high", "dga_suspect",
              "dga_corroborated", "blocklist", "doh_bypass", "abused_service", "dns_beacon",
              "iot_new_domain", "new_domain", "lookalike")
 FLOW_RULES = ("raw_ip", "beacon", "doh_ip")
+
+
+def _check_verdict(cfg: dict) -> None:
+    mode = cfg.get("verdict")
+    if mode == "on":
+        raise ValueError('verdict "on" is not built yet: enforcement of the first-contact verdict needs its own '
+                         'review. Use "off" or "dry-run" (it only records what it would do)')
+    if not isinstance(mode, str) or mode not in VERDICT_MODES:
+        raise ValueError(f'verdict must be "off" or "dry-run", not {mode!r}')
 
 
 def _check_auto_isolate(cfg: dict) -> None:
@@ -349,6 +364,7 @@ def load_config(path: str | None = None, overrides: dict | None = None) -> dict:
     days = cfg.get("nrd_days")
     if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= 35:
         raise ValueError(f"nrd_days must be a whole number from 1 to 35 (rounded up to whole weeks), not {days!r}")
+    _check_verdict(cfg)
     _check_auto_isolate(cfg)
     _check_contain(cfg)
     return cfg
