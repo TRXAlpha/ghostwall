@@ -26,7 +26,7 @@ jobs:
       - run: pip install --require-hashes -r requirements.lock
       - name: tests
         run: |
-          for d in agents/ghost_dns/tests agents/ghost_flow/tests agents/fw_bot/tests agents/capture/tests agents/web_ui/tests; do
+          for d in agents/ghost_dns/tests agents/ghost_flow/tests agents/fw_bot/tests agents/capture/tests agents/web_ui/tests agents/decoy/tests; do
             python -m unittest discover -s "$d" || exit 1
           done
           python agents/netconf/test_gen.py

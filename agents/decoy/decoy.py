@@ -38,7 +38,9 @@ from events import EventLog, make_event  # noqa: E402
 from neighbours import canonical_ip    # noqa: E402
 
 RULE = "decoy_touch"
-DEFAULT_PORTS = (23, 445, 3389, 2323, 5900)
+# 445 (SMB) is left out on purpose: Windows network browsing and printer discovery knock on
+# it all day, so a touch there is not evidence of scanning. Add it only on a spare address.
+DEFAULT_PORTS = (23, 2323, 3389, 5900)
 MODES = ("off", "on")
 MAX_PORTS = 32
 MAX_EXEMPT = 64
@@ -135,11 +137,16 @@ def parse_config(raw) -> Settings:
         ipaddress.ip_address(bind)
     except ValueError:
         raise ConfigError(
-            f'bind must be an IP address, e.g. "192.168.1.250" or "0.0.0.0", not {bind!r}') from None
+            f'bind must be an IP address, e.g. "192.168.1.250", not {bind!r}') from None
+    if cfg["decoy"] == "on" and ipaddress.ip_address(bind).is_unspecified:
+        # every address would include this box's real one, where ordinary devices talk to
+        # real services: a decoy only means something on an address nothing else uses
+        raise ConfigError(f'bind must be one spare LAN address that nothing else uses (e.g. '
+                          f'"192.168.1.250"), not {bind!r}: a decoy on every address would catch normal traffic')
 
     ports = cfg["ports"]
     if not isinstance(ports, list) or not ports or len(ports) > MAX_PORTS:
-        raise ConfigError(f"ports must be a list of 1 to {MAX_PORTS} port numbers, e.g. [23, 445]")
+        raise ConfigError(f"ports must be a list of 1 to {MAX_PORTS} port numbers, e.g. [23, 3389]")
     for p in ports:
         if not isinstance(p, int) or isinstance(p, bool) or not (1 <= p <= 65535):
             raise ConfigError(f"ports: {p!r} is not a port number from 1 to 65535")

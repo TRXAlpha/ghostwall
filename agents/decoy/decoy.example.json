@@ -2,7 +2,7 @@
   "_comment": "Copy to /etc/ghostwall/decoy.json and review. Off until you set decoy to on. bind must be a spare address on this box that no device is given (not the Pi's own service address). Lines starting with _ are comments.",
   "decoy": "off",
   "bind": "192.168.1.250",
-  "ports": [23, 445, 3389, 2323, 5900],
+  "ports": [23, 2323, 3389, 5900],
   "listen_seconds": 5,
   "max_bytes": 512,
   "max_connections": 64,

@@ -253,7 +253,14 @@ class ConfigTests(unittest.TestCase):
     def test_default_is_off(self):
         s = D.parse_config({})
         self.assertFalse(s.on)
-        self.assertEqual(s.ports, (23, 445, 3389, 2323, 5900))
+        self.assertEqual(s.ports, (23, 2323, 3389, 5900))
+        self.assertNotIn(445, s.ports)                     # Windows browsing knocks on SMB
+
+    def test_on_needs_one_spare_address_not_every_address(self):
+        for bind in ("0.0.0.0", "::"):
+            with self.assertRaises(D.ConfigError):
+                D.parse_config({"decoy": "on", "bind": bind})
+        self.assertTrue(D.parse_config({"decoy": "on", "bind": "192.168.1.250"}).on)
 
     def test_missing_file_is_off(self):
         self.assertFalse(D.load_config(os.path.join(tempfile.mkdtemp(), "nope.json")).on)
@@ -264,7 +271,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(s.bind, "192.168.1.250")
 
     def test_on_with_defaults(self):
-        self.assertTrue(D.parse_config({"decoy": "on"}).on)
+        self.assertTrue(D.parse_config({"decoy": "on", "bind": "192.168.1.250"}).on)
 
     def test_comment_keys_are_allowed(self):
         self.assertFalse(D.parse_config({"_comment": "hi", "decoy": "off"}).on)
@@ -302,7 +309,7 @@ class ConfigTests(unittest.TestCase):
         ]
         for needle, extra in cases:
             with self.subTest(extra=extra):
-                raw = {"decoy": "on", **extra}
+                raw = {"decoy": "on", "bind": "192.168.1.250", **extra}
                 with self.assertRaisesRegex(D.ConfigError, needle):
                     D.parse_config(raw)
 
