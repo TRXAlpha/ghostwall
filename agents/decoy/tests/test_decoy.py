@@ -327,7 +327,7 @@ class ConfigTests(unittest.TestCase):
         d = tempfile.mkdtemp()
         p = os.path.join(d, "decoy.json")
         with open(p, "w", encoding="utf-8") as f:
-            json.dump({"decoy": "on", "ports": [0]}, f)
+            json.dump({"decoy": "on", "bind": "192.168.1.250", "ports": [0]}, f)
         err = io.StringIO()
         with redirect_stderr(err), redirect_stdout(io.StringIO()):
             rc = D.main(["--config", p])
