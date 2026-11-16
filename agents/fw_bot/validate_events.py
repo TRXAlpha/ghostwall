@@ -59,9 +59,11 @@ def validate_event(evt: object) -> list[str]:
         errs.append("would_block must be true or false")   # iot_new_domain, iot_enforce dry-run
     if "trust" in evt and not DOMAIN_OK(evt["trust"]):
         errs.append("trust must be a lowercase hostname without trailing dot")
-    for flag in ("auto_isolated", "would_isolate", "auto_isolate_failed"):
+    for flag in ("auto_isolated", "would_isolate", "auto_isolate_failed", "would_hold", "would_block_verdict"):
         if flag in evt and not isinstance(evt[flag], bool):
             errs.append(f"{flag} must be true or false")
+    if evt.get("would_hold") is True and evt.get("would_block_verdict") is True:
+        errs.append("would_hold and would_block_verdict cannot both be true")   # one verdict per lookup
     for key in ("contained", "would_contain"):     # contain: the name blocked for every device
         if key in evt and not DOMAIN_OK(evt[key]):
             errs.append(f"{key} must be a lowercase hostname without trailing dot")

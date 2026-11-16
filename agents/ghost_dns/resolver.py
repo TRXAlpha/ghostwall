@@ -49,6 +49,7 @@ import sys
 
 import dnsmsg
 import events as events_mod
+import verdict as verdict_mod
 from detectors import (RARE_TLDS, Detectors, abused_service, is_internal, iot_builtin_allowed, nrd_age_text,
                        nx_countable, tld_of)
 from tokenizer import is_public_suffix, registrable_part
@@ -129,7 +130,14 @@ class Resolver:
         self.stats = {"queries": 0, "blocked": 0, "recommended": 0, "suppressed": 0,
                       "forwarded": 0, "errors": 0, "fallbacks": 0, "failopen": 0,
                       "rate_limited": 0, "blocked_upstream": 0, "popular": 0,
-                      "auto_isolated": 0}
+                      "auto_isolated": 0,
+                      "verdict_allow": 0, "verdict_hold": 0, "verdict_block": 0, "verdict_errors": 0}
+        # First-contact verdict (verdict.py). "dry-run" only: judge each destination new to a
+        # device and record it; nothing a decision depends on reads it. on_verdict, when set (the
+        # replay does), gets (device, day, outcome) for every judged lookup.
+        self._verdict_dry = str(cfg.get("verdict", "off")) == "dry-run"
+        self._vtl = threading.local()     # the verdict of the lookup this thread is deciding
+        self.on_verdict = None
         self._iso_lock = threading.Lock()   # auto_isolate: check the cap and isolate as one step
         # contain: which addresses each name answered with lately (to drop them at the gateway),
         # and which registrable domains share an address (a shared address is never dropped).
@@ -151,6 +159,20 @@ class Resolver:
     def decide(self, client_ip: str, domain: str, qtype: str, upstream_blocked: bool = False,
                rcode: str | None = None, nx_zone: str | None = None,
                when: float | None = None) -> Decision:
+        """The Decision for one lookup: the policy in _decide(), unchanged. With verdict
+        "dry-run" the first-contact verdict is judged first (for a destination new to the device)
+        and recorded on the event the policy writes; the Decision is the same either way."""
+        if not self._verdict_dry:
+            return self._decide(client_ip, domain, qtype, upstream_blocked, rcode, nx_zone, when)
+        self._vtl.pending = self._verdict_prepare(client_ip, domain, upstream_blocked, rcode)
+        try:
+            return self._decide(client_ip, domain, qtype, upstream_blocked, rcode, nx_zone, when)
+        finally:
+            self._vtl.pending = None
+
+    def _decide(self, client_ip: str, domain: str, qtype: str, upstream_blocked: bool = False,
+                rcode: str | None = None, nx_zone: str | None = None,
+                when: float | None = None) -> Decision:
         """upstream_blocked: the DNS server (AdGuard) already refused this name, so no
         connection happened: a single random-looking score is then not worth an alert
         (most of those are ad and tracker junk). Bursts and every other rule still count.
@@ -355,6 +377,77 @@ class Resolver:
         return (behaviour or self._iot_alert(dev, domain, iot)
                 or self._nrd_alert(client_ip, dev, domain, nrd, sc, first_seen)
                 or Decision("allow", "clean"))
+
+    # -- first-contact verdict, dry-run (verdict.py) ------------------------
+    def _verdict_prepare(self, client_ip: str, domain: str, upstream_blocked: bool,
+                         rcode: str | None):
+        """Judge one lookup if its registrable domain is new for its device; None otherwise.
+        Runs before the policy, so it sees the state as the policy will (first_seen not yet
+        updated). Never raises: a failure is counted in stats["verdict_errors"]."""
+        try:
+            name = (domain or "").rstrip(".").lower()
+            if not name:
+                return None
+            dev = self._device(client_ip)
+            if not self.state.device_observe(dev.name, name):
+                return None
+            ev = self._verdict_evidence(client_ip, dev, name, upstream_blocked, rcode)
+            v = verdict_mod.judge(ev, self._verdict_thresholds())
+            self.stats["verdict_" + v.outcome] += 1
+            if self.on_verdict is not None:
+                self.on_verdict(dev.name, events_mod.now_iso()[:10], v.outcome)
+            return v
+        except Exception:  # noqa: BLE001 - measurement must never disturb a lookup
+            self.stats["verdict_errors"] += 1
+            return None
+
+    def _verdict_thresholds(self) -> verdict_mod.Thresholds:
+        return verdict_mod.Thresholds(
+            recommend_dga=float(self.cfg["recommend_threshold"]),
+            corroborated_dga=float(self.cfg.get("corroborated_threshold", 0.80)),
+            block_dga=float(self.cfg["block_threshold"]),
+            young_days=int(self.cfg["novelty_days"]))
+
+    def _verdict_evidence(self, client_ip: str, dev, domain: str, upstream_blocked: bool,
+                          rcode: str | None) -> verdict_mod.Evidence:
+        now = self.clock()
+        novelty = int(self.cfg["novelty_days"])
+        feed = self.det.threat_feed.match(domain, now)
+        # the age family follows nrd_mode, as the policy does: "off" means the list is not used
+        nrd = None if str(self.cfg.get("nrd_mode", "off")).lower() == "off" else self.det.nrd.match(domain, now)
+        look = self._lookalike(domain, now)
+        svc = abused_service(domain)
+        is_iot = str(dev.profile).lower() == "iot" and client_ip != self.cfg.get("pi_ip")
+        iot_outside = is_iot and self.state.iot_status(
+            dev.name, domain, float(self.cfg.get("iot_learn_days", 7))) == "new"
+        return verdict_mod.Evidence(
+            domain=domain,
+            iot=is_iot,
+            local_name=is_internal(domain),
+            trusted=self.state.is_allowed(domain),
+            known_to_device=False,     # judged only when new for the device (see _verdict_prepare)
+            popular=self.det.popular.match(domain, now),
+            no_connection=bool(upstream_blocked) or rcode in ("NXDOMAIN", "FILTERED"),
+            new_to_network=self.state.is_new(domain, novelty),
+            dga=float(self.scorer.score_one(domain)["dga"]),
+            rare_tld=tld_of(domain) in RARE_TLDS,
+            lookalike=look is not None,
+            list_hit=("" if feed is None else "exact" if feed[1] else "parent"),
+            list_name="" if feed is None else feed[0],
+            young_days=None if nrd is None else nrd[0],
+            shared_service="" if svc is None else svc[1],
+            iot_outside_set=iot_outside)
+
+    def _verdict_annotate(self, evt: dict) -> None:
+        """Before an event is written: if this lookup has a hold or block verdict, say so on the
+        event (would_hold / would_block_verdict and one reason line). One event per lookup
+        carries it: the first finding written, not the upstream filter's info line."""
+        v = getattr(self._vtl, "pending", None)
+        if v is None or v.outcome == "allow" or evt.get("rule") == "upstream_block":
+            return
+        self._vtl.pending = None
+        evt["would_hold" if v.outcome == "hold" else "would_block_verdict"] = True
+        evt.setdefault("reasons", []).append(v.line)
 
     def _lookalike(self, domain: str, now: float) -> tuple[str, str] | None:
         """(the name as displayed, the popular site it imitates) when the registrable label
@@ -583,6 +676,7 @@ class Resolver:
         self._count_alert(rate_key)
         self._auto_isolate(dev, evt, isolate_hold)   # before the write: the alert says what happened
         self._contain(dev, evt, contain)
+        self._verdict_annotate(evt)                  # dry-run: the verdict, before the write
         self.events.write(evt)
         self.state.record_event(evt)
         if action == "block":
