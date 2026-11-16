@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.3.0-beta.7 (2026-11-16)
+
+Update as usual: `git pull && sudo ./install.sh`. Two first steps of the roadmap. Both are
+off by default and neither blocks anything.
+
+### New
+
+- **Decoys (`ghost-decoy`, opt-in).** Decoy TCP ports (Telnet, RDP, VNC) on one spare LAN
+  address. A device that connects and sends data raises `decoy_touch` (high): nothing
+  legitimate does that. A probe that sends nothing is only counted. Nothing is ever sent
+  back. Exempt list, one alert per device per port per hour, connection and size limits. It
+  refuses to listen on every address, and SMB (445) is not a default port, because ordinary
+  Windows browsing knocks on it. Alert only: it does not isolate. docs/OPERATIONS.md "Decoys".
+- **First-contact verdict, measure only.** `"verdict": "dry-run"` judges each destination
+  new to a device (allow, hold or block) from five families of evidence, where two signals
+  count as two only from different families, and records what it would have done:
+  `would_hold` / `would_block_verdict` on the alert that lookup raises anyway, and counters
+  in `ghostwall status`. No decision changes. `replay_querylog.py --set verdict=dry-run`
+  prints holds per device per day on your own history. `"on"` is refused at start:
+  enforcement waits for those numbers.
+
+### Not yet
+
+- Neither has run on a real network. The verdict's thresholds are the existing alert
+  thresholds, not fitted to data.
+
 ## v0.3.0-beta.6 (2026-11-11)
 
 Update as usual: `git pull && sudo ./install.sh`. A second hostile review, asking of every

@@ -157,6 +157,10 @@ def cmd_status(_a) -> int:
     named, unnamed = st.get("named_devices", len(devs)), st.get("unnamed_clients", len(st.get("clients") or []))
     print(f"devices:  {named} named" + (f", {unnamed} unnamed (sudo ghostwall devices)" if unnamed else "")
           + (" (sudo ghostwall status lists them)" if st.get("devices_hidden") and named else ""))
+    judged = sum(stats.get(k, 0) for k in ("verdict_allow", "verdict_hold", "verdict_block"))
+    if judged:
+        print(f"verdict:  dry-run, {judged:,} new destinations judged since start: would hold "
+              f"{stats.get('verdict_hold', 0)}, would block {stats.get('verdict_block', 0)} (nothing is refused)")
     con = st.get("contain") or {}
     if con.get("mode", "off") != "off" or con.get("contained"):
         print(f"contain:  {con.get('mode')}, {con.get('contained', 0)} destination(s) blocked for every device "
