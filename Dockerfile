@@ -3,7 +3,7 @@
 # (.github/dependabot.yml; it reads a literal FROM, not one built from an ARG).
 # Rate-limited by Docker Hub? Use Google's mirror of it for every pull: add
 # "registry-mirrors": ["https://mirror.gcr.io"] to /etc/docker/daemon.json.
-FROM python:3.12.16-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337
+FROM python:3.15.2-slim-bookworm@sha256:96599df822d0e1c6bb700014a05c7f3c8cabc6e0f7ff3c4f9f69cee033b4b5d9
 
 WORKDIR /opt/ghostwall
 COPY requirements.lock .
